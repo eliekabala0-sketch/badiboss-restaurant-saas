@@ -46,6 +46,10 @@ final class App
             $this->respondDatabaseHealth();
             return;
         }
+        if ($request->method === 'GET' && $request->uri === '/health/db/debug') {
+            $this->respondDatabaseHealthDebug();
+            return;
+        }
 
         $container = Container::getInstance();
         $container->set('config', $this->config);
@@ -143,5 +147,18 @@ final class App
         $message = preg_replace('/\/\/([^:@\/]+):([^@\/]+)@/', '//***:***@', $message) ?? $message;
 
         return trim($message) !== '' ? $message : 'Connexion impossible';
+    }
+
+    private function respondDatabaseHealthDebug(): void
+    {
+        $config = $this->config['database'];
+
+        http_response_code(200);
+        header('Content-Type: text/plain; charset=UTF-8');
+        echo 'source=' . (string) ($config['source'] ?? 'unknown') . PHP_EOL;
+        echo 'host=' . (string) ($config['host'] ?? 'unknown') . PHP_EOL;
+        echo 'port=' . (string) ($config['port'] ?? 'unknown') . PHP_EOL;
+        echo 'database=' . (string) ($config['database'] ?? 'unknown') . PHP_EOL;
+        echo 'user=' . (string) ($config['username'] ?? 'unknown');
     }
 }

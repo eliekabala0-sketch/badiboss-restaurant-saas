@@ -28,6 +28,11 @@ function env(string $key, ?string $default = null): ?string
         $loaded = true;
     }
 
+    $runtimeValue = getenv($key);
+    if ($runtimeValue !== false && $runtimeValue !== '') {
+        return (string) $runtimeValue;
+    }
+
     return $_ENV[$key] ?? $_SERVER[$key] ?? $default;
 }
 
