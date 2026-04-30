@@ -17,6 +17,34 @@ final class RailwayDbTools
         'losses', 'operation_cases', 'audit_logs',
     ];
 
+    private const RUNTIME_COLUMN_DEFS = [
+        'server_requests' => [
+            ['name' => 'service_reference', 'sql' => 'ALTER TABLE server_requests ADD COLUMN service_reference VARCHAR(120) NULL AFTER server_id'],
+            ['name' => 'ready_by', 'sql' => 'ALTER TABLE server_requests ADD COLUMN ready_by BIGINT UNSIGNED NULL AFTER technical_confirmed_by'],
+            ['name' => 'received_by', 'sql' => 'ALTER TABLE server_requests ADD COLUMN received_by BIGINT UNSIGNED NULL AFTER ready_by'],
+            ['name' => 'ready_at', 'sql' => 'ALTER TABLE server_requests ADD COLUMN ready_at DATETIME NULL AFTER supplied_at'],
+            ['name' => 'received_at', 'sql' => 'ALTER TABLE server_requests ADD COLUMN received_at DATETIME NULL AFTER ready_at'],
+        ],
+        'server_request_items' => [
+            ['name' => 'unavailable_quantity', 'sql' => 'ALTER TABLE server_request_items ADD COLUMN unavailable_quantity DECIMAL(12,2) NOT NULL DEFAULT 0.00 AFTER supplied_quantity'],
+            ['name' => 'prepared_at', 'sql' => 'ALTER TABLE server_request_items ADD COLUMN prepared_at DATETIME NULL AFTER technical_confirmed_by'],
+            ['name' => 'received_by', 'sql' => 'ALTER TABLE server_request_items ADD COLUMN received_by BIGINT UNSIGNED NULL AFTER prepared_at'],
+            ['name' => 'received_at', 'sql' => 'ALTER TABLE server_request_items ADD COLUMN received_at DATETIME NULL AFTER received_by'],
+        ],
+        'kitchen_stock_requests' => [
+            ['name' => 'priority_level', 'sql' => 'ALTER TABLE kitchen_stock_requests ADD COLUMN priority_level ENUM(\'normale\', \'urgente\') NOT NULL DEFAULT \'normale\' AFTER status'],
+            ['name' => 'unavailable_quantity', 'sql' => 'ALTER TABLE kitchen_stock_requests ADD COLUMN unavailable_quantity DECIMAL(12,2) NOT NULL DEFAULT 0.00 AFTER quantity_supplied'],
+            ['name' => 'received_by', 'sql' => 'ALTER TABLE kitchen_stock_requests ADD COLUMN received_by BIGINT UNSIGNED NULL AFTER responded_by'],
+            ['name' => 'received_at', 'sql' => 'ALTER TABLE kitchen_stock_requests ADD COLUMN received_at DATETIME NULL AFTER responded_at'],
+        ],
+        'operation_cases' => [
+            ['name' => 'responsible_user_id', 'sql' => 'ALTER TABLE operation_cases ADD COLUMN responsible_user_id BIGINT UNSIGNED NULL AFTER responsibility_scope'],
+            ['name' => 'submitted_to_manager_by', 'sql' => 'ALTER TABLE operation_cases ADD COLUMN submitted_to_manager_by BIGINT UNSIGNED NULL AFTER technical_confirmed_by'],
+            ['name' => 'submitted_to_manager_at', 'sql' => 'ALTER TABLE operation_cases ADD COLUMN submitted_to_manager_at DATETIME NULL AFTER technical_confirmed_at'],
+            ['name' => 'trace_snapshot_json', 'sql' => 'ALTER TABLE operation_cases ADD COLUMN trace_snapshot_json LONGTEXT NULL AFTER manager_justification'],
+        ],
+    ];
+
     public static function install(array $config): array
     {
         $db = new Database($config['database']);
@@ -101,6 +129,69 @@ final class RailwayDbTools
         return $report;
     }
 
+    public static function runtimeRepair(array $config): array
+    {
+        $db = new Database($config['database']);
+        $pdo = $db->pdo();
+        $active = $db->config();
+        $report = [
+            'database' => self::dbMeta($active),
+            'counts_before' => self::runtimeCounts($pdo),
+            'columns_added' => [],
+            'columns_existing' => [],
+            'enum_updates' => [],
+            'data_backfills' => [],
+            'errors' => [],
+            'counts_after' => [],
+        ];
+
+        try {
+            foreach (self::RUNTIME_COLUMN_DEFS as $table => $columns) {
+                foreach ($columns as $column) {
+                    if (self::columnExists($pdo, $table, $column['name'])) {
+                        $report['columns_existing'][] = $table . '.' . $column['name'];
+                        continue;
+                    }
+
+                    $pdo->exec($column['sql']);
+                    $report['columns_added'][] = $table . '.' . $column['name'];
+                }
+            }
+
+            $pdo->exec("ALTER TABLE server_requests MODIFY status ENUM('DEMANDE','EN_PREPARATION','PRET_A_SERVIR','REMIS_SERVEUR','FOURNI_PARTIEL','FOURNI_TOTAL','VENDU_PARTIEL','VENDU_TOTAL','CLOTURE') NOT NULL DEFAULT 'DEMANDE'");
+            $report['enum_updates'][] = 'server_requests.status';
+
+            $pdo->exec("ALTER TABLE server_request_items MODIFY supply_status ENUM('DEMANDE','EN_PREPARATION','PRET_A_SERVIR','REMIS_SERVEUR','FOURNI_TOTAL','FOURNI_PARTIEL','NON_FOURNI','CLOTURE') NOT NULL DEFAULT 'DEMANDE'");
+            $report['enum_updates'][] = 'server_request_items.supply_status';
+
+            $pdo->exec("UPDATE kitchen_stock_requests SET status = 'FOURNI_TOTAL' WHERE status = 'DISPONIBLE'");
+            $report['data_backfills'][] = 'kitchen_stock_requests.status DISPONIBLE -> FOURNI_TOTAL';
+            $pdo->exec("UPDATE kitchen_stock_requests SET status = 'FOURNI_PARTIEL' WHERE status = 'PARTIELLEMENT_DISPONIBLE'");
+            $report['data_backfills'][] = 'kitchen_stock_requests.status PARTIELLEMENT_DISPONIBLE -> FOURNI_PARTIEL';
+            $pdo->exec("UPDATE kitchen_stock_requests SET status = 'NON_FOURNI' WHERE status = 'INDISPONIBLE'");
+            $report['data_backfills'][] = 'kitchen_stock_requests.status INDISPONIBLE -> NON_FOURNI';
+
+            $pdo->exec("ALTER TABLE kitchen_stock_requests MODIFY status ENUM('DEMANDE','EN_COURS_TRAITEMENT','FOURNI_TOTAL','FOURNI_PARTIEL','NON_FOURNI','DISPONIBLE','PARTIELLEMENT_DISPONIBLE','INDISPONIBLE','CLOTURE') NOT NULL DEFAULT 'DEMANDE'");
+            $report['enum_updates'][] = 'kitchen_stock_requests.status';
+
+            if (self::columnExists($pdo, 'server_request_items', 'unavailable_quantity')) {
+                $pdo->exec('UPDATE server_request_items SET unavailable_quantity = GREATEST(requested_quantity - supplied_quantity, 0) WHERE unavailable_quantity = 0');
+                $report['data_backfills'][] = 'server_request_items.unavailable_quantity';
+            }
+
+            if (self::columnExists($pdo, 'kitchen_stock_requests', 'unavailable_quantity')) {
+                $pdo->exec('UPDATE kitchen_stock_requests SET unavailable_quantity = GREATEST(quantity_requested - quantity_supplied, 0) WHERE unavailable_quantity = 0');
+                $report['data_backfills'][] = 'kitchen_stock_requests.unavailable_quantity';
+            }
+
+        } catch (Throwable $e) {
+            $report['errors'][] = self::mask($e->getMessage());
+        }
+
+        $report['counts_after'] = self::runtimeCounts($pdo);
+        return $report;
+    }
+
     public static function renderInstall(array $r): string
     {
         return implode(PHP_EOL, ['INSTALLATION / REPARATION DB RAILWAY', 'source=' . $r['database']['source'], 'host=' . $r['database']['host'], 'port=' . $r['database']['port'], 'database=' . $r['database']['database'], 'user=' . $r['database']['user'], '', 'TABLES CREEES:'] + []);
@@ -127,12 +218,48 @@ final class RailwayDbTools
         return implode(PHP_EOL, $out);
     }
 
+    public static function renderRuntimeRepairReport(array $r): string
+    {
+        $out = [
+            'RUNTIME REPAIR RAILWAY',
+            'source=' . $r['database']['source'],
+            'host=' . $r['database']['host'],
+            'port=' . $r['database']['port'],
+            'database=' . $r['database']['database'],
+            'user=' . $r['database']['user'],
+            '',
+            'COMPTAGES AVANT:',
+        ];
+        foreach ($r['counts_before'] as $k => $v) { $out[] = '- ' . $k . '=' . $v; }
+        $out[] = '';
+        $out[] = 'COLONNES AJOUTEES:';
+        foreach ($r['columns_added'] ?: ['aucune'] as $v) { $out[] = '- ' . $v; }
+        $out[] = '';
+        $out[] = 'COLONNES DEJA PRESENTES:';
+        foreach ($r['columns_existing'] ?: ['aucune'] as $v) { $out[] = '- ' . $v; }
+        $out[] = '';
+        $out[] = 'ENUMS MIS A JOUR:';
+        foreach ($r['enum_updates'] ?: ['aucune'] as $v) { $out[] = '- ' . $v; }
+        $out[] = '';
+        $out[] = 'BACKFILLS:';
+        foreach ($r['data_backfills'] ?: ['aucun'] as $v) { $out[] = '- ' . $v; }
+        $out[] = '';
+        $out[] = 'ERREURS:';
+        foreach ($r['errors'] ?: ['aucune'] as $v) { $out[] = '- ' . $v; }
+        $out[] = '';
+        $out[] = 'COMPTAGES APRES:';
+        foreach ($r['counts_after'] as $k => $v) { $out[] = '- ' . $k . '=' . $v; }
+        return implode(PHP_EOL, $out);
+    }
+
     private static function dbMeta(array $c): array { return ['source' => (string) ($c['source'] ?? 'unknown'), 'host' => (string) ($c['host'] ?? 'unknown'), 'port' => (string) ($c['port'] ?? 'unknown'), 'database' => (string) ($c['database'] ?? 'unknown'), 'user' => (string) ($c['username'] ?? 'unknown')]; }
     private static function splitSchema(string $sql): array { $sql = preg_replace('/^\xEF\xBB\xBF/', '', $sql) ?? $sql; $sql = preg_replace('/CREATE\s+DATABASE\b.*?;/is', '', $sql) ?? $sql; $sql = preg_replace('/USE\s+[a-zA-Z0-9_`]+\s*;/i', '', $sql) ?? $sql; $lines = preg_split('/\R/', $sql) ?: []; $keep = []; foreach ($lines as $line) { $t = trim($line); if ($t === '' || str_starts_with($t, '--')) { continue; } $keep[] = $line; } $parts = preg_split('/;\s*(?:\R|$)/', implode("\n", $keep)) ?: []; return array_values(array_filter(array_map('trim', $parts), static fn ($v) => $v !== '')); }
     private static function extractTable(string $sql): ?string { return preg_match('/^CREATE\s+TABLE\s+`?([a-zA-Z0-9_]+)`?/i', trim($sql), $m) === 1 ? $m[1] : null; }
     private static function isTableExistsError(string $m): bool { $m = strtolower($m); return str_contains($m, 'already exists') || str_contains($m, '42s01') || str_contains($m, '1050'); }
     private static function mask(string $m): string { $m = preg_replace('/password\s*=\s*[^;\s]+/i', 'password=***', $m) ?? $m; $m = preg_replace('/\/\/([^:@\/]+):([^@\/]+)@/', '//***:***@', $m) ?? $m; return trim($m); }
     private static function tableExists(PDO $pdo, string $table): bool { $s = $pdo->prepare('SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = ?'); $s->execute([$table]); return (int) $s->fetchColumn() > 0; }
+    private static function columnExists(PDO $pdo, string $table, string $column): bool { $s = $pdo->prepare('SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ? AND column_name = ?'); $s->execute([$table, $column]); return (int) $s->fetchColumn() > 0; }
+    private static function runtimeCounts(PDO $pdo): array { $counts = []; foreach (['restaurants','users','audit_logs','sales','server_requests','kitchen_stock_requests'] as $table) { $counts[$table] = self::tableExists($pdo, $table) ? (int) $pdo->query('SELECT COUNT(*) FROM ' . $table)->fetchColumn() : -1; } return $counts; }
     private static function idBy(PDO $pdo, string $sql, array $args): int { $s = $pdo->prepare($sql); $s->execute($args); return (int) $s->fetchColumn(); }
     private static function exists(PDO $pdo, string $sql, array $args): bool { $s = $pdo->prepare($sql); $s->execute($args); return $s->fetchColumn() !== false; }
     private static function add(array &$report, string $type, string $label): void { $report[$type][] = $label; }

@@ -58,6 +58,10 @@ final class App
             $this->respondRailwaySeedMinimal($request);
             return;
         }
+        if ($request->method === 'GET' && $request->uri === '/admin/runtime-repair-now') {
+            $this->respondRailwayRuntimeRepair($request);
+            return;
+        }
 
         $container = Container::getInstance();
         $container->set('config', $this->config);
@@ -215,6 +219,23 @@ final class App
         http_response_code($report['errors'] === [] ? 200 : 500);
         header('Content-Type: text/plain; charset=UTF-8');
         echo railway_seed_minimal_render_report($report);
+    }
+
+    private function respondRailwayRuntimeRepair(Request $request): void
+    {
+        if (!$this->canRunRailwayAdminTask($request)) {
+            http_response_code(403);
+            header('Content-Type: text/plain; charset=UTF-8');
+            echo 'Acces refuse';
+            return;
+        }
+
+        require_once BASE_PATH . '/scripts/railway_runtime_repair.php';
+        $report = railway_runtime_repair_report($this->config);
+
+        http_response_code($report['errors'] === [] ? 200 : 500);
+        header('Content-Type: text/plain; charset=UTF-8');
+        echo railway_runtime_repair_render_report($report);
     }
 
     private function canRunRailwayAdminTask(Request $request): bool
