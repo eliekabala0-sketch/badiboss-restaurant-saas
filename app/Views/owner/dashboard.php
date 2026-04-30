@@ -2,6 +2,8 @@
 declare(strict_types=1);
 
 $subscriptionTimezone = safe_timezone($subscription['timezone'] ?? ($restaurant['timezone'] ?? null));
+$restaurantCurrency = restaurant_currency($restaurant);
+$printQuery = http_build_query(['print' => '1']);
 $decisionBadgeClass = static function (?string $status): string {
     return match ((string) $status) {
         'EN_ATTENTE_VALIDATION_MANAGER' => 'badge-progress',
@@ -11,6 +13,12 @@ $decisionBadgeClass = static function (?string $status): string {
     };
 };
 ?>
+<style>
+@media print {
+    .no-print { display:none !important; }
+    .card { box-shadow:none !important; border:1px solid #d6d6d6; }
+}
+</style>
 <section class="topbar">
     <div class="brand">
         <h1><?= e(($user['role_code'] ?? '') === 'manager' ? 'Pilotage opérationnel' : 'Pilotage du restaurant') ?></h1>
@@ -23,6 +31,12 @@ $decisionBadgeClass = static function (?string $status): string {
 
 <?php if (!empty($flash_success)): ?><div class="flash-ok"><?= e($flash_success) ?></div><?php endif; ?>
 <?php if (!empty($flash_error)): ?><div class="flash-bad"><?= e($flash_error) ?></div><?php endif; ?>
+<section class="card no-print" style="padding:18px; margin-bottom:24px;">
+    <div class="toolbar-actions">
+        <button type="button" onclick="window.print()">Imprimer</button>
+        <a href="/owner?<?= e($printQuery) ?>" class="button-muted" target="_blank" rel="noopener noreferrer">Export imprimable / PDF navigateur</a>
+    </div>
+</section>
 <?php if (restaurant_status_blocks_operations($restaurant['status'] ?? null)): ?>
     <section class="status-banner status-<?= e(restaurant_status_severity($restaurant['status'] ?? null)) ?>">
         <div>
@@ -114,6 +128,24 @@ $restaurantRegisterUrl = restaurant_generated_registration_url($restaurant);
 </section>
 
 <section class="card" style="padding:24px; margin-top:24px;">
+    <h2 style="margin-top:0;">Parametres du restaurant</h2>
+    <p class="muted">La devise change uniquement l affichage du restaurant courant. Aucun montant historique n est converti.</p>
+    <form method="post" action="/owner/settings/currency" class="split no-print">
+        <div>
+            <label>Devise du restaurant</label>
+            <select name="currency">
+                <option value="USD" <?= $restaurantCurrency === 'USD' ? 'selected' : '' ?>>USD</option>
+                <option value="CDF" <?= $restaurantCurrency === 'CDF' ? 'selected' : '' ?>>CDF</option>
+            </select>
+        </div>
+        <div style="align-self:end;">
+            <button type="submit">Enregistrer</button>
+        </div>
+    </form>
+    <p><strong>Devise active :</strong> <?= e($restaurantCurrency) ?></p>
+</section>
+
+<section class="card" style="padding:24px; margin-top:24px;">
     <h2 style="margin-top:0;">Orientation rapide</h2>
     <div class="nav" style="margin-bottom:0;">
         <?php if (!restaurant_status_blocks_operations($restaurant['status'] ?? null) && $can_access_stock): ?><a href="/stock">Ouvrir Stock</a><?php endif; ?>
@@ -135,7 +167,7 @@ $restaurantRegisterUrl = restaurant_generated_registration_url($restaurant);
                 <article class="card" style="padding:18px; border-radius:16px;">
                     <div class="topbar" style="margin-bottom:12px;">
                         <strong><?= e($period['label']) ?></strong>
-                        <span class="pill badge-gold"><?= e(format_money($period['total_general'] ?? 0, $restaurant['currency_code'] ?? 'USD')) ?></span>
+                        <span class="pill badge-gold"><?= e(format_money($period['total_general'] ?? 0, $restaurant)) ?></span>
                     </div>
 
                     <?php if (($period['sales_by_server'] ?? []) === []): ?>
@@ -153,9 +185,9 @@ $restaurantRegisterUrl = restaurant_generated_registration_url($restaurant);
                                 <tbody>
                                 <?php foreach ($period['sales_by_server'] as $row): ?>
                                     <tr>
-                                        <td><?= e($row['server_name']) ?></td>
+                                        <td><?= e(named_actor_label($row['server_name'] ?? null, 'cashier_server')) ?></td>
                                         <td><?= e((string) $row['sales_count']) ?></td>
-                                        <td><?= e(format_money($row['total_amount'], $restaurant['currency_code'] ?? 'USD')) ?></td>
+                                        <td><?= e(format_money($row['total_amount'], $restaurant)) ?></td>
                                     </tr>
                                 <?php endforeach; ?>
                                 </tbody>
@@ -356,7 +388,7 @@ $restaurantRegisterUrl = restaurant_generated_registration_url($restaurant);
                             </span>
                         </td>
                         <td><?= e($case['manager_justification'] ?? '-') ?></td>
-                        <td><?= e(format_date_fr($case['decided_at'] ?? $case['resolved_at'] ?? $case['created_at'])) ?></td>
+                        <td><?= e(signed_actor_line('Decide', $case['decided_by_name'] ?? null, 'manager', $case['decided_at'] ?? $case['resolved_at'] ?? $case['created_at'], $restaurant, $subscriptionTimezone)) ?></td>
                     </tr>
                 <?php endforeach; ?>
                 </tbody>

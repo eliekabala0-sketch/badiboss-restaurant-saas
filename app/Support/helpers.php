@@ -513,14 +513,81 @@ function permission_description_fr(?string $permissionCode): string
     };
 }
 
-function format_money(mixed $amount, string $currency = 'USD'): string
+function restaurant_currency(array|int|string|null $restaurant = null): string
 {
-    $normalized = number_format((float) $amount, 2, '.', ',');
+    $candidate = null;
 
-    return match (strtoupper($currency)) {
-        'USD' => '$ ' . $normalized,
-        default => $normalized . ' ' . strtoupper($currency),
-    };
+    if (is_array($restaurant)) {
+        $candidate = $restaurant['currency'] ?? $restaurant['currency_code'] ?? null;
+    } elseif (is_string($restaurant) && $restaurant !== '') {
+        $candidate = $restaurant;
+    } elseif (is_int($restaurant) && $restaurant > 0) {
+        $context = App\Core\Container::getInstance()->get('restaurantAdmin')->findRestaurant($restaurant);
+        $candidate = $context['currency'] ?? $context['currency_code'] ?? null;
+    } else {
+        $context = current_restaurant_context();
+        $candidate = $context['currency'] ?? $context['currency_code'] ?? null;
+    }
+
+    $normalized = strtoupper((string) $candidate);
+
+    return in_array($normalized, ['USD', 'CDF'], true) ? $normalized : 'USD';
+}
+
+function format_money(mixed $amount, array|int|string|null $currency = null): string
+{
+    $resolvedCurrency = restaurant_currency($currency);
+    $numericAmount = (float) $amount;
+
+    if ($resolvedCurrency === 'CDF') {
+        $formatted = number_format($numericAmount, abs($numericAmount - round($numericAmount)) < 0.00001 ? 0 : 2, '.', ' ');
+        return $formatted . ' FC';
+    }
+
+    return '$' . number_format($numericAmount, 2, '.', ',');
+}
+
+function named_actor_label(?string $name, ?string $roleCode = null): string
+{
+    $cleanName = trim((string) $name);
+    $roleLabel = trim(restaurant_role_label($roleCode));
+
+    if ($cleanName === '' && $roleLabel === '') {
+        return 'Agent non identifie';
+    }
+
+    if ($cleanName === '') {
+        return $roleLabel;
+    }
+
+    if ($roleLabel === '') {
+        return $cleanName;
+    }
+
+    return $roleLabel . ' ' . $cleanName;
+}
+
+function signed_actor_line(
+    string $actionLabel,
+    ?string $name,
+    ?string $roleCode = null,
+    ?string $at = null,
+    array|int|string|null $restaurant = null,
+    ?DateTimeZone $timezone = null
+): string {
+    $parts = [trim($actionLabel) . ' par ' . named_actor_label($name, $roleCode)];
+
+    if ($at !== null && trim($at) !== '') {
+        $parts[] = format_date_fr($at, $timezone);
+    }
+
+    $restaurantContext = is_array($restaurant) ? $restaurant : current_restaurant_context();
+    $restaurantName = trim((string) ($restaurantContext['public_name'] ?? $restaurantContext['name'] ?? ''));
+    if ($restaurantName !== '') {
+        $parts[] = $restaurantName;
+    }
+
+    return implode(' - ', $parts);
 }
 
 function movement_type_label(?string $type): string

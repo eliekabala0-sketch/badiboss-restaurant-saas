@@ -6,6 +6,7 @@ $todayDate = (new DateTimeImmutable('now', $historyTimezone))->format('Y-m-d');
 $yesterdayDate = (new DateTimeImmutable('yesterday', $historyTimezone))->format('Y-m-d');
 $historyPreviewLimit = 6;
 $activePreviewLimit = 5;
+$restaurantCurrency = restaurant_currency($restaurant);
 
 $stockRequestCases = array_values(array_filter(
     $cases,
@@ -167,11 +168,23 @@ $priorityBadgeClass = static function (?string $priority): string {
     return (string) $priority === 'urgente' ? 'badge-urgent' : 'badge-neutral';
 };
 ?>
+<style>
+@media print {
+    .no-print { display:none !important; }
+    .card { box-shadow:none !important; border:1px solid #d6d6d6; }
+}
+</style>
 
 <section class="topbar">
     <div class="brand">
         <h1>Stock</h1>
         <p>Le stock garde une file simple par statut, sort les cas complexes vers le gerant et conserve un historique compact par jour pour rester lisible meme en gros volume.</p>
+    </div>
+</section>
+<section class="card no-print" style="padding:18px; margin-bottom:24px;">
+    <div class="toolbar-actions">
+        <button type="button" onclick="window.print()">Imprimer</button>
+        <a href="/stock?print=1" class="button-muted" target="_blank" rel="noopener noreferrer">Export imprimable / PDF navigateur</a>
     </div>
 </section>
 
@@ -321,9 +334,9 @@ $priorityBadgeClass = static function (?string $priority): string {
                                         <td><span class="pill <?= e($priorityBadgeClass($request['priority_level'] ?? null)) ?>"><?= e(priority_label($request['priority_level'] ?? null)) ?></span></td>
                                         <td><span class="pill <?= e($stockBadgeClass($request['status'] ?? null)) ?>"><?= e(stock_request_status_label($request['status'] ?? null)) ?></span></td>
                                         <td style="min-width:220px;">
-                                            <div><strong>Demande :</strong> <?= e((string) ($request['requested_by_name'] ?: '-')) ?></div>
-                                            <div><strong>Prise en charge :</strong> <?= e((string) ($request['responded_by_name'] ?: '-')) ?></div>
-                                            <div><strong>Reception cuisine :</strong> <?= e((string) ($request['received_by_name'] ?: '-')) ?></div>
+                                            <div><strong>Demande :</strong> <?= e(signed_actor_line('Demande', $request['requested_by_name'] ?: null, 'kitchen', $request['created_at'] ?? null, $restaurant, $historyTimezone)) ?></div>
+                                            <div><strong>Prise en charge :</strong> <?= e(signed_actor_line('Pris en charge', $request['responded_by_name'] ?: null, 'stock_manager', $request['responded_at'] ?? null, $restaurant, $historyTimezone)) ?></div>
+                                            <div><strong>Reception cuisine :</strong> <?= e(signed_actor_line('Recu', $request['received_by_name'] ?: null, 'kitchen', $request['received_at'] ?? null, $restaurant, $historyTimezone)) ?></div>
                                             <div><strong>Heure reponse :</strong> <?= e(format_date_fr($request['responded_at'] ?? null, $historyTimezone)) ?></div>
                                         </td>
                                         <td style="min-width:220px;">
@@ -513,8 +526,8 @@ $priorityBadgeClass = static function (?string $priority): string {
                     <td><?= e((string) $item['quantity_in_stock']) ?></td>
                     <td><?= e((string) $item['quantity_out_provisional']) ?></td>
                     <td><?= e((string) $item['alert_threshold']) ?></td>
-                    <td><?= e(format_money($item['estimated_unit_cost'], $restaurant['currency_code'] ?? 'USD')) ?></td>
-                    <td><?= e(format_money(((float) $item['quantity_in_stock']) * ((float) $item['estimated_unit_cost']), $restaurant['currency_code'] ?? 'USD')) ?></td>
+                    <td><?= e(format_money($item['estimated_unit_cost'], $restaurantCurrency)) ?></td>
+                    <td><?= e(format_money(((float) $item['quantity_in_stock']) * ((float) $item['estimated_unit_cost']), $restaurantCurrency)) ?></td>
                 </tr>
             <?php endforeach; ?>
             </tbody>

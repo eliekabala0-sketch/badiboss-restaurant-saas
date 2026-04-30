@@ -7,6 +7,7 @@ $todayDate = (new DateTimeImmutable('now', $historyTimezone))->format('Y-m-d');
 $yesterdayDate = (new DateTimeImmutable('yesterday', $historyTimezone))->format('Y-m-d');
 $historyPreviewLimit = 6;
 $activePreviewLimit = 5;
+$restaurantCurrency = restaurant_currency($restaurant);
 $serverRequestHistoryItems = $server_request_history_items ?? [];
 
 $normalizeServiceItemStatus = static function (array $item): string {
@@ -70,6 +71,14 @@ $groupDomId = static function (string $prefix, string $label): string {
 
     return $prefix . '_' . ($slug !== '' ? $slug : 'bloc');
 };
+?>
+<style>
+@media print {
+    .no-print { display:none !important; }
+    .card { box-shadow:none !important; border:1px solid #d6d6d6; }
+}
+</style>
+<?php
 
 $formatCaseType = static function (array $case): string {
     $category = (string) ($case['reported_category'] ?? $case['case_type'] ?? '');
@@ -278,6 +287,12 @@ $stockBadgeClass = static function (?string $status): string {
 
 <?php if (!empty($flash_success)): ?><div class="flash-ok"><?= e($flash_success) ?></div><?php endif; ?>
 <?php if (!empty($flash_error)): ?><div class="flash-bad"><?= e($flash_error) ?></div><?php endif; ?>
+<section class="card no-print" style="padding:18px; margin-bottom:24px;">
+    <div class="toolbar-actions">
+        <button type="button" onclick="window.print()">Imprimer</button>
+        <a href="/cuisine?print=1" class="button-muted" target="_blank" rel="noopener noreferrer">Export imprimable / PDF navigateur</a>
+    </div>
+</section>
 
 <section class="grid stats">
     <article class="card stat">
@@ -369,10 +384,10 @@ $stockBadgeClass = static function (?string $status): string {
                                         <td><?= e((string) $item['unavailable_quantity']) ?></td>
                                         <td><span class="pill <?= e($serviceBadgeClass($item['status'] ?: $item['request_status'])) ?>"><?= e(service_flow_status_label($item['status'] ?: $item['request_status'])) ?></span></td>
                                         <td style="min-width:210px;">
-                                            <div><strong>Demande :</strong> <?= e((string) (($item['requested_by_name'] ?? '') !== '' ? $item['requested_by_name'] : ($item['server_name'] ?? '-'))) ?></div>
-                                            <div><strong>Pris :</strong> <?= e((string) ($item['prepared_by_name'] ?: '-')) ?></div>
-                                            <div><strong>Pret :</strong> <?= e((string) ($item['ready_by_name'] ?: '-')) ?></div>
-                                            <div><strong>Recu :</strong> <?= e((string) ($item['received_by_name'] ?: '-')) ?></div>
+                                            <div><strong>Demande :</strong> <?= e(signed_actor_line('Demande', ($item['requested_by_name'] ?? '') !== '' ? $item['requested_by_name'] : ($item['server_name'] ?? '-'), 'cashier_server', $item['request_created_at'] ?? $item['created_at'] ?? null, $restaurant, $historyTimezone)) ?></div>
+                                            <div><strong>Pris :</strong> <?= e(signed_actor_line('Pris en charge', $item['prepared_by_name'] ?: null, 'kitchen', $item['prepared_at'] ?? null, $restaurant, $historyTimezone)) ?></div>
+                                            <div><strong>Pret :</strong> <?= e(signed_actor_line('Pret', $item['ready_by_name'] ?: null, 'kitchen', $item['request_ready_at'] ?? $item['ready_at'] ?? null, $restaurant, $historyTimezone)) ?></div>
+                                            <div><strong>Recu :</strong> <?= e(signed_actor_line('Recu', $item['received_by_name'] ?: null, 'cashier_server', $item['request_received_at'] ?? $item['received_at'] ?? null, $restaurant, $historyTimezone)) ?></div>
                                         </td>
                                         <td style="min-width:180px;"><?= e((string) ($item['request_note'] ?: '-')) ?></td>
                                         <td style="min-width:220px;">
@@ -564,9 +579,9 @@ $stockBadgeClass = static function (?string $status): string {
                         <td><?= e((string) $request['unavailable_quantity']) ?> <?= e((string) ($request['unit_name'] ?? '')) ?></td>
                         <td><span class="pill <?= e($stockBadgeClass($request['status'] ?? null)) ?>"><?= e(stock_request_status_label($request['status'] ?? null)) ?></span></td>
                         <td style="min-width:200px;">
-                            <div><strong>Demande :</strong> <?= e((string) ($request['requested_by_name'] ?: '-')) ?></div>
-                            <div><strong>Reponse stock :</strong> <?= e((string) ($request['responded_by_name'] ?: '-')) ?></div>
-                            <div><strong>Reception :</strong> <?= e((string) ($request['received_by_name'] ?: '-')) ?></div>
+                            <div><strong>Demande :</strong> <?= e(signed_actor_line('Demande', $request['requested_by_name'] ?: null, 'kitchen', $request['created_at'] ?? null, $restaurant, $historyTimezone)) ?></div>
+                            <div><strong>Reponse stock :</strong> <?= e(signed_actor_line('Repondu', $request['responded_by_name'] ?: null, 'stock_manager', $request['responded_at'] ?? null, $restaurant, $historyTimezone)) ?></div>
+                            <div><strong>Reception :</strong> <?= e(signed_actor_line('Recu', $request['received_by_name'] ?: null, 'kitchen', $request['received_at'] ?? null, $restaurant, $historyTimezone)) ?></div>
                         </td>
                         <td style="min-width:220px;">
                             <div><strong>Cuisine :</strong> <?= e((string) ($request['note'] ?: '-')) ?></div>

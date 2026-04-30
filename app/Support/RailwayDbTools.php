@@ -150,6 +150,7 @@ final class RailwayDbTools
 
         try {
             self::ensureOperationalPlans($pdo, $report);
+            self::ensureRestaurantCurrency($pdo, $report);
 
             foreach (self::RUNTIME_COLUMN_DEFS as $table => $columns) {
                 foreach ($columns as $column) {
@@ -288,6 +289,18 @@ final class RailwayDbTools
             self::upsertPlan($pdo, $plan, $report);
             $report['plan_repairs'][] = 'subscription_plans:' . $plan[1];
         }
+    }
+    private static function ensureRestaurantCurrency(PDO $pdo, array &$report): void
+    {
+        if (!self::columnExists($pdo, 'restaurants', 'currency')) {
+            $pdo->exec("ALTER TABLE restaurants ADD COLUMN currency VARCHAR(3) NOT NULL DEFAULT 'USD' AFTER currency_code");
+            $report['columns_added'][] = 'restaurants.currency';
+        } else {
+            $report['columns_existing'][] = 'restaurants.currency';
+        }
+
+        $pdo->exec("UPDATE restaurants SET currency = CASE WHEN UPPER(COALESCE(NULLIF(currency_code, ''), 'USD')) IN ('USD', 'CDF') THEN UPPER(COALESCE(NULLIF(currency_code, ''), 'USD')) ELSE 'USD' END WHERE currency IS NULL OR currency = '' OR UPPER(currency) NOT IN ('USD', 'CDF')");
+        $report['data_backfills'][] = 'restaurants.currency';
     }
     private static function upsertPlan(PDO $pdo, array $v, array &$r): void { $exists = self::exists($pdo, 'SELECT id FROM subscription_plans WHERE code = ? LIMIT 1', [$v[1]]); $s = $pdo->prepare('INSERT INTO subscription_plans (name, code, description, monthly_price, yearly_price, max_users, max_restaurants, features_json, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW()) ON DUPLICATE KEY UPDATE name = VALUES(name), description = VALUES(description), monthly_price = VALUES(monthly_price), yearly_price = VALUES(yearly_price), max_users = VALUES(max_users), max_restaurants = VALUES(max_restaurants), features_json = VALUES(features_json), status = VALUES(status), updated_at = NOW()'); $s->execute($v); self::add($r, $exists ? 'updated' : 'created', 'subscription_plans:' . $v[1]); }
     private static function upsertRestaurant(PDO $pdo, array $v, array &$r): int { $exists = self::exists($pdo, 'SELECT id FROM restaurants WHERE restaurant_code = ? LIMIT 1', [$v[2]]); $s = $pdo->prepare('INSERT INTO restaurants (subscription_plan_id, name, restaurant_code, slug, legal_name, status, subscription_status, subscription_payment_status, support_email, phone, country, city, address_line, timezone, currency_code, access_url, activated_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW(), NOW()) ON DUPLICATE KEY UPDATE subscription_plan_id = VALUES(subscription_plan_id), name = VALUES(name), slug = VALUES(slug), legal_name = VALUES(legal_name), status = VALUES(status), subscription_status = VALUES(subscription_status), subscription_payment_status = VALUES(subscription_payment_status), support_email = VALUES(support_email), phone = VALUES(phone), country = VALUES(country), city = VALUES(city), address_line = VALUES(address_line), timezone = VALUES(timezone), currency_code = VALUES(currency_code), access_url = VALUES(access_url), updated_at = NOW()'); $s->execute($v); self::add($r, $exists ? 'updated' : 'created', 'restaurants:' . $v[2]); return self::idBy($pdo, 'SELECT id FROM restaurants WHERE restaurant_code = ? LIMIT 1', [$v[2]]); }

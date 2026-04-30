@@ -1,3 +1,10 @@
+<?php $restaurantCurrency = restaurant_currency($restaurant); ?>
+<style>
+@media print {
+    .no-print { display:none !important; }
+    .card { box-shadow:none !important; border:1px solid #d6d6d6; }
+}
+</style>
 <section class="topbar">
     <div class="brand">
         <h1>Menu du restaurant</h1>
@@ -7,6 +14,12 @@
 
 <?php if (!empty($flash_success)): ?><div class="flash-ok"><?= e($flash_success) ?></div><?php endif; ?>
 <?php if (!empty($flash_error)): ?><div class="flash-bad"><?= e($flash_error) ?></div><?php endif; ?>
+<section class="card no-print" style="padding:18px; margin-bottom:24px;">
+    <div class="toolbar-actions">
+        <button type="button" onclick="window.print()">Imprimer</button>
+        <a href="/owner/menu?print=1" class="button-muted" target="_blank" rel="noopener noreferrer">Export imprimable / PDF navigateur</a>
+    </div>
+</section>
 
 <section class="card" style="padding:22px; margin-bottom:24px;">
     <h2 style="margin-top:0;"><?= e($restaurant['public_name'] ?? $restaurant['name']) ?></h2>
@@ -81,7 +94,7 @@
                 <tr>
                     <td><strong><?= e($item['name']) ?></strong><br><span class="muted"><?= e($item['description']) ?></span></td>
                     <td><?= e($item['category_name']) ?></td>
-                    <td><?= e(format_money($item['price'], $restaurant['currency_code'] ?? 'USD')) ?></td>
+                    <td><?= e(format_money($item['price'], $restaurantCurrency)) ?></td>
                     <td><?= (int) $item['is_available'] === 1 ? 'Disponible' : 'Indisponible' ?></td>
                     <td><span class="pill <?= $item['status'] !== 'active' ? 'badge-off' : 'badge-closed' ?>"><?= e(status_label($item['status'])) ?></span></td>
                     <td>

@@ -205,6 +205,22 @@ final class RestaurantAdminController
         redirect('/owner');
     }
 
+    public function updateOwnerCurrency(Request $request): void
+    {
+        $restaurantId = current_restaurant_id();
+        $currency = strtoupper(trim((string) $request->input('currency', 'USD')));
+
+        if (!in_array($currency, ['USD', 'CDF'], true)) {
+            flash('error', 'La devise choisie est invalide.');
+            redirect('/owner');
+        }
+
+        Container::getInstance()->get('restaurantAdmin')->updateRestaurantCurrency($restaurantId, $currency, $_SESSION['user']);
+
+        flash('success', 'La devise du restaurant a ete mise a jour.');
+        redirect('/owner');
+    }
+
     public function activateSubscription(Request $request): void
     {
         $restaurantId = (int) $request->route('id');

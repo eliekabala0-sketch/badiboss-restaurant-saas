@@ -10,6 +10,7 @@ $yesterdayDate = (new DateTimeImmutable('yesterday', $historyTimezone))->format(
 $autoCloseMinutes = max(15, (int) ($restaurant['settings']['restaurant_server_auto_close_minutes'] ?? 90));
 $historyPreviewLimit = 6;
 $activePreviewLimit = 6;
+$restaurantCurrency = restaurant_currency($restaurant);
 $salesOverview = $sales_overview ?? [
     'today_total_sold' => 0,
     'today_sales_count' => 0,
@@ -52,7 +53,7 @@ foreach ($closedRequests as $request) {
         'reference' => '#' . (string) $request['id'] . ' · ' . (string) ($request['service_reference'] ?: '-'),
         'status' => service_flow_status_label($request['status']),
         'date' => $eventDate,
-        'details' => format_money($request['total_sold_amount'], $restaurant['currency_code'] ?? 'USD') . ' vendu',
+        'details' => format_money($request['total_sold_amount'], $restaurantCurrency) . ' vendu',
         'amount' => (float) ($request['total_sold_amount'] ?? 0),
     ];
 }
@@ -63,7 +64,7 @@ foreach ($sales as $sale) {
         'reference' => '#' . (string) $sale['id'] . ' · ' . (string) ($sale['server_name'] ?? 'Vente automatique'),
         'status' => validation_status_label($sale['status']),
         'date' => $eventDate,
-        'details' => format_money($sale['total_amount'], $restaurant['currency_code'] ?? 'USD'),
+        'details' => format_money($sale['total_amount'], $restaurantCurrency),
         'amount' => (float) ($sale['total_amount'] ?? 0),
     ];
 }
@@ -97,6 +98,12 @@ foreach ($historyEntries as $entry) {
     $historyGroups[$groupKey]['total_amount'] += (float) $entry['amount'];
 }
 ?>
+<style>
+@media print {
+    .no-print { display:none !important; }
+    .card { box-shadow:none !important; border:1px solid #d6d6d6; }
+}
+</style>
 
 <section class="topbar">
     <div class="brand">
@@ -107,11 +114,17 @@ foreach ($historyEntries as $entry) {
 
 <?php if (!empty($flash_success)): ?><div class="flash-ok"><?= e($flash_success) ?></div><?php endif; ?>
 <?php if (!empty($flash_error)): ?><div class="flash-bad"><?= e($flash_error) ?></div><?php endif; ?>
+<section class="card no-print" style="padding:18px; margin-bottom:24px;">
+    <div class="toolbar-actions">
+        <button type="button" onclick="window.print()">Imprimer</button>
+        <a href="/ventes?print=1" class="button-muted" target="_blank" rel="noopener noreferrer">Export imprimable / PDF navigateur</a>
+    </div>
+</section>
 
 <section class="grid stats">
     <article class="card stat">
         <span>Total vendu aujourd’hui</span>
-        <strong><?= e(format_money($salesOverview['today_total_sold'] ?? 0, $restaurant['currency_code'] ?? 'USD')) ?></strong>
+        <strong><?= e(format_money($salesOverview['today_total_sold'] ?? 0, $restaurantCurrency)) ?></strong>
     </article>
     <article class="card stat">
         <span>Ventes validées du jour</span>
@@ -198,6 +211,11 @@ foreach ($historyEntries as $entry) {
                         </div>
                         <span class="pill <?= e($serviceBadgeClass($request['status'])) ?>"><?= e(service_flow_status_label($request['status'])) ?></span>
                     </div>
+                    <div class="muted" style="margin-bottom:12px;">
+                        <?= e(signed_actor_line('Pret', $request['ready_by_name'] ?? null, 'kitchen', $request['ready_at'] ?? null, $restaurant, $historyTimezone)) ?>
+                        <br>
+                        <?= e(signed_actor_line('Recu', $request['received_by_name'] ?? null, 'cashier_server', $request['received_at'] ?? null, $restaurant, $historyTimezone)) ?>
+                    </div>
 
                     <div class="table-wrap">
                         <table>
@@ -268,6 +286,9 @@ foreach ($historyEntries as $entry) {
                             </div>
                         </div>
                         <span class="pill <?= e($serviceBadgeClass($request['status'])) ?>"><?= e(service_flow_status_label($request['status'])) ?></span>
+                    </div>
+                    <div class="muted" style="margin-bottom:12px;">
+                        <?= e(signed_actor_line('Recu', $request['received_by_name'] ?? ($request['server_name'] ?? null), 'cashier_server', $request['received_at'] ?? null, $restaurant, $historyTimezone)) ?>
                     </div>
 
                     <?php if ($autoCloseAt instanceof DateTimeImmutable): ?>
@@ -376,7 +397,7 @@ foreach ($historyEntries as $entry) {
                         <strong><?= e($group['label']) ?></strong>
                         <span class="muted"> · <?= e((string) count($entries)) ?> élément(s)</span>
                     </span>
-                    <span class="muted"><?= e(format_money($group['total_amount'], $restaurant['currency_code'] ?? 'USD')) ?></span>
+                    <span class="muted"><?= e(format_money($group['total_amount'], $restaurantCurrency)) ?></span>
                 </summary>
 
                 <div class="table-wrap">

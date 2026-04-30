@@ -136,6 +136,53 @@ final class RestaurantAdminService
         ]);
     }
 
+    public function updateRestaurantCurrency(int $restaurantId, string $currency, array $actor): void
+    {
+        $current = $this->findRestaurant($restaurantId);
+        if ($current === null) {
+            return;
+        }
+
+        $normalizedCurrency = strtoupper(trim($currency));
+        if (!in_array($normalizedCurrency, ['USD', 'CDF'], true)) {
+            $normalizedCurrency = 'USD';
+        }
+
+        $hasCurrencyColumn = $this->columnExists('restaurants', 'currency');
+        $sql = $hasCurrencyColumn
+            ? 'UPDATE restaurants SET currency_code = :currency_code, currency = :currency, updated_at = NOW() WHERE id = :id'
+            : 'UPDATE restaurants SET currency_code = :currency_code, updated_at = NOW() WHERE id = :id';
+
+        $params = [
+            'id' => $restaurantId,
+            'currency_code' => $normalizedCurrency,
+        ];
+        if ($hasCurrencyColumn) {
+            $params['currency'] = $normalizedCurrency;
+        }
+
+        $statement = $this->database->pdo()->prepare($sql);
+        $statement->execute($params);
+
+        Container::getInstance()->get('audit')->log([
+            'restaurant_id' => $restaurantId,
+            'user_id' => $actor['id'],
+            'actor_name' => $actor['full_name'],
+            'actor_role_code' => $actor['role_code'],
+            'module_name' => 'settings',
+            'action_name' => 'restaurant_currency_updated',
+            'entity_type' => 'restaurants',
+            'entity_id' => (string) $restaurantId,
+            'old_values' => [
+                'currency' => $current['currency'] ?? $current['currency_code'] ?? 'USD',
+            ],
+            'new_values' => [
+                'currency' => $normalizedCurrency,
+            ],
+            'justification' => 'Mise a jour devise du restaurant',
+        ]);
+    }
+
     public function updateBranding(int $restaurantId, array $payload, array $actor): void
     {
         $current = $this->findRestaurant($restaurantId);
@@ -372,5 +419,18 @@ final class RestaurantAdminService
         }
 
         return $payload;
+    }
+
+    private function columnExists(string $table, string $column): bool
+    {
+        $statement = $this->database->pdo()->prepare(
+            'SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = :table_name AND column_name = :column_name'
+        );
+        $statement->execute([
+            'table_name' => $table,
+            'column_name' => $column,
+        ]);
+
+        return (int) $statement->fetchColumn() > 0;
     }
 }
