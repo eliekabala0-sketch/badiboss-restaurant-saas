@@ -231,6 +231,9 @@ final class TenantProvisioningService
 
         $payload['restaurant_code'] = $restaurantCode;
         $payload['slug'] = $slug;
+        $payload['subscription_plan_id'] = $this->resolveSubscriptionPlanId(
+            isset($payload['subscription_plan_id']) ? (int) $payload['subscription_plan_id'] : 0
+        );
         $payload['status'] = $payload['status'] ?? 'active';
         $payload['subscription_status'] = $selfService ? 'PENDING_PAYMENT' : ($payload['subscription_status'] ?? 'ACTIVE');
         $payload['subscription_payment_status'] = $selfService ? 'UNPAID' : ($payload['subscription_payment_status'] ?? 'PAID');
@@ -254,6 +257,43 @@ final class TenantProvisioningService
         }
 
         return $payload;
+    }
+
+    private function resolveSubscriptionPlanId(int $requestedPlanId): int
+    {
+        if ($requestedPlanId > 0) {
+            $statement = $this->database->pdo()->prepare(
+                "SELECT id
+                 FROM subscription_plans
+                 WHERE id = :id
+                   AND status = 'active'
+                 LIMIT 1"
+            );
+            $statement->execute(['id' => $requestedPlanId]);
+            $resolved = $statement->fetchColumn();
+
+            if ($resolved !== false) {
+                return (int) $resolved;
+            }
+        }
+
+        $fallback = $this->database->pdo()->query(
+            "SELECT id
+             FROM subscription_plans
+             WHERE status = 'active'
+             ORDER BY CASE code
+                 WHEN 'starter' THEN 0
+                 WHEN 'business' THEN 1
+                 ELSE 2
+             END, id ASC
+             LIMIT 1"
+        )->fetchColumn();
+
+        if ($fallback === false) {
+            throw new RuntimeException('Aucun plan d abonnement actif n est disponible pour creer ce restaurant.');
+        }
+
+        return (int) $fallback;
     }
 
     private function restaurantCodeExists(string $code): bool

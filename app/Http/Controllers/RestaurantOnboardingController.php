@@ -50,7 +50,7 @@ final class RestaurantOnboardingController
             'primary_contact_phone' => trim((string) $request->input('primary_contact_phone')),
             'primary_role_code' => trim((string) $request->input('primary_role_code', 'owner')),
             'password' => (string) $request->input('password'),
-            'subscription_plan_id' => (int) $request->input('subscription_plan_id', 1),
+            'subscription_plan_id' => (int) $request->input('subscription_plan_id', 0),
         ];
 
         $_SESSION['_old_register_restaurant'] = $payload;

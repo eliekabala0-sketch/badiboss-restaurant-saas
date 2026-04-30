@@ -137,15 +137,20 @@ final class RailwayDbTools
         $report = [
             'database' => self::dbMeta($active),
             'counts_before' => self::runtimeCounts($pdo),
+            'plans_before' => self::listPlans($pdo),
             'columns_added' => [],
             'columns_existing' => [],
             'enum_updates' => [],
             'data_backfills' => [],
+            'plan_repairs' => [],
             'errors' => [],
             'counts_after' => [],
+            'plans_after' => [],
         ];
 
         try {
+            self::ensureOperationalPlans($pdo, $report);
+
             foreach (self::RUNTIME_COLUMN_DEFS as $table => $columns) {
                 foreach ($columns as $column) {
                     if (self::columnExists($pdo, $table, $column['name'])) {
@@ -189,6 +194,7 @@ final class RailwayDbTools
         }
 
         $report['counts_after'] = self::runtimeCounts($pdo);
+        $report['plans_after'] = self::listPlans($pdo);
         return $report;
     }
 
@@ -232,6 +238,9 @@ final class RailwayDbTools
         ];
         foreach ($r['counts_before'] as $k => $v) { $out[] = '- ' . $k . '=' . $v; }
         $out[] = '';
+        $out[] = 'PLANS AVANT:';
+        foreach ($r['plans_before'] ?: ['aucun'] as $v) { $out[] = '- ' . $v; }
+        $out[] = '';
         $out[] = 'COLONNES AJOUTEES:';
         foreach ($r['columns_added'] ?: ['aucune'] as $v) { $out[] = '- ' . $v; }
         $out[] = '';
@@ -244,11 +253,17 @@ final class RailwayDbTools
         $out[] = 'BACKFILLS:';
         foreach ($r['data_backfills'] ?: ['aucun'] as $v) { $out[] = '- ' . $v; }
         $out[] = '';
+        $out[] = 'PLANS REPARÉS:';
+        foreach ($r['plan_repairs'] ?: ['aucun'] as $v) { $out[] = '- ' . $v; }
+        $out[] = '';
         $out[] = 'ERREURS:';
         foreach ($r['errors'] ?: ['aucune'] as $v) { $out[] = '- ' . $v; }
         $out[] = '';
         $out[] = 'COMPTAGES APRES:';
         foreach ($r['counts_after'] as $k => $v) { $out[] = '- ' . $k . '=' . $v; }
+        $out[] = '';
+        $out[] = 'PLANS APRES:';
+        foreach ($r['plans_after'] ?: ['aucun'] as $v) { $out[] = '- ' . $v; }
         return implode(PHP_EOL, $out);
     }
 
@@ -260,9 +275,20 @@ final class RailwayDbTools
     private static function tableExists(PDO $pdo, string $table): bool { $s = $pdo->prepare('SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = ?'); $s->execute([$table]); return (int) $s->fetchColumn() > 0; }
     private static function columnExists(PDO $pdo, string $table, string $column): bool { $s = $pdo->prepare('SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ? AND column_name = ?'); $s->execute([$table, $column]); return (int) $s->fetchColumn() > 0; }
     private static function runtimeCounts(PDO $pdo): array { $counts = []; foreach (['restaurants','users','audit_logs','sales','server_requests','kitchen_stock_requests'] as $table) { $counts[$table] = self::tableExists($pdo, $table) ? (int) $pdo->query('SELECT COUNT(*) FROM ' . $table)->fetchColumn() : -1; } return $counts; }
+    private static function listPlans(PDO $pdo): array { if (!self::tableExists($pdo, 'subscription_plans')) { return []; } $rows = $pdo->query('SELECT id, code, status FROM subscription_plans ORDER BY id ASC')->fetchAll(PDO::FETCH_ASSOC); return array_map(static fn (array $row): string => (string) $row['id'] . ':' . (string) $row['code'] . ':' . (string) $row['status'], $rows); }
     private static function idBy(PDO $pdo, string $sql, array $args): int { $s = $pdo->prepare($sql); $s->execute($args); return (int) $s->fetchColumn(); }
     private static function exists(PDO $pdo, string $sql, array $args): bool { $s = $pdo->prepare($sql); $s->execute($args); return $s->fetchColumn() !== false; }
     private static function add(array &$report, string $type, string $label): void { $report[$type][] = $label; }
+    private static function ensureOperationalPlans(PDO $pdo, array &$report): void
+    {
+        foreach ([
+            ['Starter', 'starter', 'Plan de base pour petit restaurant', 49.99, 499.00, 15, 1, json_encode(['dashboard','branding','reports_basic'], JSON_UNESCAPED_UNICODE), 'active'],
+            ['Business', 'business', 'Plan multi-equipes avec modules avancables', 119.99, 1199.00, 80, 1, json_encode(['dashboard','branding','reports_advanced','pwa'], JSON_UNESCAPED_UNICODE), 'active'],
+        ] as $plan) {
+            self::upsertPlan($pdo, $plan, $report);
+            $report['plan_repairs'][] = 'subscription_plans:' . $plan[1];
+        }
+    }
     private static function upsertPlan(PDO $pdo, array $v, array &$r): void { $exists = self::exists($pdo, 'SELECT id FROM subscription_plans WHERE code = ? LIMIT 1', [$v[1]]); $s = $pdo->prepare('INSERT INTO subscription_plans (name, code, description, monthly_price, yearly_price, max_users, max_restaurants, features_json, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW()) ON DUPLICATE KEY UPDATE name = VALUES(name), description = VALUES(description), monthly_price = VALUES(monthly_price), yearly_price = VALUES(yearly_price), max_users = VALUES(max_users), max_restaurants = VALUES(max_restaurants), features_json = VALUES(features_json), status = VALUES(status), updated_at = NOW()'); $s->execute($v); self::add($r, $exists ? 'updated' : 'created', 'subscription_plans:' . $v[1]); }
     private static function upsertRestaurant(PDO $pdo, array $v, array &$r): int { $exists = self::exists($pdo, 'SELECT id FROM restaurants WHERE restaurant_code = ? LIMIT 1', [$v[2]]); $s = $pdo->prepare('INSERT INTO restaurants (subscription_plan_id, name, restaurant_code, slug, legal_name, status, subscription_status, subscription_payment_status, support_email, phone, country, city, address_line, timezone, currency_code, access_url, activated_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW(), NOW()) ON DUPLICATE KEY UPDATE subscription_plan_id = VALUES(subscription_plan_id), name = VALUES(name), slug = VALUES(slug), legal_name = VALUES(legal_name), status = VALUES(status), subscription_status = VALUES(subscription_status), subscription_payment_status = VALUES(subscription_payment_status), support_email = VALUES(support_email), phone = VALUES(phone), country = VALUES(country), city = VALUES(city), address_line = VALUES(address_line), timezone = VALUES(timezone), currency_code = VALUES(currency_code), access_url = VALUES(access_url), updated_at = NOW()'); $s->execute($v); self::add($r, $exists ? 'updated' : 'created', 'restaurants:' . $v[2]); return self::idBy($pdo, 'SELECT id FROM restaurants WHERE restaurant_code = ? LIMIT 1', [$v[2]]); }
     private static function upsertBranding(PDO $pdo, array $v, array &$r): void { $exists = self::exists($pdo, 'SELECT id FROM restaurant_branding WHERE restaurant_id = ? LIMIT 1', [$v[0]]); $s = $pdo->prepare('INSERT INTO restaurant_branding (restaurant_id, public_name, logo_url, cover_image_url, favicon_url, primary_color, secondary_color, accent_color, web_subdomain, custom_domain, app_display_name, app_short_name, portal_title, portal_tagline, welcome_text, download_badge_label, created_at, updated_at) VALUES (?, ?, NULL, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NOW(), NOW()) ON DUPLICATE KEY UPDATE public_name = VALUES(public_name), primary_color = VALUES(primary_color), secondary_color = VALUES(secondary_color), accent_color = VALUES(accent_color), web_subdomain = VALUES(web_subdomain), custom_domain = VALUES(custom_domain), app_display_name = VALUES(app_display_name), app_short_name = VALUES(app_short_name), portal_title = VALUES(portal_title), portal_tagline = VALUES(portal_tagline), welcome_text = VALUES(welcome_text), updated_at = NOW()'); $s->execute($v); self::add($r, $exists ? 'updated' : 'created', 'restaurant_branding:' . $v[0]); }
