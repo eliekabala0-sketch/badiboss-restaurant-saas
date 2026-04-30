@@ -50,6 +50,14 @@ final class App
             $this->respondDatabaseHealthDebug();
             return;
         }
+        if ($request->method === 'GET' && $request->uri === '/admin/install-db-now') {
+            $this->respondRailwayInstallDb($request);
+            return;
+        }
+        if ($request->method === 'GET' && $request->uri === '/admin/seed-minimal-now') {
+            $this->respondRailwaySeedMinimal($request);
+            return;
+        }
 
         $container = Container::getInstance();
         $container->set('config', $this->config);
@@ -173,5 +181,50 @@ final class App
         echo 'port=' . (string) ($config['port'] ?? 'unknown') . PHP_EOL;
         echo 'database=' . (string) ($config['database'] ?? 'unknown') . PHP_EOL;
         echo 'user=' . (string) ($config['username'] ?? 'unknown');
+    }
+
+    private function respondRailwayInstallDb(Request $request): void
+    {
+        if (!$this->canRunRailwayAdminTask($request)) {
+            http_response_code(403);
+            header('Content-Type: text/plain; charset=UTF-8');
+            echo 'Acces refuse';
+            return;
+        }
+
+        require_once BASE_PATH . '/scripts/railway_install_db.php';
+        $report = railway_install_db_report($this->config);
+
+        http_response_code($report['blocking_errors'] === [] ? 200 : 500);
+        header('Content-Type: text/plain; charset=UTF-8');
+        echo railway_install_db_render_report($report);
+    }
+
+    private function respondRailwaySeedMinimal(Request $request): void
+    {
+        if (!$this->canRunRailwayAdminTask($request)) {
+            http_response_code(403);
+            header('Content-Type: text/plain; charset=UTF-8');
+            echo 'Acces refuse';
+            return;
+        }
+
+        require_once BASE_PATH . '/scripts/railway_seed_minimal.php';
+        $report = railway_seed_minimal_report($this->config);
+
+        http_response_code($report['errors'] === [] ? 200 : 500);
+        header('Content-Type: text/plain; charset=UTF-8');
+        echo railway_seed_minimal_render_report($report);
+    }
+
+    private function canRunRailwayAdminTask(Request $request): bool
+    {
+        $appEnv = strtolower((string) ($this->config['app']['env'] ?? 'production'));
+        $providedToken = (string) ($request->query['token'] ?? '');
+        $expectedToken = (string) env('RAILWAY_INSTALL_TOKEN', 'BADIBOSS_INSTALL_2026');
+
+        return $appEnv === 'production'
+            && $providedToken !== ''
+            && hash_equals($expectedToken, $providedToken);
     }
 }
