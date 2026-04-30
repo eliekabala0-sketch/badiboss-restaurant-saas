@@ -14,7 +14,7 @@ final class RailwayDbTools
         'subscription_plans', 'restaurants', 'restaurant_branding', 'users', 'roles', 'permissions',
         'role_permissions', 'settings', 'menu_categories', 'menu_items', 'stock_items', 'stock_movements',
         'kitchen_production', 'sales', 'server_requests', 'server_request_items', 'kitchen_stock_requests',
-        'losses', 'operation_cases', 'audit_logs',
+        'losses', 'operation_cases', 'audit_logs', 'correction_requests',
     ];
 
     private const RUNTIME_COLUMN_DEFS = [
@@ -42,6 +42,11 @@ final class RailwayDbTools
             ['name' => 'submitted_to_manager_by', 'sql' => 'ALTER TABLE operation_cases ADD COLUMN submitted_to_manager_by BIGINT UNSIGNED NULL AFTER technical_confirmed_by'],
             ['name' => 'submitted_to_manager_at', 'sql' => 'ALTER TABLE operation_cases ADD COLUMN submitted_to_manager_at DATETIME NULL AFTER technical_confirmed_at'],
             ['name' => 'trace_snapshot_json', 'sql' => 'ALTER TABLE operation_cases ADD COLUMN trace_snapshot_json LONGTEXT NULL AFTER manager_justification'],
+        ],
+        'stock_items' => [
+            ['name' => 'category_label', 'sql' => 'ALTER TABLE stock_items ADD COLUMN category_label VARCHAR(120) NULL AFTER unit_name'],
+            ['name' => 'item_note', 'sql' => 'ALTER TABLE stock_items ADD COLUMN item_note TEXT NULL AFTER estimated_unit_cost'],
+            ['name' => 'updated_at', 'sql' => 'ALTER TABLE stock_items ADD COLUMN updated_at DATETIME NULL AFTER created_at'],
         ],
     ];
 
@@ -151,6 +156,7 @@ final class RailwayDbTools
         try {
             self::ensureOperationalPlans($pdo, $report);
             self::ensureRestaurantCurrency($pdo, $report);
+            self::ensureCorrectionRequestsTable($pdo, $report);
 
             foreach (self::RUNTIME_COLUMN_DEFS as $table => $columns) {
                 foreach ($columns as $column) {
@@ -301,6 +307,41 @@ final class RailwayDbTools
 
         $pdo->exec("UPDATE restaurants SET currency = CASE WHEN UPPER(COALESCE(NULLIF(currency_code, ''), 'USD')) IN ('USD', 'CDF') THEN UPPER(COALESCE(NULLIF(currency_code, ''), 'USD')) ELSE 'USD' END WHERE currency IS NULL OR currency = '' OR UPPER(currency) NOT IN ('USD', 'CDF')");
         $report['data_backfills'][] = 'restaurants.currency';
+    }
+
+    private static function ensureCorrectionRequestsTable(PDO $pdo, array &$report): void
+    {
+        if (self::tableExists($pdo, 'correction_requests')) {
+            $report['columns_existing'][] = 'correction_requests.table';
+            return;
+        }
+
+        $pdo->exec(
+            'CREATE TABLE correction_requests (
+                id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+                restaurant_id BIGINT UNSIGNED NOT NULL,
+                module_name VARCHAR(80) NOT NULL,
+                entity_type VARCHAR(120) NOT NULL,
+                entity_id BIGINT UNSIGNED NOT NULL,
+                request_type VARCHAR(120) NOT NULL,
+                requested_by BIGINT UNSIGNED NOT NULL,
+                requested_role_code VARCHAR(80) NOT NULL,
+                status ENUM("PENDING","APPROVED","REJECTED") NOT NULL DEFAULT "PENDING",
+                old_values_json JSON NULL,
+                proposed_values_json JSON NULL,
+                justification TEXT NOT NULL,
+                review_notes TEXT NULL,
+                reviewed_by BIGINT UNSIGNED NULL,
+                reviewed_at DATETIME NULL,
+                created_at DATETIME NOT NULL,
+                updated_at DATETIME NOT NULL,
+                INDEX idx_correction_requests_restaurant_status (restaurant_id, status, created_at),
+                CONSTRAINT fk_correction_requests_restaurant FOREIGN KEY (restaurant_id) REFERENCES restaurants(id),
+                CONSTRAINT fk_correction_requests_requested_by FOREIGN KEY (requested_by) REFERENCES users(id),
+                CONSTRAINT fk_correction_requests_reviewed_by FOREIGN KEY (reviewed_by) REFERENCES users(id)
+            )'
+        );
+        $report['columns_added'][] = 'correction_requests.table';
     }
     private static function upsertPlan(PDO $pdo, array $v, array &$r): void { $exists = self::exists($pdo, 'SELECT id FROM subscription_plans WHERE code = ? LIMIT 1', [$v[1]]); $s = $pdo->prepare('INSERT INTO subscription_plans (name, code, description, monthly_price, yearly_price, max_users, max_restaurants, features_json, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW()) ON DUPLICATE KEY UPDATE name = VALUES(name), description = VALUES(description), monthly_price = VALUES(monthly_price), yearly_price = VALUES(yearly_price), max_users = VALUES(max_users), max_restaurants = VALUES(max_restaurants), features_json = VALUES(features_json), status = VALUES(status), updated_at = NOW()'); $s->execute($v); self::add($r, $exists ? 'updated' : 'created', 'subscription_plans:' . $v[1]); }
     private static function upsertRestaurant(PDO $pdo, array $v, array &$r): int { $exists = self::exists($pdo, 'SELECT id FROM restaurants WHERE restaurant_code = ? LIMIT 1', [$v[2]]); $s = $pdo->prepare('INSERT INTO restaurants (subscription_plan_id, name, restaurant_code, slug, legal_name, status, subscription_status, subscription_payment_status, support_email, phone, country, city, address_line, timezone, currency_code, access_url, activated_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW(), NOW()) ON DUPLICATE KEY UPDATE subscription_plan_id = VALUES(subscription_plan_id), name = VALUES(name), slug = VALUES(slug), legal_name = VALUES(legal_name), status = VALUES(status), subscription_status = VALUES(subscription_status), subscription_payment_status = VALUES(subscription_payment_status), support_email = VALUES(support_email), phone = VALUES(phone), country = VALUES(country), city = VALUES(city), address_line = VALUES(address_line), timezone = VALUES(timezone), currency_code = VALUES(currency_code), access_url = VALUES(access_url), updated_at = NOW()'); $s->execute($v); self::add($r, $exists ? 'updated' : 'created', 'restaurants:' . $v[2]); return self::idBy($pdo, 'SELECT id FROM restaurants WHERE restaurant_code = ? LIMIT 1', [$v[2]]); }

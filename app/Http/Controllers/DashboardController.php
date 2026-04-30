@@ -79,6 +79,8 @@ final class DashboardController
             'user' => $_SESSION['user'],
             'restaurant' => $restaurant,
             'subscription' => $subscription,
+            'correction_requests_pending' => Container::getInstance()->get('correctionService')->listPendingForRestaurant($restaurantId),
+            'correction_requests_recent' => Container::getInstance()->get('correctionService')->listRecentForRestaurant($restaurantId, 12),
             'manager_queue_cases' => $incidentService->listManagerDecisionQueue($restaurantId),
             'case_decision_history' => $incidentService->listRecentDecisions($restaurantId, 8),
             'sales_period_totals' => Container::getInstance()->get('salesService')->salesTotalsByServerForPeriods($restaurantId),

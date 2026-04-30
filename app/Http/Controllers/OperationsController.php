@@ -23,6 +23,8 @@ final class OperationsController
             'items' => Container::getInstance()->get('stockService')->listItems($restaurantId),
             'movements' => Container::getInstance()->get('stockService')->listMovements($restaurantId),
             'kitchen_stock_requests' => Container::getInstance()->get('stockService')->listKitchenStockRequests($restaurantId),
+            'correction_requests' => Container::getInstance()->get('correctionService')->listRecentForRestaurant($restaurantId, 12),
+            'stock_audits' => Container::getInstance()->get('stockService')->recentAudits($restaurantId, 12),
             'productions' => Container::getInstance()->get('kitchenService')->listProductions($restaurantId),
             'cases' => Container::getInstance()->get('incidentService')->listCases($restaurantId, 'stock'),
             'incident_types' => $incidentCatalog['incident_types'],
@@ -46,9 +48,34 @@ final class OperationsController
             'quantity_in_stock' => $request->input('quantity_in_stock', 0),
             'alert_threshold' => $request->input('alert_threshold', 0),
             'estimated_unit_cost' => $request->input('estimated_unit_cost', 0),
+            'category_label' => $request->input('category_label', ''),
+            'item_note' => $request->input('item_note', ''),
         ], current_user());
 
         flash('success', 'Article de stock cree.');
+        redirect($this->stockUrl($restaurantId));
+    }
+
+    public function updateStockItem(Request $request): void
+    {
+        $restaurantId = $this->resolveRestaurantId($request);
+        authorize_access('stock.item.edit');
+
+        Container::getInstance()->get('stockService')->updateItem(
+            $restaurantId,
+            (int) $request->route('id'),
+            [
+                'name' => $request->input('name'),
+                'unit_name' => $request->input('unit_name'),
+                'alert_threshold' => $request->input('alert_threshold', 0),
+                'estimated_unit_cost' => $request->input('estimated_unit_cost', 0),
+                'category_label' => $request->input('category_label', ''),
+                'item_note' => $request->input('item_note', ''),
+            ],
+            current_user()
+        );
+
+        flash('success', 'Article de stock modifie sans toucher aux mouvements historiques.');
         redirect($this->stockUrl($restaurantId));
     }
 
@@ -171,6 +198,47 @@ final class OperationsController
         );
 
         flash('success', 'Cas complexe transmis au gerant avec sa trace.');
+        redirect($this->stockUrl($restaurantId));
+    }
+
+    public function requestStockMovementCorrection(Request $request): void
+    {
+        $restaurantId = $this->resolveRestaurantId($request);
+        authorize_access('stock.correction.request');
+
+        Container::getInstance()->get('correctionService')->requestStockMovementQuantityCorrection(
+            $restaurantId,
+            (int) $request->route('id'),
+            [
+                'new_quantity' => $request->input('new_quantity'),
+                'justification' => $request->input('justification'),
+            ],
+            current_user()
+        );
+
+        flash('success', 'Demande de correction envoyee au gerant ou proprietaire.');
+        redirect($this->stockUrl($restaurantId));
+    }
+
+    public function requestSensitiveCorrection(Request $request): void
+    {
+        $restaurantId = $this->resolveRestaurantId($request);
+        authorize_access('stock.correction.request');
+
+        Container::getInstance()->get('correctionService')->requestSensitiveOperationCorrection(
+            $restaurantId,
+            [
+                'module_name' => $request->input('module_name'),
+                'entity_type' => $request->input('entity_type'),
+                'entity_id' => $request->input('entity_id'),
+                'request_type' => $request->input('request_type', 'sensitive_operation_correction'),
+                'summary' => $request->input('summary', ''),
+                'justification' => $request->input('justification'),
+            ],
+            current_user()
+        );
+
+        flash('success', 'Demande de correction sensible enregistree pour validation.');
         redirect($this->stockUrl($restaurantId));
     }
 
@@ -528,6 +596,25 @@ final class OperationsController
         ]);
 
         audit_access('reports', $restaurantId, 'screens', 'daily-report', 'Consultation rapport journalier');
+    }
+
+    public function decideCorrectionRequest(Request $request): void
+    {
+        $restaurantId = $this->resolveRestaurantId($request);
+        authorize_access('correction.approve');
+
+        Container::getInstance()->get('correctionService')->decide(
+            $restaurantId,
+            (int) $request->route('id'),
+            [
+                'decision' => $request->input('decision'),
+                'review_notes' => $request->input('review_notes'),
+            ],
+            current_user()
+        );
+
+        flash('success', 'Decision sur la demande de correction enregistree.');
+        redirect($this->moduleUrl('/owner', $restaurantId));
     }
 
     private function resolveRestaurantId(Request $request): int

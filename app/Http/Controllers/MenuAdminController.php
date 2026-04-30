@@ -38,6 +38,7 @@ final class MenuAdminController
             'restaurant' => Container::getInstance()->get('restaurantAdmin')->findRestaurant($restaurantId),
             'categories' => Container::getInstance()->get('menuAdmin')->listCategories($restaurantId),
             'items' => Container::getInstance()->get('menuAdmin')->listItems($restaurantId),
+            'menu_audits' => Container::getInstance()->get('menuAdmin')->recentAudits($restaurantId, 12),
             'flash_success' => flash('success'),
             'flash_error' => flash('error'),
         ]);
@@ -101,6 +102,17 @@ final class MenuAdminController
 
         flash('success', 'Le plat du menu a ete mis a jour.');
         redirect('/super-admin/menu?restaurant_id=' . (int) $request->input('restaurant_id'));
+    }
+
+    public function updateOwnerItem(Request $request): void
+    {
+        authorize_access('menu.item.edit');
+
+        $itemId = (int) $request->route('id');
+        Container::getInstance()->get('menuAdmin')->updateItem($itemId, $this->itemPayload($request), $_SESSION['user']);
+
+        flash('success', 'Le plat du menu a ete modifie sans toucher aux anciennes ventes.');
+        redirect('/owner/menu');
     }
 
     public function markStatus(Request $request): void

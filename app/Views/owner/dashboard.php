@@ -146,6 +146,64 @@ $restaurantRegisterUrl = restaurant_generated_registration_url($restaurant);
 </section>
 
 <section class="card" style="padding:24px; margin-top:24px;">
+    <h2 style="margin-top:0;">Demandes de correction</h2>
+    <p class="muted">Les corrections sensibles restent tracees, motivees et limitees au restaurant courant. Les anciennes ecritures ne sont jamais reecrites silencieusement.</p>
+    <?php if ($correction_requests_pending === []): ?>
+        <p class="muted">Aucune demande en attente pour le moment.</p>
+    <?php else: ?>
+        <?php foreach ($correction_requests_pending as $request): ?>
+            <article class="card" style="padding:18px; border-radius:16px; margin-bottom:14px;">
+                <div class="topbar" style="margin-bottom:10px;">
+                    <strong><?= e(correction_request_type_label((string) $request['request_type'])) ?></strong>
+                    <span class="pill badge-bad"><?= e(correction_request_status_label((string) $request['status'])) ?></span>
+                </div>
+                <p><strong>Demandeur :</strong> <?= e(named_actor_label($request['requested_by_name'] ?? null, $request['requested_role_code'] ?? null)) ?></p>
+                <p><strong>Justification :</strong> <?= e((string) ($request['justification'] ?? '')) ?></p>
+                <?php if (($request['old_values']['quantity'] ?? null) !== null && ($request['proposed_values']['new_quantity'] ?? null) !== null): ?>
+                    <p><strong>Quantite :</strong> <?= e((string) $request['old_values']['quantity']) ?> -> <?= e((string) $request['proposed_values']['new_quantity']) ?></p>
+                <?php endif; ?>
+                <?php if (can_access('correction.approve')): ?>
+                    <form method="post" action="/owner/correction-requests/<?= e((string) $request['id']) ?>/decision" class="split no-print" style="margin-top:14px;">
+                        <div>
+                            <label>Decision</label>
+                            <select name="decision">
+                                <option value="APPROVED">Approuver</option>
+                                <option value="REJECTED">Rejeter</option>
+                            </select>
+                        </div>
+                        <div style="grid-column:1 / -1;">
+                            <label>Justification du gérant / propriétaire</label>
+                            <textarea name="review_notes" required>Decision motivee et tracee.</textarea>
+                        </div>
+                        <div style="grid-column:1 / -1;">
+                            <button type="submit">Enregistrer la decision</button>
+                        </div>
+                    </form>
+                <?php endif; ?>
+            </article>
+        <?php endforeach; ?>
+    <?php endif; ?>
+
+    <?php if ($correction_requests_recent !== []): ?>
+        <div class="table-wrap" style="margin-top:16px;">
+            <table>
+                <thead><tr><th>Date</th><th>Demande</th><th>Acteur</th><th>Statut</th></tr></thead>
+                <tbody>
+                <?php foreach ($correction_requests_recent as $request): ?>
+                    <tr>
+                        <td><?= e(format_date_fr($request['created_at'])) ?></td>
+                        <td><?= e(correction_request_type_label((string) $request['request_type'])) ?></td>
+                        <td><?= e(named_actor_label($request['requested_by_name'] ?? null, $request['requested_role_code'] ?? null)) ?></td>
+                        <td><?= e(correction_request_status_label((string) $request['status'])) ?></td>
+                    </tr>
+                <?php endforeach; ?>
+                </tbody>
+            </table>
+        </div>
+    <?php endif; ?>
+</section>
+
+<section class="card" style="padding:24px; margin-top:24px;">
     <h2 style="margin-top:0;">Orientation rapide</h2>
     <div class="nav" style="margin-bottom:0;">
         <?php if (!restaurant_status_blocks_operations($restaurant['status'] ?? null) && $can_access_stock): ?><a href="/stock">Ouvrir Stock</a><?php endif; ?>

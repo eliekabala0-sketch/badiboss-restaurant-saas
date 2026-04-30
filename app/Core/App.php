@@ -7,6 +7,7 @@ namespace App\Core;
 use App\Services\AuditService;
 use App\Services\AuditQueryService;
 use App\Services\AuthorizationService;
+use App\Services\CorrectionRequestService;
 use App\Services\AuthService;
 use App\Services\IncidentService;
 use App\Services\KitchenService;
@@ -98,6 +99,7 @@ final class App
         $container->set('platformSettings', new PlatformSettingsService($database));
         $container->set('incidentService', new IncidentService($database));
         $container->set('stockService', new StockService($database));
+        $container->set('correctionService', new CorrectionRequestService($database));
         $container->set('kitchenService', new KitchenService($database));
         $container->set('salesService', new SalesService($database));
         $container->set('reportService', new ReportService($database));

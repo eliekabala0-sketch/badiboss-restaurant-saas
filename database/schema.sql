@@ -216,10 +216,13 @@ CREATE TABLE stock_items (
     restaurant_id BIGINT UNSIGNED NOT NULL,
     name VARCHAR(160) NOT NULL,
     unit_name VARCHAR(80) NOT NULL,
+    category_label VARCHAR(120) NULL,
     quantity_in_stock DECIMAL(12,2) NOT NULL DEFAULT 0.00,
     alert_threshold DECIMAL(12,2) NOT NULL DEFAULT 0.00,
     estimated_unit_cost DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+    item_note TEXT NULL,
     created_at DATETIME NOT NULL,
+    updated_at DATETIME NULL,
     INDEX idx_stock_items_restaurant (restaurant_id),
     CONSTRAINT fk_stock_items_restaurant FOREIGN KEY (restaurant_id) REFERENCES restaurants(id)
 );
@@ -469,4 +472,28 @@ CREATE TABLE audit_logs (
     INDEX idx_audit_module_date (module_name, created_at),
     CONSTRAINT fk_audit_restaurant FOREIGN KEY (restaurant_id) REFERENCES restaurants(id),
     CONSTRAINT fk_audit_user FOREIGN KEY (user_id) REFERENCES users(id)
+);
+
+CREATE TABLE correction_requests (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    restaurant_id BIGINT UNSIGNED NOT NULL,
+    module_name VARCHAR(80) NOT NULL,
+    entity_type VARCHAR(120) NOT NULL,
+    entity_id BIGINT UNSIGNED NOT NULL,
+    request_type VARCHAR(120) NOT NULL,
+    requested_by BIGINT UNSIGNED NOT NULL,
+    requested_role_code VARCHAR(80) NOT NULL,
+    status ENUM('PENDING', 'APPROVED', 'REJECTED') NOT NULL DEFAULT 'PENDING',
+    old_values_json JSON NULL,
+    proposed_values_json JSON NULL,
+    justification TEXT NOT NULL,
+    review_notes TEXT NULL,
+    reviewed_by BIGINT UNSIGNED NULL,
+    reviewed_at DATETIME NULL,
+    created_at DATETIME NOT NULL,
+    updated_at DATETIME NOT NULL,
+    INDEX idx_correction_requests_restaurant_status (restaurant_id, status, created_at),
+    CONSTRAINT fk_correction_requests_restaurant FOREIGN KEY (restaurant_id) REFERENCES restaurants(id),
+    CONSTRAINT fk_correction_requests_requested_by FOREIGN KEY (requested_by) REFERENCES users(id),
+    CONSTRAINT fk_correction_requests_reviewed_by FOREIGN KEY (reviewed_by) REFERENCES users(id)
 );

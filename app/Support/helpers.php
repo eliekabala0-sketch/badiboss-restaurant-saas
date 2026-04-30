@@ -36,6 +36,43 @@ function env(string $key, ?string $default = null): ?string
     return $_ENV[$key] ?? $_SERVER[$key] ?? $default;
 }
 
+function correction_request_status_label(?string $status): string
+{
+    return match ($status) {
+        'PENDING' => 'En attente',
+        'APPROVED' => 'Approuvee',
+        'REJECTED' => 'Rejetee',
+        default => validation_status_label($status),
+    };
+}
+
+function correction_request_type_label(?string $type): string
+{
+    return match ($type) {
+        'stock_quantity_correction' => 'Correction de quantite stock',
+        'sensitive_operation_correction' => 'Correction sensible a valider',
+        default => (string) $type,
+    };
+}
+
+function audit_action_label(?string $action): string
+{
+    return match ($action) {
+        'menu_item_created' => 'Plat cree',
+        'menu_item_updated' => 'Plat modifie',
+        'menu_price_updated' => 'Prix du plat modifie',
+        'menu_item_status_changed' => 'Statut du plat modifie',
+        'stock_item_created' => 'Article stock cree',
+        'stock_item_updated' => 'Article stock modifie',
+        'stock_item_price_updated' => 'Cout article stock modifie',
+        'stock_quantity_correction_requested' => 'Correction de quantite demandee',
+        'stock_quantity_correction_approved' => 'Correction de quantite approuvee',
+        'stock_quantity_correction_rejected' => 'Correction de quantite rejetee',
+        'sensitive_operation_correction_requested' => 'Correction sensible demandee',
+        default => (string) $action,
+    };
+}
+
 function base_path(string $path = ''): string
 {
     return BASE_PATH . ($path !== '' ? '/' . ltrim($path, '/') : '');

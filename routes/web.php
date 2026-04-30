@@ -57,6 +57,7 @@ $router->post('/owner/settings/currency', [RestaurantAdminController::class, 'up
 $router->get('/owner/menu', [MenuAdminController::class, 'ownerIndex'], [AuthMiddleware::class, OwnerAreaMiddleware::class]);
 $router->post('/owner/menu/categories', [MenuAdminController::class, 'storeOwnerCategory'], [AuthMiddleware::class, OwnerOrManagerMiddleware::class]);
 $router->post('/owner/menu/items', [MenuAdminController::class, 'storeOwnerItem'], [AuthMiddleware::class, OwnerOrManagerMiddleware::class]);
+$router->post('/owner/menu/items/{id}/update', [MenuAdminController::class, 'updateOwnerItem'], [AuthMiddleware::class, OwnerOrManagerMiddleware::class]);
 $router->get('/owner/access', [TenantAccessController::class, 'index'], [AuthMiddleware::class, OwnerAreaMiddleware::class]);
 $router->post('/owner/access/roles', [TenantAccessController::class, 'storeRole'], [AuthMiddleware::class, OwnerAreaMiddleware::class]);
 $router->post('/owner/access/roles/{id}/permissions', [TenantAccessController::class, 'updateRolePermissions'], [AuthMiddleware::class, OwnerAreaMiddleware::class]);
@@ -65,11 +66,14 @@ $router->post('/owner/access/users/{id}/role', [TenantAccessController::class, '
 $router->post('/owner/menu/items/{id}/status', [MenuAdminController::class, 'markStatus'], [AuthMiddleware::class, OwnerOrManagerMiddleware::class]);
 $router->get('/stock', [OperationsController::class, 'stock'], [AuthMiddleware::class, StockAccessMiddleware::class]);
 $router->post('/stock/items', [OperationsController::class, 'createStockItem'], [AuthMiddleware::class, StockAccessMiddleware::class]);
+$router->post('/stock/items/{id}/update', [OperationsController::class, 'updateStockItem'], [AuthMiddleware::class, StockAccessMiddleware::class]);
 $router->post('/stock/entries', [OperationsController::class, 'addStockEntry'], [AuthMiddleware::class, StockAccessMiddleware::class]);
 $router->post('/stock/sorties-cuisine', [OperationsController::class, 'sendToKitchen'], [AuthMiddleware::class, StockAccessMiddleware::class]);
 $router->post('/stock/retours', [OperationsController::class, 'validateReturnStock'], [AuthMiddleware::class, StockAccessMiddleware::class]);
 $router->post('/stock/retours-endommages', [OperationsController::class, 'signalDamagedStockReturn'], [AuthMiddleware::class, StockAccessMiddleware::class]);
 $router->post('/stock/pertes', [OperationsController::class, 'createLoss'], [AuthMiddleware::class, StockAccessMiddleware::class]);
+$router->post('/stock/movements/{id}/correction-request', [OperationsController::class, 'requestStockMovementCorrection'], [AuthMiddleware::class, StockAccessMiddleware::class]);
+$router->post('/stock/corrections/sensitive', [OperationsController::class, 'requestSensitiveCorrection'], [AuthMiddleware::class, StockAccessMiddleware::class]);
 $router->post('/stock/demandes-cuisine/{id}/reponse', [OperationsController::class, 'respondKitchenStockRequest'], [AuthMiddleware::class, StockAccessMiddleware::class]);
 $router->post('/stock/demandes-cuisine/{id}/incident', [OperationsController::class, 'signalKitchenStockIncident'], [AuthMiddleware::class, StockAccessMiddleware::class]);
 $router->get('/cuisine', [OperationsController::class, 'kitchen'], [AuthMiddleware::class, KitchenAccessMiddleware::class]);
@@ -88,6 +92,7 @@ $router->post('/ventes/incidents', [OperationsController::class, 'signalSaleInci
 $router->post('/operations/cases/{id}/decision', [OperationsController::class, 'decideCase'], [AuthMiddleware::class]);
 $router->post('/ventes/pertes-argent', [OperationsController::class, 'createCashLoss'], [AuthMiddleware::class, SalesAccessMiddleware::class]);
 $router->get('/rapport', [OperationsController::class, 'report'], [AuthMiddleware::class, ReportsAccessMiddleware::class]);
+$router->post('/owner/correction-requests/{id}/decision', [OperationsController::class, 'decideCorrectionRequest'], [AuthMiddleware::class, OwnerOrManagerMiddleware::class]);
 $router->get('/portal/register', [TenantPortalController::class, 'showRegistration']);
 $router->post('/portal/register', [TenantPortalController::class, 'register']);
 $router->get('/portal/{slug}/register', [TenantPortalController::class, 'showRegistration']);

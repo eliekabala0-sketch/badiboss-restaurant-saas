@@ -48,18 +48,40 @@ final class StockService
 
     public function createItem(int $restaurantId, array $payload, array $actor): void
     {
-        $statement = $this->database->pdo()->prepare(
-            'INSERT INTO stock_items (restaurant_id, name, unit_name, quantity_in_stock, alert_threshold, estimated_unit_cost, created_at)
-             VALUES (:restaurant_id, :name, :unit_name, :quantity_in_stock, :alert_threshold, :estimated_unit_cost, NOW())'
-        );
-        $statement->execute([
+        $optionalColumns = $this->stockItemOptionalColumns();
+        $columns = ['restaurant_id', 'name', 'unit_name', 'quantity_in_stock', 'alert_threshold', 'estimated_unit_cost'];
+        $placeholders = [':restaurant_id', ':name', ':unit_name', ':quantity_in_stock', ':alert_threshold', ':estimated_unit_cost'];
+        $params = [
             'restaurant_id' => $restaurantId,
             'name' => trim((string) $payload['name']),
             'unit_name' => trim((string) $payload['unit_name']),
             'quantity_in_stock' => (float) $payload['quantity_in_stock'],
             'alert_threshold' => (float) $payload['alert_threshold'],
             'estimated_unit_cost' => (float) ($payload['estimated_unit_cost'] ?? 0),
-        ]);
+        ];
+
+        if ($optionalColumns['category_label']) {
+            $columns[] = 'category_label';
+            $placeholders[] = ':category_label';
+            $params['category_label'] = trim((string) ($payload['category_label'] ?? '')) ?: null;
+        }
+        if ($optionalColumns['item_note']) {
+            $columns[] = 'item_note';
+            $placeholders[] = ':item_note';
+            $params['item_note'] = trim((string) ($payload['item_note'] ?? '')) ?: null;
+        }
+        if ($optionalColumns['updated_at']) {
+            $columns[] = 'updated_at';
+            $placeholders[] = 'NOW()';
+        }
+        $columns[] = 'created_at';
+        $placeholders[] = 'NOW()';
+
+        $statement = $this->database->pdo()->prepare(
+            'INSERT INTO stock_items (' . implode(', ', $columns) . ')
+             VALUES (' . implode(', ', $placeholders) . ')'
+        );
+        $statement->execute($params);
 
         $stockItemId = (int) $this->database->pdo()->lastInsertId();
         Container::getInstance()->get('audit')->log([
@@ -73,6 +95,73 @@ final class StockService
             'entity_id' => (string) $stockItemId,
             'new_values' => $payload,
             'justification' => 'Création article de stock',
+        ]);
+    }
+
+    public function updateItem(int $restaurantId, int $stockItemId, array $payload, array $actor): void
+    {
+        $current = $this->findStockItemInRestaurant($stockItemId, $restaurantId);
+        $optionalColumns = $this->stockItemOptionalColumns();
+        $assignments = [
+            'name = :name',
+            'unit_name = :unit_name',
+            'alert_threshold = :alert_threshold',
+            'estimated_unit_cost = :estimated_unit_cost',
+        ];
+        $params = [
+            'id' => $stockItemId,
+            'restaurant_id' => $restaurantId,
+            'name' => trim((string) $payload['name']),
+            'unit_name' => trim((string) $payload['unit_name']),
+            'alert_threshold' => (float) ($payload['alert_threshold'] ?? 0),
+            'estimated_unit_cost' => (float) ($payload['estimated_unit_cost'] ?? 0),
+        ];
+
+        if ($optionalColumns['category_label']) {
+            $assignments[] = 'category_label = :category_label';
+            $params['category_label'] = trim((string) ($payload['category_label'] ?? '')) ?: null;
+        }
+        if ($optionalColumns['item_note']) {
+            $assignments[] = 'item_note = :item_note';
+            $params['item_note'] = trim((string) ($payload['item_note'] ?? '')) ?: null;
+        }
+        if ($optionalColumns['updated_at']) {
+            $assignments[] = 'updated_at = NOW()';
+        }
+
+        $statement = $this->database->pdo()->prepare(
+            'UPDATE stock_items
+             SET ' . implode(', ', $assignments) . '
+             WHERE id = :id AND restaurant_id = :restaurant_id'
+        );
+        $statement->execute($params);
+
+        $oldCost = (float) ($current['estimated_unit_cost'] ?? 0);
+        $newCost = (float) $params['estimated_unit_cost'];
+        $actionName = abs($oldCost - $newCost) > 0.00001 ? 'stock_item_price_updated' : 'stock_item_updated';
+        $justification = abs($oldCost - $newCost) > 0.00001
+            ? 'Cout unitaire corrige sans recalcul des mouvements historiques'
+            : 'Mise a jour controlee de l article de stock';
+
+        Container::getInstance()->get('audit')->log([
+            'restaurant_id' => $restaurantId,
+            'user_id' => $actor['id'],
+            'actor_name' => $actor['full_name'],
+            'actor_role_code' => $actor['role_code'],
+            'module_name' => 'stock',
+            'action_name' => $actionName,
+            'entity_type' => 'stock_items',
+            'entity_id' => (string) $stockItemId,
+            'old_values' => $current,
+            'new_values' => [
+                'name' => $params['name'],
+                'unit_name' => $params['unit_name'],
+                'alert_threshold' => $params['alert_threshold'],
+                'estimated_unit_cost' => $params['estimated_unit_cost'],
+                'category_label' => $params['category_label'] ?? ($current['category_label'] ?? null),
+                'item_note' => $params['item_note'] ?? ($current['item_note'] ?? null),
+            ],
+            'justification' => $justification,
         ]);
     }
 
@@ -599,6 +688,135 @@ final class StockService
         ]);
     }
 
+    public function recentAudits(int $restaurantId, int $limit = 20): array
+    {
+        $limit = max(1, min($limit, 50));
+        $statement = $this->database->pdo()->prepare(
+            'SELECT *
+             FROM audit_logs
+             WHERE restaurant_id = :restaurant_id
+               AND module_name = "stock"
+               AND action_name IN (
+                   "stock_item_created",
+                   "stock_item_updated",
+                   "stock_item_price_updated",
+                   "stock_quantity_correction_requested",
+                   "stock_quantity_correction_approved",
+                   "stock_quantity_correction_rejected",
+                   "sensitive_operation_correction_requested"
+               )
+             ORDER BY id DESC
+             LIMIT ' . $limit
+        );
+        $statement->execute(['restaurant_id' => $restaurantId]);
+        $rows = $statement->fetchAll(PDO::FETCH_ASSOC);
+
+        return array_map(function (array $row): array {
+            $row['old_values'] = $this->decodeAuditJson($row['old_values_json'] ?? null);
+            $row['new_values'] = $this->decodeAuditJson($row['new_values_json'] ?? null);
+
+            return $row;
+        }, $rows);
+    }
+
+    public function findMovementWithItem(int $movementId, int $restaurantId): array
+    {
+        $statement = $this->database->pdo()->prepare(
+            'SELECT sm.*, si.name AS stock_item_name, si.unit_name
+             FROM stock_movements sm
+             INNER JOIN stock_items si ON si.id = sm.stock_item_id
+             WHERE sm.id = :id AND sm.restaurant_id = :restaurant_id
+             LIMIT 1'
+        );
+        $statement->execute([
+            'id' => $movementId,
+            'restaurant_id' => $restaurantId,
+        ]);
+        $movement = $statement->fetch(PDO::FETCH_ASSOC);
+
+        if ($movement === false) {
+            throw new \RuntimeException('Mouvement de stock hors perimetre restaurant.');
+        }
+
+        return $movement;
+    }
+
+    public function applyValidatedQuantityCorrection(
+        int $restaurantId,
+        int $movementId,
+        float $newQuantity,
+        string $justification,
+        array $actor,
+        int $correctionRequestId
+    ): void {
+        $movement = $this->findMovementWithItem($movementId, $restaurantId);
+
+        if ($movement['status'] !== 'VALIDE') {
+            throw new \RuntimeException('Seuls les mouvements valides peuvent etre corriges.');
+        }
+        if ($movement['movement_type'] !== 'ENTREE') {
+            throw new \RuntimeException('Seules les entrees de stock validees recoivent une correction automatique.');
+        }
+
+        $oldQuantity = (float) $movement['quantity'];
+        if (abs($oldQuantity - $newQuantity) < 0.00001) {
+            return;
+        }
+
+        $delta = $newQuantity - $oldQuantity;
+        $unitCost = (float) ($movement['unit_cost_snapshot'] ?? 0);
+        $pdo = $this->database->pdo();
+        $pdo->beginTransaction();
+
+        try {
+            if ($delta > 0) {
+                $this->insertMovement($restaurantId, [
+                    'stock_item_id' => (int) $movement['stock_item_id'],
+                    'movement_type' => 'ENTREE',
+                    'quantity' => $delta,
+                    'unit_cost_snapshot' => $unitCost,
+                    'total_cost_snapshot' => $delta * $unitCost,
+                    'status' => 'VALIDE',
+                    'user_id' => $actor['id'],
+                    'validated_by' => $actor['id'],
+                    'reference_type' => 'correction_request',
+                    'reference_id' => $correctionRequestId,
+                    'note' => 'Correction approuvee de l entree #' . $movementId . ' - ' . $justification,
+                ]);
+                $this->adjustStockItem((int) $movement['stock_item_id'], $restaurantId, $delta);
+            } else {
+                $quantityToRemove = abs($delta);
+                $item = $this->findStockItemInRestaurant((int) $movement['stock_item_id'], $restaurantId);
+                if ($quantityToRemove > (float) ($item['quantity_in_stock'] ?? 0)) {
+                    throw new \RuntimeException('Correction impossible: stock actuel insuffisant pour diminuer cette entree.');
+                }
+
+                $this->insertMovement($restaurantId, [
+                    'stock_item_id' => (int) $movement['stock_item_id'],
+                    'movement_type' => 'PERTE',
+                    'quantity' => $quantityToRemove,
+                    'unit_cost_snapshot' => $unitCost,
+                    'total_cost_snapshot' => $quantityToRemove * $unitCost,
+                    'status' => 'VALIDE',
+                    'user_id' => $actor['id'],
+                    'validated_by' => $actor['id'],
+                    'reference_type' => 'correction_request',
+                    'reference_id' => $correctionRequestId,
+                    'note' => 'Correction approuvee de l entree #' . $movementId . ' - ' . $justification,
+                ]);
+                $this->adjustStockItem((int) $movement['stock_item_id'], $restaurantId, -1 * $quantityToRemove);
+            }
+
+            $pdo->commit();
+        } catch (\Throwable $throwable) {
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+
+            throw $throwable;
+        }
+    }
+
     private function insertMovement(int $restaurantId, array $payload): int
     {
         $statement = $this->database->pdo()->prepare(
@@ -754,5 +972,42 @@ final class StockService
         }
 
         return $request;
+    }
+
+    private function stockItemOptionalColumns(): array
+    {
+        return [
+            'category_label' => $this->tableColumnExists('stock_items', 'category_label'),
+            'item_note' => $this->tableColumnExists('stock_items', 'item_note'),
+            'updated_at' => $this->tableColumnExists('stock_items', 'updated_at'),
+        ];
+    }
+
+    private function tableColumnExists(string $table, string $column): bool
+    {
+        $statement = $this->database->pdo()->prepare(
+            'SELECT COUNT(*)
+             FROM information_schema.columns
+             WHERE table_schema = DATABASE()
+               AND table_name = :table_name
+               AND column_name = :column_name'
+        );
+        $statement->execute([
+            'table_name' => $table,
+            'column_name' => $column,
+        ]);
+
+        return (int) $statement->fetchColumn() > 0;
+    }
+
+    private function decodeAuditJson(mixed $value): array
+    {
+        if (!is_string($value) || trim($value) === '') {
+            return [];
+        }
+
+        $decoded = json_decode($value, true);
+
+        return is_array($decoded) ? $decoded : [];
     }
 }

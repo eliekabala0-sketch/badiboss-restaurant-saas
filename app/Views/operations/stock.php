@@ -197,9 +197,11 @@ $priorityBadgeClass = static function (?string $priority): string {
         <form method="post" action="/stock/items" class="split">
             <div><label>Nom</label><input name="name" required></div>
             <div><label>Unite</label><input name="unit_name" placeholder="kg, piece, casier" required></div>
+            <div><label>Categorie</label><input name="category_label" placeholder="Boissons, Viandes, Emballages"></div>
             <div><label>Quantite en stock</label><input name="quantity_in_stock" value="0"></div>
             <div><label>Seuil d alerte</label><input name="alert_threshold" value="0"></div>
             <div><label>Cout unitaire estime</label><input name="estimated_unit_cost" value="0"></div>
+            <div style="grid-column:1 / -1;"><label>Note</label><textarea name="item_note" placeholder="Informations internes sur le produit"></textarea></div>
             <div style="align-self:end;"><button type="submit">Creer l article</button></div>
         </form>
     </section>
@@ -517,20 +519,154 @@ $priorityBadgeClass = static function (?string $priority): string {
                 <th>Seuil</th>
                 <th>Cout unitaire</th>
                 <th>Valeur du stock</th>
+                <th>Action</th>
             </tr>
             </thead>
             <tbody>
             <?php foreach ($items as $item): ?>
                 <tr>
-                    <td><strong><?= e($item['name']) ?></strong><br><span class="muted"><?= e($item['unit_name']) ?></span></td>
+                    <td>
+                        <strong><?= e($item['name']) ?></strong><br>
+                        <span class="muted"><?= e($item['unit_name']) ?></span>
+                        <?php if (!empty($item['category_label'])): ?><br><span class="muted">Categorie : <?= e((string) $item['category_label']) ?></span><?php endif; ?>
+                    </td>
                     <td><?= e((string) $item['quantity_in_stock']) ?></td>
                     <td><?= e((string) $item['quantity_out_provisional']) ?></td>
                     <td><?= e((string) $item['alert_threshold']) ?></td>
                     <td><?= e(format_money($item['estimated_unit_cost'], $restaurantCurrency)) ?></td>
                     <td><?= e(format_money(((float) $item['quantity_in_stock']) * ((float) $item['estimated_unit_cost']), $restaurantCurrency)) ?></td>
+                    <td>
+                        <?php if (can_access('stock.item.edit')): ?>
+                            <details class="no-print">
+                                <summary style="cursor:pointer;">Modifier</summary>
+                                <form method="post" action="/stock/items/<?= e((string) $item['id']) ?>/update" class="split" style="margin-top:12px;">
+                                    <div><label>Nom</label><input name="name" value="<?= e((string) $item['name']) ?>" required></div>
+                                    <div><label>Unite</label><input name="unit_name" value="<?= e((string) $item['unit_name']) ?>" required></div>
+                                    <div><label>Categorie</label><input name="category_label" value="<?= e((string) ($item['category_label'] ?? '')) ?>"></div>
+                                    <div><label>Seuil d alerte</label><input name="alert_threshold" value="<?= e((string) $item['alert_threshold']) ?>"></div>
+                                    <div><label>Cout unitaire estime</label><input name="estimated_unit_cost" value="<?= e((string) $item['estimated_unit_cost']) ?>"></div>
+                                    <div style="grid-column:1 / -1;"><label>Note</label><textarea name="item_note"><?= e((string) ($item['item_note'] ?? '')) ?></textarea></div>
+                                    <div style="grid-column:1 / -1; display:flex; gap:10px; flex-wrap:wrap;">
+                                        <button type="submit">Enregistrer</button>
+                                        <a href="#stock_modifications" class="button-muted">Historique des modifications</a>
+                                    </div>
+                                </form>
+                            </details>
+                        <?php else: ?>
+                            <span class="muted">Lecture seule</span>
+                        <?php endif; ?>
+                    </td>
                 </tr>
             <?php endforeach; ?>
             </tbody>
         </table>
     </div>
+</section>
+
+<section class="card" style="padding:24px; margin-top:24px;">
+    <h2 style="margin-top:0;">Corrections sensibles</h2>
+    <p class="muted">Apres validation, aucune quantite n est modifiee directement. Toute correction passe par une demande motivee puis une validation du gerant ou proprietaire.</p>
+    <?php if ($movements === []): ?>
+        <p class="muted">Aucun mouvement disponible pour demander une correction.</p>
+    <?php else: ?>
+        <div class="table-wrap">
+            <table>
+                <thead><tr><th>Mouvement</th><th>Article</th><th>Quantite</th><th>Statut</th><th>Date</th><th>Correction</th></tr></thead>
+                <tbody>
+                <?php foreach (array_slice($movements, 0, 12) as $movement): ?>
+                    <tr>
+                        <td><?= e((string) $movement['movement_type']) ?></td>
+                        <td><?= e((string) $movement['stock_item_name']) ?></td>
+                        <td><?= e((string) $movement['quantity']) ?></td>
+                        <td><?= e(validation_status_label($movement['status'] ?? null)) ?></td>
+                        <td><?= e(format_date_fr($movement['created_at'], $historyTimezone)) ?></td>
+                        <td>
+                            <?php if ((string) ($movement['status'] ?? '') === 'VALIDE' && can_access('stock.correction.request')): ?>
+                                <details class="no-print">
+                                    <summary style="cursor:pointer;">Demander correction</summary>
+                                    <form method="post" action="/stock/movements/<?= e((string) $movement['id']) ?>/correction-request" style="margin-top:12px;">
+                                        <label>Nouvelle quantite souhaitee</label>
+                                        <input name="new_quantity" value="<?= e((string) $movement['quantity']) ?>" required>
+                                        <label>Justification</label>
+                                        <textarea name="justification" required>Erreur de saisie detectee apres validation.</textarea>
+                                        <button type="submit">Envoyer au gerant</button>
+                                    </form>
+                                </details>
+                            <?php elseif (can_access('stock.correction.request')): ?>
+                                <span class="muted">A corriger avant validation initiale</span>
+                            <?php else: ?>
+                                <span class="muted">Non autorise</span>
+                            <?php endif; ?>
+                        </td>
+                    </tr>
+                <?php endforeach; ?>
+                </tbody>
+            </table>
+        </div>
+    <?php endif; ?>
+
+    <?php if (can_access('stock.correction.request')): ?>
+        <div class="no-print" style="margin-top:18px;">
+            <h3 style="margin-bottom:10px;">Action deja verrouillee</h3>
+            <p class="muted">Les sorties vers cuisine, receptions, pertes ou autres actions deja validees ne se modifient pas librement. Une demande motivee est enregistree et transmise au gerant.</p>
+            <form method="post" action="/stock/corrections/sensitive" class="split">
+                <input type="hidden" name="module_name" value="stock">
+                <input type="hidden" name="entity_type" value="sensitive_operation">
+                <input type="hidden" name="entity_id" value="<?= e((string) $restaurant['id']) ?>">
+                <input type="hidden" name="request_type" value="sensitive_operation_correction">
+                <div><label>Resume</label><input name="summary" value="Correction d une action stock deja validee"></div>
+                <div style="grid-column:1 / -1;"><label>Justification obligatoire</label><textarea name="justification" required>Demande de correction sensible a arbitrer par le gerant.</textarea></div>
+                <div style="grid-column:1 / -1;"><button type="submit">Demander correction</button></div>
+            </form>
+        </div>
+    <?php endif; ?>
+</section>
+
+<section class="card" id="stock_modifications" style="padding:24px; margin-top:24px;">
+    <h2 style="margin-top:0;">Historique des modifications</h2>
+    <?php if ($stock_audits === []): ?>
+        <p class="muted">Aucune trace de modification stock pour le moment.</p>
+    <?php else: ?>
+        <div class="table-wrap">
+            <table>
+                <thead><tr><th>Date</th><th>Acteur</th><th>Action</th><th>Details</th></tr></thead>
+                <tbody>
+                <?php foreach ($stock_audits as $audit): ?>
+                    <?php
+                    $oldCost = $audit['old_values']['estimated_unit_cost'] ?? null;
+                    $newCost = $audit['new_values']['estimated_unit_cost'] ?? null;
+                    $detail = (string) ($audit['justification'] ?? '');
+                    if ($oldCost !== null && $newCost !== null && (float) $oldCost !== (float) $newCost) {
+                        $detail = 'Cout ' . format_money($oldCost, $restaurantCurrency) . ' -> ' . format_money($newCost, $restaurantCurrency);
+                    }
+                    ?>
+                    <tr>
+                        <td><?= e(format_date_fr($audit['created_at'], $historyTimezone)) ?></td>
+                        <td><?= e(named_actor_label($audit['actor_name'] ?? null, $audit['actor_role_code'] ?? null)) ?></td>
+                        <td><?= e(audit_action_label((string) $audit['action_name'])) ?></td>
+                        <td><?= e($detail !== '' ? $detail : 'Modification tracee') ?></td>
+                    </tr>
+                <?php endforeach; ?>
+                </tbody>
+            </table>
+        </div>
+    <?php endif; ?>
+
+    <?php if ($correction_requests !== []): ?>
+        <div class="table-wrap" style="margin-top:18px;">
+            <table>
+                <thead><tr><th>Demande</th><th>Acteur</th><th>Statut</th><th>Justification</th></tr></thead>
+                <tbody>
+                <?php foreach ($correction_requests as $request): ?>
+                    <tr>
+                        <td><?= e(correction_request_type_label((string) $request['request_type'])) ?></td>
+                        <td><?= e(named_actor_label($request['requested_by_name'] ?? null, $request['requested_role_code'] ?? null)) ?></td>
+                        <td><?= e(correction_request_status_label((string) $request['status'])) ?></td>
+                        <td><?= e((string) ($request['justification'] ?? '')) ?></td>
+                    </tr>
+                <?php endforeach; ?>
+                </tbody>
+            </table>
+        </div>
+    <?php endif; ?>
 </section>
