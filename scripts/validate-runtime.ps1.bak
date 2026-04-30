@@ -1,0 +1,118 @@
+param(
+    [string]$PhpPath = "php",
+    [string]$MysqlPath = "C:\Program Files\MySQL\MySQL Server 8.0\bin\mysql.exe",
+    [string]$DbHost = "127.0.0.1",
+    [int]$DbPort = 3306,
+    [string]$DbName = "badiboss_restaurant_saas",
+    [string]$DbUser = "root",
+    [string]$DbPassword = "",
+    [int]$ServerPort = 8087
+)
+
+$ErrorActionPreference = "Stop"
+$projectRoot = Split-Path -Parent $PSScriptRoot
+
+function Invoke-Step {
+    param([string]$Label, [scriptblock]$Action)
+    Write-Host "`n=== $Label ==="
+    & $Action
+}
+
+function Require-Command {
+    param([string]$PathOrCommand, [string]$Label)
+    if ($PathOrCommand -eq "php") {
+        $cmd = Get-Command php -ErrorAction SilentlyContinue
+        if (-not $cmd) { throw "$Label introuvable" }
+        return $cmd.Source
+    }
+    if (-not (Test-Path $PathOrCommand)) { throw "$Label introuvable: $PathOrCommand" }
+    return $PathOrCommand
+}
+
+$resolvedPhp = Require-Command -PathOrCommand $PhpPath -Label "PHP"
+$resolvedMysql = Require-Command -PathOrCommand $MysqlPath -Label "MySQL client"
+$phpFiles = Get-ChildItem $projectRoot -Recurse -Filter *.php | Select-Object -ExpandProperty FullName
+$serverJob = $null
+
+try {
+    Invoke-Step "PHP lint" {
+        foreach ($file in $phpFiles) {
+            & $resolvedPhp -l $file | Out-Host
+        }
+    }
+
+    Invoke-Step "Schema import" {
+        Get-Content "$projectRoot\database\schema.sql" | & $resolvedMysql --host=$DbHost --port=$DbPort --user=$DbUser --password=$DbPassword
+    }
+
+    Invoke-Step "Seed import" {
+        Get-Content "$projectRoot\database\seed.sql" | & $resolvedMysql --host=$DbHost --port=$DbPort --user=$DbUser --password=$DbPassword
+    }
+
+    Invoke-Step "Start PHP server" {
+        $serverJob = Start-Process -FilePath $resolvedPhp -ArgumentList "-S", "127.0.0.1:$ServerPort", "-t", "$projectRoot\public" -PassThru -WindowStyle Hidden
+        Start-Sleep -Seconds 2
+    }
+
+    Invoke-Step "Health routes" {
+        Invoke-WebRequest "http://127.0.0.1:$ServerPort/health" | Select-Object StatusCode, Content | Format-List | Out-Host
+        Invoke-WebRequest "http://127.0.0.1:$ServerPort/api/v1/health" | Select-Object StatusCode, Content | Format-List | Out-Host
+    }
+
+    Invoke-Step "Web login super admin" {
+        $session = New-Object Microsoft.PowerShell.Commands.WebRequestSession
+        Invoke-WebRequest "http://127.0.0.1:$ServerPort/login" -WebSession $session | Out-Null
+        $response = Invoke-WebRequest "http://127.0.0.1:$ServerPort/login" -Method Post -Body @{
+            email = "superadmin@badiboss.test"
+            password = "password"
+        } -WebSession $session -MaximumRedirection 0 -ErrorAction SilentlyContinue
+        $response | Select-Object StatusCode, Headers | Format-List | Out-Host
+    }
+
+    Invoke-Step "API login super admin" {
+        $response = Invoke-RestMethod "http://127.0.0.1:$ServerPort/api/v1/auth/login" -Method Post -ContentType "application/json" -Body '{"email":"superadmin@badiboss.test","password":"password"}'
+        $script:accessToken = $response.data.access_token
+        $response | ConvertTo-Json -Depth 6 | Out-Host
+    }
+
+    Invoke-Step "Create tenant via API" {
+        $headers = @{ Authorization = "Bearer $script:accessToken" }
+        $payload = @{
+            name = "Validation Tenant"
+            slug = "validation-tenant"
+            support_email = "validation@tenant.test"
+            phone = "+2348000000999"
+            country = "Nigeria"
+            city = "Lagos"
+            address_line = "Validation Street"
+            access_url = "https://validation.badiboss.app"
+            public_name = "Validation Tenant"
+            web_subdomain = "validation"
+            primary_color = "#0369a1"
+            secondary_color = "#111827"
+            accent_color = "#ea580c"
+            subscription_plan_id = 1
+            feature_pwa_enabled = "1"
+        } | ConvertTo-Json
+        Invoke-RestMethod "http://127.0.0.1:$ServerPort/api/v1/super-admin/restaurants" -Method Post -ContentType "application/json" -Headers $headers -Body $payload | ConvertTo-Json -Depth 6 | Out-Host
+    }
+
+    Invoke-Step "Owner login" {
+        $session = New-Object Microsoft.PowerShell.Commands.WebRequestSession
+        Invoke-WebRequest "http://127.0.0.1:$ServerPort/login" -WebSession $session | Out-Null
+        $response = Invoke-WebRequest "http://127.0.0.1:$ServerPort/login" -Method Post -Body @{
+            email = "owner-hq@badiboss.test"
+            password = "password"
+        } -WebSession $session -MaximumRedirection 0 -ErrorAction SilentlyContinue
+        $response | Select-Object StatusCode, Headers | Format-List | Out-Host
+    }
+
+    Invoke-Step "Audit verification" {
+        & $resolvedMysql --host=$DbHost --port=$DbPort --user=$DbUser --password=$DbPassword -D $DbName -e "SELECT id, module_name, action_name, entity_type, entity_id, created_at FROM audit_logs ORDER BY id DESC LIMIT 10;"
+    }
+}
+finally {
+    if ($serverJob -and !$serverJob.HasExited) {
+        Stop-Process -Id $serverJob.Id -Force
+    }
+}
