@@ -35,6 +35,14 @@ final class App
     {
         date_default_timezone_set($this->config['app']['timezone']);
 
+        $request = Request::capture();
+        if ($request->method === 'GET' && $request->uri === '/health') {
+            http_response_code(200);
+            header('Content-Type: text/plain; charset=UTF-8');
+            echo 'OK';
+            return;
+        }
+
         $container = Container::getInstance();
         $container->set('config', $this->config);
         $container->set('router', $this->router);
@@ -73,8 +81,6 @@ final class App
         $container->set('kitchenService', new KitchenService($database));
         $container->set('salesService', new SalesService($database));
         $container->set('reportService', new ReportService($database));
-
-        $request = Request::capture();
 
         try {
             $this->router->dispatch($request);
