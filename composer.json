@@ -1,0 +1,8 @@
+{
+  "name": "badiboss/restaurant-saas",
+  "description": "Badiboss Restaurant SaaS",
+  "type": "project",
+  "require": {
+    "php": "^8.2"
+  }
+}
