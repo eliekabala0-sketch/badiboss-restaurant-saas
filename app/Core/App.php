@@ -42,6 +42,10 @@ final class App
             echo 'OK';
             return;
         }
+        if ($request->method === 'GET' && $request->uri === '/health/db') {
+            $this->respondDatabaseHealth();
+            return;
+        }
 
         $container = Container::getInstance();
         $container->set('config', $this->config);
@@ -113,5 +117,31 @@ final class App
         }
 
         echo $message;
+    }
+
+    private function respondDatabaseHealth(): void
+    {
+        try {
+            $database = new Database($this->config['database']);
+            $database->pdo()->query('SELECT 1');
+
+            http_response_code(200);
+            header('Content-Type: text/plain; charset=UTF-8');
+            echo 'DB OK';
+            return;
+        } catch (\Throwable $exception) {
+            http_response_code(500);
+            header('Content-Type: text/plain; charset=UTF-8');
+            echo 'DB ERROR: ' . $this->shortDatabaseError($exception->getMessage());
+            return;
+        }
+    }
+
+    private function shortDatabaseError(string $message): string
+    {
+        $message = preg_replace('/password\s*=\s*[^;\s]+/i', 'password=***', $message) ?? $message;
+        $message = preg_replace('/\/\/([^:@\/]+):([^@\/]+)@/', '//***:***@', $message) ?? $message;
+
+        return trim($message) !== '' ? $message : 'Connexion impossible';
     }
 }
