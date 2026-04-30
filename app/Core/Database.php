@@ -5,34 +5,75 @@ declare(strict_types=1);
 namespace App\Core;
 
 use PDO;
+use PDOException;
 
 final class Database
 {
     private PDO $pdo;
     private array $config;
+    private array $lastAttemptedConfig = [];
 
     public function __construct(array $config)
     {
-        $this->config = $config;
-        $dsn = sprintf(
-            'mysql:host=%s;port=%d;dbname=%s;charset=%s',
-            $config['host'],
-            $config['port'],
-            $config['database'],
-            $config['charset']
-        );
+        $candidates = $config['candidates'] ?? [$config];
+        $lastException = null;
 
-        error_log(sprintf(
-            '[database] source=%s host=%s database=%s',
-            (string) ($config['source'] ?? 'unknown'),
-            (string) ($config['host'] ?? 'unknown'),
-            (string) ($config['database'] ?? 'unknown')
-        ));
+        foreach ($candidates as $candidate) {
+            $this->lastAttemptedConfig = $candidate;
 
-        $this->pdo = new PDO($dsn, $config['username'], $config['password'], [
-            PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
-            PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
-        ]);
+            $dsn = sprintf(
+                'mysql:host=%s;port=%d;dbname=%s;charset=%s',
+                $candidate['host'],
+                $candidate['port'],
+                $candidate['database'],
+                $candidate['charset']
+            );
+
+            error_log(sprintf(
+                '[database] trying source=%s host=%s port=%s database=%s',
+                (string) ($candidate['source'] ?? 'unknown'),
+                (string) ($candidate['host'] ?? 'unknown'),
+                (string) ($candidate['port'] ?? 'unknown'),
+                (string) ($candidate['database'] ?? 'unknown')
+            ));
+
+            try {
+                $this->pdo = new PDO($dsn, $candidate['username'], $candidate['password'], [
+                    PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+                    PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+                ]);
+                $this->config = $candidate;
+
+                error_log(sprintf(
+                    '[database] connected source=%s host=%s port=%s database=%s',
+                    (string) ($candidate['source'] ?? 'unknown'),
+                    (string) ($candidate['host'] ?? 'unknown'),
+                    (string) ($candidate['port'] ?? 'unknown'),
+                    (string) ($candidate['database'] ?? 'unknown')
+                ));
+
+                return;
+            } catch (PDOException $exception) {
+                $lastException = $exception;
+
+                error_log(sprintf(
+                    '[database] failed source=%s host=%s port=%s database=%s message=%s',
+                    (string) ($candidate['source'] ?? 'unknown'),
+                    (string) ($candidate['host'] ?? 'unknown'),
+                    (string) ($candidate['port'] ?? 'unknown'),
+                    (string) ($candidate['database'] ?? 'unknown'),
+                    $this->shortError($exception->getMessage())
+                ));
+            }
+        }
+
+        $this->config = $this->lastAttemptedConfig !== [] ? $this->lastAttemptedConfig : $config;
+
+        if ($lastException instanceof PDOException) {
+            throw $lastException;
+        }
+
+        throw new PDOException('Connexion impossible');
     }
 
     public function pdo(): PDO
@@ -43,5 +84,18 @@ final class Database
     public function config(): array
     {
         return $this->config;
+    }
+
+    public function lastAttemptedConfig(): array
+    {
+        return $this->lastAttemptedConfig;
+    }
+
+    private function shortError(string $message): string
+    {
+        $message = preg_replace('/password\s*=\s*[^;\s]+/i', 'password=***', $message) ?? $message;
+        $message = preg_replace('/\/\/([^:@\/]+):([^@\/]+)@/', '//***:***@', $message) ?? $message;
+
+        return trim($message) !== '' ? $message : 'Connexion impossible';
     }
 }

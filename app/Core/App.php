@@ -153,6 +153,19 @@ final class App
     {
         $config = $this->config['database'];
 
+        try {
+            $database = new Database($this->config['database']);
+            $config = $database->config();
+        } catch (\Throwable) {
+            $candidates = $this->config['database']['candidates'] ?? [];
+            if ($candidates !== []) {
+                $config = end($candidates);
+                if ($config === false) {
+                    $config = $this->config['database'];
+                }
+            }
+        }
+
         http_response_code(200);
         header('Content-Type: text/plain; charset=UTF-8');
         echo 'source=' . (string) ($config['source'] ?? 'unknown') . PHP_EOL;
