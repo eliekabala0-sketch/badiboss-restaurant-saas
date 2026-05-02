@@ -11,6 +11,7 @@ $autoCloseMinutes = max(15, (int) ($restaurant['settings']['restaurant_server_au
 $historyPreviewLimit = 6;
 $activePreviewLimit = 6;
 $restaurantCurrency = restaurant_currency($restaurant);
+$restaurantLogo = restaurant_media_url_or_default($restaurant['logo_url'] ?? null, 'logo');
 $salesOverview = $sales_overview ?? [
     'today_total_sold' => 0,
     'today_sales_count' => 0,
@@ -114,6 +115,15 @@ foreach ($historyEntries as $entry) {
 
 <?php if (!empty($flash_success)): ?><div class="flash-ok"><?= e($flash_success) ?></div><?php endif; ?>
 <?php if (!empty($flash_error)): ?><div class="flash-bad"><?= e($flash_error) ?></div><?php endif; ?>
+<section class="card" style="padding:18px; margin-bottom:24px;">
+    <div class="menu-thumb">
+        <img src="<?= e($restaurantLogo) ?>" alt="Logo restaurant">
+        <div>
+            <strong><?= e($restaurant['public_name'] ?? $restaurant['name'] ?? 'Restaurant') ?></strong><br>
+            <span class="muted">Logo visible dans le module ventes. Les photos des plats remontent aussi dans les demandes et les ventes du service.</span>
+        </div>
+    </div>
+</section>
 <section class="card no-print" style="padding:18px; margin-bottom:24px;">
     <div class="toolbar-actions">
         <button type="button" onclick="window.print()">Imprimer</button>
@@ -231,7 +241,12 @@ foreach ($historyEntries as $entry) {
                             <tbody>
                             <?php foreach ($items as $item): ?>
                                 <tr>
-                                    <td><?= e($item['menu_item_name']) ?></td>
+                                    <td>
+                                        <div class="menu-thumb">
+                                            <img src="<?= e(menu_item_media_url_or_default($item['menu_item_image_url'] ?? null)) ?>" alt="<?= e($item['menu_item_name']) ?>">
+                                            <div><strong><?= e($item['menu_item_name']) ?></strong></div>
+                                        </div>
+                                    </td>
                                     <td><?= e((string) $item['requested_quantity']) ?></td>
                                     <td><?= e((string) $item['supplied_quantity']) ?></td>
                                     <td><?= e((string) $item['unavailable_quantity']) ?></td>
@@ -307,7 +322,12 @@ foreach ($historyEntries as $entry) {
                             <tbody>
                             <?php foreach ($items as $item): ?>
                                 <tr>
-                                    <td><?= e($item['menu_item_name']) ?></td>
+                                    <td>
+                                        <div class="menu-thumb">
+                                            <img src="<?= e(menu_item_media_url_or_default($item['menu_item_image_url'] ?? null)) ?>" alt="<?= e($item['menu_item_name']) ?>">
+                                            <div><strong><?= e($item['menu_item_name']) ?></strong></div>
+                                        </div>
+                                    </td>
                                     <td><?= e((string) $item['supplied_quantity']) ?></td>
                                     <td><?= e((string) $item['unavailable_quantity']) ?></td>
                                 </tr>

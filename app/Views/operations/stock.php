@@ -7,6 +7,7 @@ $yesterdayDate = (new DateTimeImmutable('yesterday', $historyTimezone))->format(
 $historyPreviewLimit = 6;
 $activePreviewLimit = 5;
 $restaurantCurrency = restaurant_currency($restaurant);
+$restaurantLogo = restaurant_media_url_or_default($restaurant['logo_url'] ?? null, 'logo');
 
 $stockRequestCases = array_values(array_filter(
     $cases,
@@ -190,6 +191,15 @@ $priorityBadgeClass = static function (?string $priority): string {
 
 <?php if (!empty($flash_success)): ?><div class="flash-ok"><?= e($flash_success) ?></div><?php endif; ?>
 <?php if (!empty($flash_error)): ?><div class="flash-bad"><?= e($flash_error) ?></div><?php endif; ?>
+<section class="card" style="padding:18px; margin-bottom:24px;">
+    <div class="menu-thumb">
+        <img src="<?= e($restaurantLogo) ?>" alt="Logo restaurant">
+        <div>
+            <strong><?= e($restaurant['public_name'] ?? $restaurant['name'] ?? 'Restaurant') ?></strong><br>
+            <span class="muted">Logo visible dans le module stock avec fallback propre si aucun visuel n est defini.</span>
+        </div>
+    </div>
+</section>
 
 <?php if (can_access('stock.create')): ?>
     <section class="card" style="padding:22px; margin-bottom:24px;">

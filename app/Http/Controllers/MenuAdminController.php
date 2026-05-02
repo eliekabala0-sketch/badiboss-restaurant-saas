@@ -69,7 +69,8 @@ final class MenuAdminController
     public function storeItem(Request $request): void
     {
         $restaurantId = (int) $request->input('restaurant_id');
-        Container::getInstance()->get('menuAdmin')->createItem($restaurantId, $this->itemPayload($request), $_SESSION['user']);
+        $restaurant = Container::getInstance()->get('restaurantAdmin')->findRestaurant($restaurantId);
+        Container::getInstance()->get('menuAdmin')->createItem($restaurantId, $this->itemPayload($request, $restaurant), $_SESSION['user']);
 
         flash('success', 'Le plat du menu a ete cree.');
         redirect('/super-admin/menu?restaurant_id=' . $restaurantId);
@@ -79,8 +80,9 @@ final class MenuAdminController
     {
         authorize_access('menu.view');
         $restaurantId = current_restaurant_id();
+        $restaurant = Container::getInstance()->get('restaurantAdmin')->findRestaurant($restaurantId);
 
-        Container::getInstance()->get('menuAdmin')->createItem($restaurantId, $this->itemPayload($request), $_SESSION['user']);
+        Container::getInstance()->get('menuAdmin')->createItem($restaurantId, $this->itemPayload($request, $restaurant), $_SESSION['user']);
 
         flash('success', 'Le plat du menu a ete cree.');
         redirect('/owner/menu');
@@ -98,7 +100,12 @@ final class MenuAdminController
     public function updateItem(Request $request): void
     {
         $itemId = (int) $request->route('id');
-        Container::getInstance()->get('menuAdmin')->updateItem($itemId, $this->itemPayload($request), $_SESSION['user']);
+        $menuAdmin = Container::getInstance()->get('menuAdmin');
+        $currentItem = $menuAdmin->findItem($itemId);
+        $restaurant = $currentItem !== null
+            ? Container::getInstance()->get('restaurantAdmin')->findRestaurant((int) $currentItem['restaurant_id'])
+            : null;
+        $menuAdmin->updateItem($itemId, $this->itemPayload($request, $restaurant, $currentItem), $_SESSION['user']);
 
         flash('success', 'Le plat du menu a ete mis a jour.');
         redirect('/super-admin/menu?restaurant_id=' . (int) $request->input('restaurant_id'));
@@ -109,7 +116,12 @@ final class MenuAdminController
         authorize_access('menu.item.edit');
 
         $itemId = (int) $request->route('id');
-        Container::getInstance()->get('menuAdmin')->updateItem($itemId, $this->itemPayload($request), $_SESSION['user']);
+        $menuAdmin = Container::getInstance()->get('menuAdmin');
+        $currentItem = $menuAdmin->findItem($itemId);
+        $restaurant = $currentItem !== null
+            ? Container::getInstance()->get('restaurantAdmin')->findRestaurant((int) $currentItem['restaurant_id'])
+            : null;
+        $menuAdmin->updateItem($itemId, $this->itemPayload($request, $restaurant, $currentItem), $_SESSION['user']);
 
         flash('success', 'Le plat du menu a ete modifie sans toucher aux anciennes ventes.');
         redirect('/owner/menu');
@@ -142,16 +154,33 @@ final class MenuAdminController
         ];
     }
 
-    private function itemPayload(Request $request): array
+    private function itemPayload(Request $request, ?array $restaurant = null, ?array $currentItem = null): array
     {
         $name = trim((string) $request->input('name'));
+        $imageUrl = trim((string) $request->input('image_url', $request->input('existing_image_url', '')));
+
+        if ($restaurant !== null && isset($_FILES['image'])) {
+            $restaurantSlug = trim((string) ($restaurant['slug'] ?? ''));
+            if ($restaurantSlug === '') {
+                $restaurantSlug = trim((string) ($restaurant['restaurant_code'] ?? 'restaurant-' . (string) ($restaurant['id'] ?? 'menu')));
+            }
+
+            $uploadedImageUrl = Container::getInstance()->get('uploadService')->storeMenuItemImage($_FILES['image'], $this->normalizeSlug($restaurantSlug));
+            if ($uploadedImageUrl !== null) {
+                $imageUrl = $uploadedImageUrl;
+            }
+        }
+
+        if ($imageUrl === '' && $currentItem !== null) {
+            $imageUrl = trim((string) ($currentItem['image_url'] ?? ''));
+        }
 
         return [
             'category_id' => (int) $request->input('category_id'),
             'name' => $name,
             'slug' => $this->normalizeSlug((string) $request->input('slug', $name)),
             'description' => (string) $request->input('description'),
-            'image_url' => (string) $request->input('image_url'),
+            'image_url' => $imageUrl,
             'price' => (string) $request->input('price'),
             'status' => (string) $request->input('status', 'active'),
             'is_available' => $request->input('is_available'),

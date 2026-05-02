@@ -38,7 +38,7 @@ final class SalesService
 
     public function listSaleItemsForRestaurant(int $restaurantId, ?int $serverId = null): array
     {
-        $sql = 'SELECT si.*, s.sale_type, s.status AS sale_status, mi.name AS menu_item_name, u.full_name AS server_name
+        $sql = 'SELECT si.*, s.sale_type, s.status AS sale_status, mi.name AS menu_item_name, mi.image_url AS menu_item_image_url, u.full_name AS server_name
                 FROM sale_items si
                 INNER JOIN sales s ON s.id = si.sale_id
                 INNER JOIN menu_items mi ON mi.id = si.menu_item_id
@@ -61,7 +61,7 @@ final class SalesService
     public function listSaleItemsForKitchen(int $restaurantId): array
     {
         $statement = $this->database->pdo()->prepare(
-            'SELECT si.*, s.sale_type, s.status AS sale_status, mi.name AS menu_item_name, u.full_name AS server_name
+            'SELECT si.*, s.sale_type, s.status AS sale_status, mi.name AS menu_item_name, mi.image_url AS menu_item_image_url, u.full_name AS server_name
              FROM sale_items si
              INNER JOIN sales s ON s.id = si.sale_id
              INNER JOIN menu_items mi ON mi.id = si.menu_item_id
@@ -114,6 +114,7 @@ final class SalesService
                        sr.received_at AS request_received_at,
                        u.full_name AS server_name,
                        mi.name AS menu_item_name,
+                       mi.image_url AS menu_item_image_url,
                        prepared_user.full_name AS prepared_by_name,
                        received_user.full_name AS received_by_name
                 FROM server_request_items sri

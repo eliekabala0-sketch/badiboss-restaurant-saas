@@ -299,6 +299,21 @@ declare(strict_types=1);
             border-radius: var(--radius-lg);
             box-shadow: var(--shadow);
         }
+        .context-identity {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            min-width: 0;
+        }
+        .context-logo {
+            width: 60px;
+            height: 60px;
+            border-radius: 18px;
+            object-fit: cover;
+            border: 1px solid rgba(255,255,255,0.12);
+            background: rgba(255,255,255,0.04);
+            flex-shrink: 0;
+        }
         .context-meta {
             display: flex;
             flex-wrap: wrap;
@@ -466,6 +481,67 @@ declare(strict_types=1);
         .media-preview .muted {
             padding: 0 12px 12px;
         }
+        .brand-visual {
+            position: relative;
+            overflow: hidden;
+            min-height: 220px;
+            background-size: cover;
+            background-position: center;
+        }
+        .brand-visual::before {
+            content: "";
+            position: absolute;
+            inset: 0;
+            background: linear-gradient(135deg, rgba(8, 8, 8, 0.3), rgba(8, 8, 8, 0.82));
+        }
+        .brand-visual-body {
+            position: relative;
+            z-index: 1;
+            display: flex;
+            gap: 18px;
+            align-items: center;
+            padding: 22px;
+        }
+        .brand-visual-logo {
+            width: 110px;
+            height: 110px;
+            border-radius: 26px;
+            object-fit: cover;
+            border: 1px solid rgba(255,255,255,0.14);
+            background: rgba(255,255,255,0.08);
+            box-shadow: 0 20px 36px rgba(0, 0, 0, 0.28);
+            flex-shrink: 0;
+        }
+        .brand-visual-copy {
+            min-width: 0;
+        }
+        .brand-visual-copy p {
+            max-width: 720px;
+        }
+        .menu-thumb {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        .menu-thumb img {
+            width: 64px;
+            height: 64px;
+            border-radius: 16px;
+            object-fit: cover;
+            background: rgba(255,255,255,0.04);
+            border: 1px solid rgba(255,255,255,0.08);
+            flex-shrink: 0;
+        }
+        .menu-preview-large {
+            width: 100%;
+            max-width: 180px;
+            height: 140px;
+            border-radius: 18px;
+            object-fit: cover;
+            display: block;
+            background: rgba(255,255,255,0.04);
+            border: 1px solid rgba(255,255,255,0.08);
+        }
         .inline-list {
             display: flex;
             flex-wrap: wrap;
@@ -561,6 +637,7 @@ declare(strict_types=1);
             .split { grid-template-columns: 1fr; }
             .shell { padding: 20px 12px 32px; }
             th, td { padding: 14px 12px; }
+            .brand-visual-body { flex-direction: column; align-items: flex-start; }
         }
     </style>
 </head>
@@ -571,12 +648,15 @@ declare(strict_types=1);
             <?php $restaurantNotice = flash('restaurant_notice'); ?>
             <?php if ((current_user()['scope'] ?? null) !== 'super_admin' && !empty($current_restaurant_context ?? null)): ?>
                 <section class="context-bar">
-                    <div>
+                    <div class="context-identity">
+                        <img src="<?= e(restaurant_media_url_or_default($current_restaurant_context['logo_url'] ?? null, 'logo')) ?>" alt="Logo restaurant" class="context-logo">
+                        <div>
                         <strong><?= e($current_restaurant_context['public_name'] ?? $current_restaurant_context['name'] ?? current_user()['restaurant_name'] ?? 'Restaurant') ?></strong>
                         <div class="muted">
                             Code <?= e($current_restaurant_context['restaurant_code'] ?? current_user()['restaurant_code'] ?? '-') ?>
                             · /portal/<?= e($current_restaurant_context['slug'] ?? current_user()['restaurant_slug'] ?? '-') ?>
                             · <?= e(restaurant_role_label(current_user()['role_code'] ?? null)) ?>
+                        </div>
                         </div>
                     </div>
                     <div class="context-meta">

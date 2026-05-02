@@ -11,6 +11,26 @@ final class UploadService
 
     public function storeRestaurantImage(array $file, string $restaurantCode, string $kind): ?string
     {
+        return $this->storeImage(
+            $file,
+            base_path('public/uploads/restaurants/' . $restaurantCode),
+            '/uploads/restaurants/' . $restaurantCode,
+            $kind
+        );
+    }
+
+    public function storeMenuItemImage(array $file, string $restaurantSlug): ?string
+    {
+        return $this->storeImage(
+            $file,
+            base_path('public/uploads/restaurants/' . $restaurantSlug . '/menu'),
+            '/uploads/restaurants/' . $restaurantSlug . '/menu',
+            'menu-item'
+        );
+    }
+
+    private function storeImage(array $file, string $targetDirectory, string $publicPrefix, string $kind): ?string
+    {
         if (($file['error'] ?? UPLOAD_ERR_NO_FILE) === UPLOAD_ERR_NO_FILE) {
             return null;
         }
@@ -34,7 +54,6 @@ final class UploadService
             throw new \RuntimeException('Le fichier televerse n est pas une image valide.');
         }
 
-        $targetDirectory = base_path('public/uploads/restaurants/' . $restaurantCode);
         if (!is_dir($targetDirectory) && !mkdir($targetDirectory, 0775, true) && !is_dir($targetDirectory)) {
             throw new \RuntimeException('Impossible de preparer le dossier de televersement.');
         }
@@ -49,7 +68,7 @@ final class UploadService
             throw new \RuntimeException('Impossible d enregistrer le fichier televerse.');
         }
 
-        return '/uploads/restaurants/' . $restaurantCode . '/' . $filename;
+        return rtrim($publicPrefix, '/') . '/' . $filename;
     }
 
     private function assetConfig(string $kind, string $sourceExtension): array
@@ -66,6 +85,13 @@ final class UploadService
                 'max_width' => 1920,
                 'max_height' => 1080,
                 'quality' => 82,
+                'compression' => 7,
+                'extension' => $sourceExtension === 'png' ? 'png' : 'jpg',
+            ],
+            'menu-item' => [
+                'max_width' => 1600,
+                'max_height' => 1600,
+                'quality' => 84,
                 'compression' => 7,
                 'extension' => $sourceExtension === 'png' ? 'png' : 'jpg',
             ],

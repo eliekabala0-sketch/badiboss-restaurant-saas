@@ -381,7 +381,7 @@ final class RestaurantAdminService
     public function listItems(int $restaurantId): array
     {
         $statement = $this->database->pdo()->prepare(
-            'SELECT mi.id, mi.name, mi.slug, mi.price, mi.status, mi.is_available, mi.display_order,
+            'SELECT mi.id, mi.name, mi.slug, mi.price, mi.status, mi.is_available, mi.display_order, mi.image_url,
                     mc.name AS category_name
              FROM menu_items mi
              INNER JOIN menu_categories mc ON mc.id = mi.category_id

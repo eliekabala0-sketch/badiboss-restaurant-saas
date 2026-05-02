@@ -3,6 +3,8 @@ declare(strict_types=1);
 
 $subscriptionTimezone = safe_timezone($subscription['timezone'] ?? ($restaurant['timezone'] ?? null));
 $restaurantCurrency = restaurant_currency($restaurant);
+$restaurantLogo = restaurant_media_url_or_default($restaurant['logo_url'] ?? null, 'logo');
+$restaurantCover = restaurant_media_url_or_default($restaurant['cover_image_url'] ?? null, 'photo');
 $printQuery = http_build_query(['print' => '1']);
 $decisionBadgeClass = static function (?string $status): string {
     return match ((string) $status) {
@@ -31,6 +33,16 @@ $decisionBadgeClass = static function (?string $status): string {
 
 <?php if (!empty($flash_success)): ?><div class="flash-ok"><?= e($flash_success) ?></div><?php endif; ?>
 <?php if (!empty($flash_error)): ?><div class="flash-bad"><?= e($flash_error) ?></div><?php endif; ?>
+<section class="card brand-visual" style="margin-bottom:24px; background-image:url('<?= e($restaurantCover) ?>');">
+    <div class="brand-visual-body">
+        <img src="<?= e($restaurantLogo) ?>" alt="Logo restaurant" class="brand-visual-logo">
+        <div class="brand-visual-copy">
+            <span class="pill badge-gold">Dashboard owner</span>
+            <h2 style="margin:10px 0 8px;"><?= e($restaurant['public_name'] ?? $restaurant['name'] ?? 'Restaurant') ?></h2>
+            <p class="muted" style="margin:0;"><?= e($restaurant['portal_tagline'] ?? ($restaurant['welcome_text'] ?? 'Identite visuelle du restaurant visible cote owner.')) ?></p>
+        </div>
+    </div>
+</section>
 <section class="card no-print" style="padding:18px; margin-bottom:24px;">
     <div class="toolbar-actions">
         <button type="button" onclick="window.print()">Imprimer</button>

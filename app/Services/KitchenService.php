@@ -17,7 +17,7 @@ final class KitchenService
     public function listProductions(int $restaurantId): array
     {
         $statement = $this->database->pdo()->prepare(
-            'SELECT kp.*, mi.name AS menu_item_name, si.name AS stock_item_name, si.unit_name AS stock_unit_name, u.full_name AS created_by_name
+            'SELECT kp.*, mi.name AS menu_item_name, mi.image_url AS menu_item_image_url, si.name AS stock_item_name, si.unit_name AS stock_unit_name, u.full_name AS created_by_name
              FROM kitchen_production kp
              INNER JOIN stock_movements sm ON sm.id = kp.stock_movement_id
              INNER JOIN stock_items si ON si.id = sm.stock_item_id
@@ -116,6 +116,7 @@ final class KitchenService
                     sr.received_at AS request_received_at,
                     u.full_name AS server_name,
                     mi.name AS menu_item_name,
+                    mi.image_url AS menu_item_image_url,
                     requested_user.full_name AS requested_by_name,
                     prepared_user.full_name AS prepared_by_name,
                     ready_user.full_name AS ready_by_name,

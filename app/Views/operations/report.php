@@ -1,6 +1,7 @@
 <?php
 $reportTimezone = safe_timezone($report['timezone'] ?? ($restaurant['settings']['restaurant_reports_timezone'] ?? $restaurant['timezone'] ?? null));
 $restaurantCurrency = restaurant_currency($restaurant);
+$restaurantLogo = restaurant_media_url_or_default($restaurant['logo_url'] ?? null, 'logo');
 $printQuery = http_build_query(array_filter([
     'date' => $report['selected_date'] ?? $date,
     'period' => $period ?? 'daily',
@@ -18,6 +19,15 @@ $printQuery = http_build_query(array_filter([
     <div class="brand">
         <h1><?= e($title ?? 'Rapport') ?></h1>
         <p>Suivi détaillé du stock, de la cuisine, des ventes, des pertes et des incidents sur une vraie période calendrier.</p>
+    </div>
+</section>
+<section class="card" style="padding:18px; margin-bottom:24px;">
+    <div class="menu-thumb">
+        <img src="<?= e($restaurantLogo) ?>" alt="Logo restaurant">
+        <div>
+            <strong><?= e($restaurant['public_name'] ?? $restaurant['name'] ?? 'Restaurant') ?></strong><br>
+            <span class="muted">Logo visible dans les rapports avec fallback propre si aucun visuel n est defini.</span>
+        </div>
     </div>
 </section>
 <section class="card no-print" style="padding:18px; margin-bottom:24px;">

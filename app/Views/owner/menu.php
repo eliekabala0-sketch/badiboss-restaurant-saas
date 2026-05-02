@@ -1,4 +1,8 @@
-<?php $restaurantCurrency = restaurant_currency($restaurant); ?>
+<?php
+$restaurantCurrency = restaurant_currency($restaurant);
+$restaurantLogo = restaurant_media_url_or_default($restaurant['logo_url'] ?? null, 'logo');
+$restaurantCover = restaurant_media_url_or_default($restaurant['cover_image_url'] ?? null, 'photo');
+?>
 <style>
 @media print {
     .no-print { display:none !important; }
@@ -24,6 +28,17 @@
 <section class="card" style="padding:22px; margin-bottom:24px;">
     <h2 style="margin-top:0;"><?= e($restaurant['public_name'] ?? $restaurant['name']) ?></h2>
     <p class="muted"><?= e($restaurant['portal_tagline'] ?? '') ?></p>
+</section>
+
+<section class="card brand-visual" style="margin-bottom:24px; background-image:url('<?= e($restaurantCover) ?>');">
+    <div class="brand-visual-body">
+        <img src="<?= e($restaurantLogo) ?>" alt="Logo restaurant" class="brand-visual-logo">
+        <div class="brand-visual-copy">
+            <span class="pill badge-gold">Menu visuel du restaurant</span>
+            <h2 style="margin:10px 0 8px;"><?= e($restaurant['public_name'] ?? $restaurant['name']) ?></h2>
+            <p class="muted" style="margin:0;"><?= e($restaurant['welcome_text'] ?? ($restaurant['portal_tagline'] ?? 'Ajoutez des photos de plats claires pour le owner, le portail public et le service.')) ?></p>
+        </div>
+    </div>
 </section>
 
 <section class="split" style="margin-bottom:24px;">
@@ -52,7 +67,7 @@
         <?php if ($categories === []): ?>
             <p class="muted">Creez d abord une categorie pour rattacher le nouveau plat au vrai menu du restaurant.</p>
         <?php else: ?>
-            <form method="post" action="/owner/menu/items">
+            <form method="post" action="/owner/menu/items" enctype="multipart/form-data">
                 <label>Categorie</label>
                 <select name="category_id" required>
                     <?php foreach ($categories as $category): ?>
@@ -65,6 +80,13 @@
                 <input name="slug" placeholder="Optionnel, genere depuis le nom si vide">
                 <label>Description</label>
                 <textarea name="description" placeholder="Description visible dans le menu"></textarea>
+                <label>Photo du plat</label>
+                <input name="image" type="file" accept=".jpg,.jpeg,.png,.webp" data-file-preview-input="owner-new-menu-item">
+                <div class="media-preview" style="margin-bottom:16px;">
+                    <img class="hidden menu-preview-large" alt="Apercu plat" data-file-preview-image="owner-new-menu-item">
+                    <small data-file-preview-name="owner-new-menu-item">Aucun fichier choisi</small>
+                    <div class="muted">Les anciennes URLs restent compatibles si un article historique en utilise deja une.</div>
+                </div>
                 <label>Prix</label>
                 <input name="price" value="0.00">
                 <label>Ordre</label>
@@ -98,7 +120,15 @@
             <tbody>
             <?php foreach ($items as $item): ?>
                 <tr>
-                    <td><strong><?= e($item['name']) ?></strong><br><span class="muted"><?= e($item['description']) ?></span></td>
+                    <td>
+                        <div class="menu-thumb">
+                            <img src="<?= e(menu_item_media_url_or_default($item['image_url'] ?? null)) ?>" alt="<?= e($item['name']) ?>">
+                            <div>
+                                <strong><?= e($item['name']) ?></strong><br>
+                                <span class="muted"><?= e($item['description']) ?></span>
+                            </div>
+                        </div>
+                    </td>
                     <td><?= e($item['category_name']) ?></td>
                     <td><?= e(format_money($item['price'], $restaurantCurrency)) ?></td>
                     <td><?= (int) $item['is_available'] === 1 ? 'Disponible' : 'Indisponible' ?></td>
@@ -106,7 +136,7 @@
                     <td>
                         <details class="no-print">
                             <summary style="cursor:pointer;">Modifier</summary>
-                            <form method="post" action="/owner/menu/items/<?= e((string) $item['id']) ?>/update" class="split" style="margin-top:12px;">
+                            <form method="post" action="/owner/menu/items/<?= e((string) $item['id']) ?>/update" class="split" style="margin-top:12px;" enctype="multipart/form-data">
                                 <div>
                                     <label>Nom du plat</label>
                                     <input name="name" value="<?= e((string) $item['name']) ?>" required>
@@ -132,12 +162,20 @@
                                     <textarea name="description"><?= e((string) ($item['description'] ?? '')) ?></textarea>
                                 </div>
                                 <div>
-                                    <label>Photo</label>
-                                    <input name="image_url" value="<?= e((string) ($item['image_url'] ?? '')) ?>">
+                                    <label>Nouvelle photo</label>
+                                    <input name="image" type="file" accept=".jpg,.jpeg,.png,.webp" data-file-preview-input="owner-menu-item-<?= e((string) $item['id']) ?>">
+                                    <input type="hidden" name="existing_image_url" value="<?= e((string) ($item['image_url'] ?? '')) ?>">
                                 </div>
                                 <div>
                                     <label>Ordre</label>
                                     <input name="display_order" value="<?= e((string) $item['display_order']) ?>">
+                                </div>
+                                <div style="grid-column:1 / -1;">
+                                    <img src="<?= e(menu_item_media_url_or_default($item['image_url'] ?? null)) ?>" alt="<?= e($item['name']) ?>" class="menu-preview-large" data-file-preview-image="owner-menu-item-<?= e((string) $item['id']) ?>">
+                                    <small data-file-preview-name="owner-menu-item-<?= e((string) $item['id']) ?>"><?= e((string) ($item['image_url'] ?? 'Visuel par defaut')) ?></small>
+                                    <?php if (!empty($item['image_url']) && preg_match('/^https?:\/\//', (string) $item['image_url']) === 1): ?>
+                                        <div class="muted">URL historique conservee tant qu aucun nouveau fichier n est envoye.</div>
+                                    <?php endif; ?>
                                 </div>
                                 <div>
                                     <label>Statut</label>

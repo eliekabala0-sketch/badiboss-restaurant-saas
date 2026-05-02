@@ -285,6 +285,11 @@ function restaurant_media_url_or_default(?string $value, string $kind = 'logo'):
     return restaurant_media_url($value) ?? restaurant_media_fallback_url($kind);
 }
 
+function menu_item_media_url_or_default(?string $value): string
+{
+    return restaurant_media_url($value) ?? restaurant_media_fallback_url('photo');
+}
+
 function normalize_hex_color(?string $value, string $default): string
 {
     $value = strtoupper(trim((string) $value));

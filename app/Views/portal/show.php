@@ -1,3 +1,18 @@
+<?php
+$portalLogo = restaurant_media_url_or_default($tenant['logo_url'] ?? null, 'logo');
+$portalCover = restaurant_media_url_or_default($tenant['cover_image_url'] ?? null, 'photo');
+?>
+<section class="card brand-visual" style="margin-bottom:24px; background-image:url('<?= e($portalCover) ?>');">
+    <div class="brand-visual-body">
+        <img src="<?= e($portalLogo) ?>" alt="Logo restaurant" class="brand-visual-logo">
+        <div class="brand-visual-copy">
+            <span class="pill badge-gold">Portail public</span>
+            <h1 style="margin:10px 0 8px; color:#fff8e7;"><?= e($tenant['public_name'] ?? $tenant['name']) ?></h1>
+            <p class="muted" style="margin:0;"><?= e($tenant['portal_tagline'] ?? '') ?></p>
+        </div>
+    </div>
+</section>
+
 <section class="card" style="padding:28px; border-top:10px solid <?= e($tenant['primary_color'] ?? '#0f766e') ?>;">
     <h1 style="margin-top:0; color: <?= e($tenant['secondary_color'] ?? '#111827') ?>;"><?= e($tenant['public_name'] ?? $tenant['name']) ?></h1>
     <p class="muted"><?= e($tenant['portal_tagline'] ?? '') ?></p>
@@ -28,7 +43,15 @@
                     <tbody>
                     <?php foreach ($menu_items as $item): ?>
                         <tr>
-                            <td><strong><?= e($item['name']) ?></strong><br><span class="muted"><?= e($item['description'] ?? '') ?></span></td>
+                            <td>
+                                <div class="menu-thumb">
+                                    <img src="<?= e(menu_item_media_url_or_default($item['image_url'] ?? null)) ?>" alt="<?= e($item['name']) ?>">
+                                    <div>
+                                        <strong><?= e($item['name']) ?></strong><br>
+                                        <span class="muted"><?= e($item['description'] ?? '') ?></span>
+                                    </div>
+                                </div>
+                            </td>
                             <td><?= e($item['category_name']) ?></td>
                             <td><?= e(format_money($item['price'], $tenant['currency_code'] ?? 'USD')) ?></td>
                             <td><?= e(status_label($item['status'])) ?></td>
