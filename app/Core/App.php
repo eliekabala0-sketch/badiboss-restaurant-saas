@@ -63,6 +63,10 @@ final class App
             $this->respondRailwayRuntimeRepair($request);
             return;
         }
+        if ($request->method === 'GET' && $request->uri === '/admin/cleanup-test-request') {
+            $this->respondRailwayCleanupTestRequest($request);
+            return;
+        }
 
         $container = Container::getInstance();
         $container->set('config', $this->config);
@@ -238,6 +242,31 @@ final class App
         http_response_code($report['errors'] === [] ? 200 : 500);
         header('Content-Type: text/plain; charset=UTF-8');
         echo railway_runtime_repair_render_report($report);
+    }
+
+    private function respondRailwayCleanupTestRequest(Request $request): void
+    {
+        if (!$this->canRunRailwayAdminTask($request)) {
+            http_response_code(403);
+            header('Content-Type: text/plain; charset=UTF-8');
+            echo 'Acces refuse';
+            return;
+        }
+
+        $serviceReference = trim((string) ($request->query['service_reference'] ?? ''));
+        if ($serviceReference === '') {
+            http_response_code(400);
+            header('Content-Type: text/plain; charset=UTF-8');
+            echo 'service_reference requis';
+            return;
+        }
+
+        require_once BASE_PATH . '/scripts/railway_cleanup_test_request.php';
+        $report = railway_cleanup_test_request_report($this->config, $serviceReference);
+
+        http_response_code(($report['status'] ?? 'error') === 'error' ? 500 : 200);
+        header('Content-Type: text/plain; charset=UTF-8');
+        echo railway_cleanup_test_request_render_report($report);
     }
 
     private function canRunRailwayAdminTask(Request $request): bool

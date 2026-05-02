@@ -205,6 +205,167 @@ final class RailwayDbTools
         return $report;
     }
 
+    public static function cleanupTestServerRequest(array $config, string $serviceReference): array
+    {
+        $db = new Database($config['database']);
+        $pdo = $db->pdo();
+        $active = $db->config();
+        $serviceReference = trim($serviceReference);
+
+        $report = [
+            'database' => self::dbMeta($active),
+            'service_reference' => $serviceReference,
+            'found' => [
+                'server_requests' => [],
+                'server_request_items' => [],
+                'sales' => [],
+                'sale_items' => [],
+                'operation_cases' => [],
+                'audit_logs' => [],
+            ],
+            'deleted' => [
+                'audit_logs' => 0,
+                'operation_cases' => 0,
+                'sale_items' => 0,
+                'sales' => 0,
+                'server_request_items' => 0,
+                'server_requests' => 0,
+            ],
+            'status' => 'noop',
+            'errors' => [],
+        ];
+
+        if ($serviceReference === '') {
+            $report['errors'][] = 'service_reference vide';
+            $report['status'] = 'error';
+            return $report;
+        }
+
+        try {
+            $requestStatement = $pdo->prepare(
+                'SELECT sr.id, sr.restaurant_id, sr.server_id, sr.status, sr.service_reference, sr.note, sr.created_at, r.name AS restaurant_name
+                 FROM server_requests sr
+                 INNER JOIN restaurants r ON r.id = sr.restaurant_id
+                 WHERE sr.service_reference = :service_reference
+                 ORDER BY sr.id ASC'
+            );
+            $requestStatement->execute(['service_reference' => $serviceReference]);
+            $requests = $requestStatement->fetchAll(PDO::FETCH_ASSOC);
+            $report['found']['server_requests'] = $requests;
+
+            if ($requests === []) {
+                $report['status'] = 'not_found';
+                return $report;
+            }
+
+            $requestIds = array_map(static fn (array $row): int => (int) $row['id'], $requests);
+            $requestIdList = implode(',', array_map('intval', $requestIds));
+
+            $items = $pdo->query(
+                'SELECT id, request_id, menu_item_id, status, requested_quantity, supplied_quantity, sold_quantity, returned_quantity
+                 FROM server_request_items
+                 WHERE request_id IN (' . $requestIdList . ')
+                 ORDER BY id ASC'
+            )->fetchAll(PDO::FETCH_ASSOC);
+            $report['found']['server_request_items'] = $items;
+            $itemIds = array_map(static fn (array $row): int => (int) $row['id'], $items);
+
+            $sales = $pdo->query(
+                'SELECT id, restaurant_id, status, origin_type, origin_id, total_amount, note, created_at
+                 FROM sales
+                 WHERE origin_type = "server_request"
+                   AND origin_id IN (' . $requestIdList . ')
+                 ORDER BY id ASC'
+            )->fetchAll(PDO::FETCH_ASSOC);
+            $report['found']['sales'] = $sales;
+            $saleIds = array_map(static fn (array $row): int => (int) $row['id'], $sales);
+
+            if ($saleIds !== []) {
+                $saleIdList = implode(',', array_map('intval', $saleIds));
+                $saleItems = $pdo->query(
+                    'SELECT id, sale_id, menu_item_id, quantity, unit_price, status, created_at
+                     FROM sale_items
+                     WHERE sale_id IN (' . $saleIdList . ')
+                     ORDER BY id ASC'
+                )->fetchAll(PDO::FETCH_ASSOC);
+                $report['found']['sale_items'] = $saleItems;
+            }
+
+            $caseFilters = ['(source_entity_type = "server_requests" AND source_entity_id IN (' . $requestIdList . '))'];
+            if ($itemIds !== []) {
+                $itemIdList = implode(',', array_map('intval', $itemIds));
+                $caseFilters[] = '(source_entity_type = "server_request_items" AND source_entity_id IN (' . $itemIdList . '))';
+            }
+            if ($saleIds !== []) {
+                $saleIdList = implode(',', array_map('intval', $saleIds));
+                $caseFilters[] = '(source_entity_type = "sales" AND source_entity_id IN (' . $saleIdList . '))';
+            }
+
+            $caseStatement = $pdo->query(
+                'SELECT id, source_module, source_entity_type, source_entity_id, status, created_at
+                 FROM operation_cases
+                 WHERE ' . implode(' OR ', $caseFilters) . '
+                 ORDER BY id ASC'
+            );
+            $report['found']['operation_cases'] = $caseStatement->fetchAll(PDO::FETCH_ASSOC);
+
+            $auditFilters = ['(entity_type = "server_requests" AND entity_id IN (' . implode(',', array_map(static fn (int $id): string => $pdo->quote((string) $id), $requestIds)) . '))'];
+            if ($itemIds !== []) {
+                $auditFilters[] = '(entity_type = "server_request_items" AND entity_id IN (' . implode(',', array_map(static fn (int $id): string => $pdo->quote((string) $id), $itemIds)) . '))';
+            }
+            if ($saleIds !== []) {
+                $auditFilters[] = '(entity_type = "sales" AND entity_id IN (' . implode(',', array_map(static fn (int $id): string => $pdo->quote((string) $id), $saleIds)) . '))';
+            }
+            $auditFilters[] = '(new_values_json LIKE ' . $pdo->quote('%' . $serviceReference . '%') . ')';
+            $auditFilters[] = '(justification LIKE ' . $pdo->quote('%' . $serviceReference . '%') . ')';
+
+            $auditStatement = $pdo->query(
+                'SELECT id, module_name, action_name, entity_type, entity_id, created_at
+                 FROM audit_logs
+                 WHERE ' . implode(' OR ', $auditFilters) . '
+                 ORDER BY id ASC'
+            );
+            $report['found']['audit_logs'] = $auditStatement->fetchAll(PDO::FETCH_ASSOC);
+
+            $pdo->beginTransaction();
+
+            if ($report['found']['audit_logs'] !== []) {
+                $auditIds = implode(',', array_map(static fn (array $row): int => (int) $row['id'], $report['found']['audit_logs']));
+                $report['deleted']['audit_logs'] = $pdo->exec('DELETE FROM audit_logs WHERE id IN (' . $auditIds . ')');
+            }
+
+            if ($report['found']['operation_cases'] !== []) {
+                $caseIds = implode(',', array_map(static fn (array $row): int => (int) $row['id'], $report['found']['operation_cases']));
+                $report['deleted']['operation_cases'] = $pdo->exec('DELETE FROM operation_cases WHERE id IN (' . $caseIds . ')');
+            }
+
+            if ($saleIds !== []) {
+                $saleIdList = implode(',', array_map('intval', $saleIds));
+                $report['deleted']['sale_items'] = $pdo->exec('DELETE FROM sale_items WHERE sale_id IN (' . $saleIdList . ')');
+                $report['deleted']['sales'] = $pdo->exec('DELETE FROM sales WHERE id IN (' . $saleIdList . ')');
+            }
+
+            if ($itemIds !== []) {
+                $itemIdList = implode(',', array_map('intval', $itemIds));
+                $report['deleted']['server_request_items'] = $pdo->exec('DELETE FROM server_request_items WHERE id IN (' . $itemIdList . ')');
+            }
+
+            $report['deleted']['server_requests'] = $pdo->exec('DELETE FROM server_requests WHERE id IN (' . $requestIdList . ')');
+
+            $pdo->commit();
+            $report['status'] = 'deleted';
+        } catch (Throwable $e) {
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+
+            $report['errors'][] = self::mask($e->getMessage());
+            $report['status'] = 'error';
+        }
+
+        return $report;
+    }
+
     public static function renderInstall(array $r): string
     {
         return implode(PHP_EOL, ['INSTALLATION / REPARATION DB RAILWAY', 'source=' . $r['database']['source'], 'host=' . $r['database']['host'], 'port=' . $r['database']['port'], 'database=' . $r['database']['database'], 'user=' . $r['database']['user'], '', 'TABLES CREEES:'] + []);
@@ -271,6 +432,42 @@ final class RailwayDbTools
         $out[] = '';
         $out[] = 'PLANS APRES:';
         foreach ($r['plans_after'] ?: ['aucun'] as $v) { $out[] = '- ' . $v; }
+        return implode(PHP_EOL, $out);
+    }
+
+    public static function renderCleanupTestServerRequestReport(array $r): string
+    {
+        $out = [
+            'CLEANUP TEST SERVER REQUEST',
+            'source=' . $r['database']['source'],
+            'host=' . $r['database']['host'],
+            'port=' . $r['database']['port'],
+            'database=' . $r['database']['database'],
+            'user=' . $r['database']['user'],
+            'service_reference=' . $r['service_reference'],
+            'status=' . $r['status'],
+            '',
+            'FOUND:',
+            '- server_requests=' . count($r['found']['server_requests']),
+            '- server_request_items=' . count($r['found']['server_request_items']),
+            '- sales=' . count($r['found']['sales']),
+            '- sale_items=' . count($r['found']['sale_items']),
+            '- operation_cases=' . count($r['found']['operation_cases']),
+            '- audit_logs=' . count($r['found']['audit_logs']),
+            '',
+            'DELETED:',
+        ];
+
+        foreach ($r['deleted'] as $key => $value) {
+            $out[] = '- ' . $key . '=' . $value;
+        }
+
+        $out[] = '';
+        $out[] = 'ERRORS:';
+        foreach ($r['errors'] ?: ['aucune'] as $v) {
+            $out[] = '- ' . $v;
+        }
+
         return implode(PHP_EOL, $out);
     }
 
