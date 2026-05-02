@@ -104,6 +104,43 @@ foreach ($historyEntries as $entry) {
     .no-print { display:none !important; }
     .card { box-shadow:none !important; border:1px solid #d6d6d6; }
 }
+.server-order-lines {
+    display: grid;
+    gap: 12px;
+    margin-top: 14px;
+}
+.server-order-line {
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    padding: 14px;
+    display: grid;
+    gap: 12px;
+    background: rgba(255,255,255,0.04);
+}
+.server-order-line-grid {
+    display: grid;
+    gap: 12px;
+    grid-template-columns: minmax(180px, 2fr) minmax(90px, 110px) minmax(140px, 1fr) minmax(140px, 1fr) auto;
+    align-items: end;
+}
+.server-order-line-note {
+    display: grid;
+    gap: 8px;
+}
+.server-order-summary {
+    display:flex;
+    justify-content:space-between;
+    gap:12px;
+    align-items:center;
+    margin-top:16px;
+    padding-top:16px;
+    border-top:1px solid var(--line);
+}
+@media (max-width: 900px) {
+    .server-order-line-grid {
+        grid-template-columns: 1fr;
+    }
+}
 </style>
 
 <section class="topbar">
@@ -156,20 +193,54 @@ foreach ($historyEntries as $entry) {
         <p class="muted" style="margin-top:0;">Demande serveur depuis le menu avec attente fourni cuisine pour garder une lecture claire du flux.</p>
         <?php if (can_access('sales.request.create')): ?>
             <form method="post" action="/ventes/demandes">
-                <label>Article du menu</label>
-                <select name="menu_item_id">
-                    <?php foreach ($menu_items as $item): ?>
-                        <option value="<?= e((string) $item['id']) ?>"><?= e($item['name']) ?></option>
-                    <?php endforeach; ?>
-                </select>
-                <label>Quantité demandée</label>
-                <input name="requested_quantity" value="1">
                 <label>Table ou référence de service</label>
                 <input name="service_reference" placeholder="Table 12, Terrasse B, Ticket 48">
-                <label>Prix unitaire</label>
-                <input name="unit_price" value="1.00">
                 <label>Note de service</label>
                 <textarea name="note">Demande transmise à la cuisine pour le service en cours.</textarea>
+                <div class="server-order-lines" data-server-order-lines data-currency="<?= e($restaurantCurrency) ?>">
+                    <div class="server-order-line" data-server-order-line>
+                        <div class="server-order-line-grid">
+                            <div>
+                                <label>Article</label>
+                                <select data-line-menu-item>
+                                    <?php foreach ($menu_items as $item): ?>
+                                        <option value="<?= e((string) $item['id']) ?>" data-price="<?= e(number_format((float) ($item['price'] ?? 0), 2, '.', '')) ?>"><?= e($item['name']) ?></option>
+                                    <?php endforeach; ?>
+                                </select>
+                                <input type="hidden" data-line-menu-item-input name="items[0][menu_item_id]" value="">
+                                <input type="hidden" data-line-unit-price-input name="items[0][unit_price]" value="">
+                            </div>
+                            <div>
+                                <label>Quantité</label>
+                                <input type="number" min="1" step="1" value="1" data-line-quantity name="items[0][requested_quantity]" required>
+                            </div>
+                            <div>
+                                <label>Prix unitaire auto</label>
+                                <input type="text" value="" data-line-unit-price-display readonly>
+                            </div>
+                            <div>
+                                <label>Total ligne</label>
+                                <input type="text" value="" data-line-total-display readonly>
+                            </div>
+                            <div style="align-self:end;">
+                                <button type="button" class="button-muted" data-line-remove>Retirer</button>
+                            </div>
+                        </div>
+                        <div class="server-order-line-note">
+                            <div>
+                                <label>Note éventuelle</label>
+                                <textarea data-line-note name="items[0][note]" placeholder="Cuisson, accompagnement, remarque de table..."></textarea>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="toolbar-actions" style="margin-top:14px;">
+                    <button type="button" class="button-muted" data-server-order-add>Ligne supplémentaire</button>
+                </div>
+                <div class="server-order-summary">
+                    <strong>Total commande</strong>
+                    <strong data-server-order-grand-total><?= e(format_money(0, $restaurantCurrency)) ?></strong>
+                </div>
                 <button type="submit">Envoyer à la cuisine</button>
             </form>
         <?php else: ?>
@@ -233,6 +304,8 @@ foreach ($historyEntries as $entry) {
                             <tr>
                                 <th>Produit</th>
                                 <th>Demandé</th>
+                                <th>Prix unitaire</th>
+                                <th>Total ligne</th>
                                 <th>Accepté / préparé</th>
                                 <th>Non disponible</th>
                                 <th>Étape</th>
@@ -248,6 +321,8 @@ foreach ($historyEntries as $entry) {
                                         </div>
                                     </td>
                                     <td><?= e((string) $item['requested_quantity']) ?></td>
+                                    <td><?= e(format_money($item['unit_price'] ?? 0, $restaurantCurrency)) ?></td>
+                                    <td><?= e(format_money($item['requested_total'] ?? 0, $restaurantCurrency)) ?></td>
                                     <td><?= e((string) $item['supplied_quantity']) ?></td>
                                     <td><?= e((string) $item['unavailable_quantity']) ?></td>
                                     <td><?= e(service_flow_status_label($item['status'] ?: $item['supply_status'])) ?></td>
@@ -316,6 +391,8 @@ foreach ($historyEntries as $entry) {
                             <tr>
                                 <th>Produit</th>
                                 <th>Préparé</th>
+                                <th>Prix snapshot</th>
+                                <th>Total demandé</th>
                                 <th>Non disponible</th>
                             </tr>
                             </thead>
@@ -329,6 +406,8 @@ foreach ($historyEntries as $entry) {
                                         </div>
                                     </td>
                                     <td><?= e((string) $item['supplied_quantity']) ?></td>
+                                    <td><?= e(format_money($item['unit_price'] ?? 0, $restaurantCurrency)) ?></td>
+                                    <td><?= e(format_money($item['requested_total'] ?? 0, $restaurantCurrency)) ?></td>
                                     <td><?= e((string) $item['unavailable_quantity']) ?></td>
                                 </tr>
                             <?php endforeach; ?>
@@ -369,6 +448,159 @@ foreach ($historyEntries as $entry) {
         <?php endif; ?>
     <?php endif; ?>
 </section>
+
+<template id="server-order-line-template">
+    <div class="server-order-line" data-server-order-line>
+        <div class="server-order-line-grid">
+            <div>
+                <label>Article</label>
+                <select data-line-menu-item>
+                    <?php foreach ($menu_items as $item): ?>
+                        <option value="<?= e((string) $item['id']) ?>" data-price="<?= e(number_format((float) ($item['price'] ?? 0), 2, '.', '')) ?>"><?= e($item['name']) ?></option>
+                    <?php endforeach; ?>
+                </select>
+                <input type="hidden" data-line-menu-item-input value="">
+                <input type="hidden" data-line-unit-price-input value="">
+            </div>
+            <div>
+                <label>Quantité</label>
+                <input type="number" min="1" step="1" value="1" data-line-quantity required>
+            </div>
+            <div>
+                <label>Prix unitaire auto</label>
+                <input type="text" value="" data-line-unit-price-display readonly>
+            </div>
+            <div>
+                <label>Total ligne</label>
+                <input type="text" value="" data-line-total-display readonly>
+            </div>
+            <div style="align-self:end;">
+                <button type="button" class="button-muted" data-line-remove>Retirer</button>
+            </div>
+        </div>
+        <div class="server-order-line-note">
+            <div>
+                <label>Note éventuelle</label>
+                <textarea data-line-note placeholder="Cuisson, accompagnement, remarque de table..."></textarea>
+            </div>
+        </div>
+    </div>
+</template>
+
+<script>
+(function () {
+    const formRoot = document.querySelector('[data-server-order-lines]');
+    if (!formRoot) {
+        return;
+    }
+
+    const addButton = document.querySelector('[data-server-order-add]');
+    const template = document.getElementById('server-order-line-template');
+    const grandTotalNode = document.querySelector('[data-server-order-grand-total]');
+    const currency = formRoot.getAttribute('data-currency') || 'USD';
+    const currencySymbol = currency === 'CDF' ? 'FC' : '$';
+
+    const formatMoney = (value) => currencySymbol + Number(value || 0).toFixed(2);
+
+    const renumberLines = () => {
+        formRoot.querySelectorAll('[data-server-order-line]').forEach((line, index) => {
+            const menuItemInput = line.querySelector('[data-line-menu-item-input]');
+            const quantityInput = line.querySelector('[data-line-quantity]');
+            const unitPriceInput = line.querySelector('[data-line-unit-price-input]');
+            const noteInput = line.querySelector('[data-line-note]');
+
+            if (menuItemInput) {
+                menuItemInput.name = 'items[' + index + '][menu_item_id]';
+            }
+            if (quantityInput) {
+                quantityInput.name = 'items[' + index + '][requested_quantity]';
+            }
+            if (unitPriceInput) {
+                unitPriceInput.name = 'items[' + index + '][unit_price]';
+            }
+            if (noteInput) {
+                noteInput.name = 'items[' + index + '][note]';
+            }
+        });
+    };
+
+    const syncLine = (line) => {
+        const select = line.querySelector('[data-line-menu-item]');
+        const menuItemInput = line.querySelector('[data-line-menu-item-input]');
+        const quantityInput = line.querySelector('[data-line-quantity]');
+        const unitPriceInput = line.querySelector('[data-line-unit-price-input]');
+        const unitPriceDisplay = line.querySelector('[data-line-unit-price-display]');
+        const totalDisplay = line.querySelector('[data-line-total-display]');
+        const selectedOption = select.options[select.selectedIndex];
+        const unitPrice = Number(selectedOption ? selectedOption.getAttribute('data-price') : 0);
+        const quantity = Math.max(1, Number(quantityInput.value || 1));
+        const lineTotal = unitPrice * quantity;
+
+        quantityInput.value = String(quantity);
+        menuItemInput.value = select.value;
+        unitPriceInput.value = unitPrice.toFixed(2);
+        unitPriceDisplay.value = formatMoney(unitPrice);
+        totalDisplay.value = formatMoney(lineTotal);
+
+        return lineTotal;
+    };
+
+    const syncAllLines = () => {
+        let grandTotal = 0;
+        formRoot.querySelectorAll('[data-server-order-line]').forEach((line) => {
+            grandTotal += syncLine(line);
+        });
+
+        if (grandTotalNode) {
+            grandTotalNode.textContent = formatMoney(grandTotal);
+        }
+
+        formRoot.querySelectorAll('[data-line-remove]').forEach((button) => {
+            button.disabled = formRoot.querySelectorAll('[data-server-order-line]').length === 1;
+        });
+    };
+
+    formRoot.addEventListener('input', (event) => {
+        if (event.target.matches('[data-line-quantity], [data-line-menu-item]')) {
+            syncAllLines();
+        }
+    });
+
+    formRoot.addEventListener('change', (event) => {
+        if (event.target.matches('[data-line-menu-item]')) {
+            syncAllLines();
+        }
+    });
+
+    formRoot.addEventListener('click', (event) => {
+        const removeButton = event.target.closest('[data-line-remove]');
+        if (!removeButton) {
+            return;
+        }
+
+        const lines = formRoot.querySelectorAll('[data-server-order-line]');
+        if (lines.length === 1) {
+            return;
+        }
+
+        removeButton.closest('[data-server-order-line]').remove();
+        renumberLines();
+        syncAllLines();
+    });
+
+    if (addButton && template) {
+        addButton.addEventListener('click', () => {
+            const fragment = template.content.cloneNode(true);
+            formRoot.appendChild(fragment);
+            renumberLines();
+            syncAllLines();
+        });
+    }
+
+    renumberLines();
+    syncAllLines();
+})();
+</script>
 
 <section class="card" style="padding:22px; margin-top:24px;">
     <h2 style="margin-top:0;">Signaler un retour ou une casse</h2>

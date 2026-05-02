@@ -447,11 +447,7 @@ final class OperationsController
         $restaurantId = $this->resolveRestaurantId($request);
         authorize_access('sales.request.create');
 
-        $items = [[
-            'menu_item_id' => $request->input('menu_item_id'),
-            'requested_quantity' => $request->input('requested_quantity', 1),
-            'unit_price' => $request->input('unit_price', 0),
-        ]];
+        $items = $this->serverRequestItemsPayload($request);
 
         Container::getInstance()->get('salesService')->createServerRequest($restaurantId, [
             'service_reference' => $request->input('service_reference'),
@@ -652,5 +648,42 @@ final class OperationsController
             'final_qualifications' => $settings['global_final_qualifications_json'] ?? [],
             'responsibility_targets' => $settings['global_responsibility_targets_json'] ?? [],
         ];
+    }
+
+    private function serverRequestItemsPayload(Request $request): array
+    {
+        $rawLines = $request->input('items', []);
+        if (!is_array($rawLines) || $rawLines === []) {
+            return [[
+                'menu_item_id' => $request->input('menu_item_id'),
+                'requested_quantity' => $request->input('requested_quantity', 1),
+                'unit_price' => $request->input('unit_price', 0),
+                'note' => $request->input('line_note', ''),
+            ]];
+        }
+
+        $items = [];
+        foreach ($rawLines as $line) {
+            if (!is_array($line)) {
+                continue;
+            }
+
+            $menuItemId = (int) ($line['menu_item_id'] ?? 0);
+            $quantity = (float) ($line['requested_quantity'] ?? 0);
+            $note = trim((string) ($line['note'] ?? ''));
+
+            if ($menuItemId <= 0 || $quantity <= 0) {
+                continue;
+            }
+
+            $items[] = [
+                'menu_item_id' => $menuItemId,
+                'requested_quantity' => $quantity,
+                'unit_price' => $line['unit_price'] ?? 0,
+                'note' => $note,
+            ];
+        }
+
+        return $items;
     }
 }

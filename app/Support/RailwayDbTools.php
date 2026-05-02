@@ -366,6 +366,91 @@ final class RailwayDbTools
         return $report;
     }
 
+    public static function inspectTestServerRequest(array $config, string $serviceReference): array
+    {
+        $db = new Database($config['database']);
+        $pdo = $db->pdo();
+        $active = $db->config();
+        $serviceReference = trim($serviceReference);
+
+        $report = [
+            'database' => self::dbMeta($active),
+            'service_reference' => $serviceReference,
+            'status' => 'not_found',
+            'request' => null,
+            'items' => [],
+            'sales' => [],
+            'sale_items' => [],
+            'errors' => [],
+        ];
+
+        if ($serviceReference === '') {
+            $report['status'] = 'error';
+            $report['errors'][] = 'service_reference vide';
+            return $report;
+        }
+
+        try {
+            $requestStatement = $pdo->prepare(
+                'SELECT sr.id, sr.restaurant_id, sr.server_id, sr.status, sr.service_reference, sr.total_requested_amount,
+                        sr.total_supplied_amount, sr.total_sold_amount, sr.note, sr.created_at,
+                        r.name AS restaurant_name, COALESCE(NULLIF(r.currency, ""), NULLIF(r.currency_code, ""), "USD") AS restaurant_currency
+                 FROM server_requests sr
+                 INNER JOIN restaurants r ON r.id = sr.restaurant_id
+                 WHERE sr.service_reference = :service_reference
+                 ORDER BY sr.id DESC
+                 LIMIT 1'
+            );
+            $requestStatement->execute(['service_reference' => $serviceReference]);
+            $requestRow = $requestStatement->fetch(PDO::FETCH_ASSOC);
+
+            if ($requestRow === false) {
+                return $report;
+            }
+
+            $report['request'] = $requestRow;
+            $report['status'] = 'found';
+
+            $itemsStatement = $pdo->prepare(
+                'SELECT sri.id, sri.request_id, sri.menu_item_id, sri.requested_quantity, sri.supplied_quantity, sri.sold_quantity,
+                        sri.unit_price, sri.requested_total, sri.note, sri.status, sri.supply_status,
+                        mi.name AS menu_item_name, mi.price AS current_menu_price
+                 FROM server_request_items sri
+                 INNER JOIN menu_items mi ON mi.id = sri.menu_item_id
+                 WHERE sri.request_id = :request_id
+                 ORDER BY sri.id ASC'
+            );
+            $itemsStatement->execute(['request_id' => (int) $requestRow['id']]);
+            $report['items'] = $itemsStatement->fetchAll(PDO::FETCH_ASSOC);
+
+            $salesStatement = $pdo->prepare(
+                'SELECT id, status, sale_type, total_amount, origin_type, origin_id, note, created_at, validated_at
+                 FROM sales
+                 WHERE origin_type = "server_request" AND origin_id = :request_id
+                 ORDER BY id ASC'
+            );
+            $salesStatement->execute(['request_id' => (int) $requestRow['id']]);
+            $sales = $salesStatement->fetchAll(PDO::FETCH_ASSOC);
+            $report['sales'] = $sales;
+
+            if ($sales !== []) {
+                $saleIds = implode(',', array_map(static fn (array $row): string => (string) ((int) $row['id']), $sales));
+                $report['sale_items'] = $pdo->query(
+                    'SELECT si.id, si.sale_id, si.menu_item_id, si.quantity, si.unit_price, si.status, mi.name AS menu_item_name
+                     FROM sale_items si
+                     INNER JOIN menu_items mi ON mi.id = si.menu_item_id
+                     WHERE si.sale_id IN (' . $saleIds . ')
+                     ORDER BY si.id ASC'
+                )->fetchAll(PDO::FETCH_ASSOC);
+            }
+        } catch (Throwable $e) {
+            $report['status'] = 'error';
+            $report['errors'][] = self::mask($e->getMessage());
+        }
+
+        return $report;
+    }
+
     public static function renderInstall(array $r): string
     {
         return implode(PHP_EOL, ['INSTALLATION / REPARATION DB RAILWAY', 'source=' . $r['database']['source'], 'host=' . $r['database']['host'], 'port=' . $r['database']['port'], 'database=' . $r['database']['database'], 'user=' . $r['database']['user'], '', 'TABLES CREEES:'] + []);
@@ -466,6 +551,82 @@ final class RailwayDbTools
         $out[] = 'ERRORS:';
         foreach ($r['errors'] ?: ['aucune'] as $v) {
             $out[] = '- ' . $v;
+        }
+
+        return implode(PHP_EOL, $out);
+    }
+
+    public static function renderInspectTestServerRequestReport(array $r): string
+    {
+        $out = [
+            'INSPECT TEST SERVER REQUEST',
+            'source=' . $r['database']['source'],
+            'host=' . $r['database']['host'],
+            'port=' . $r['database']['port'],
+            'database=' . $r['database']['database'],
+            'user=' . $r['database']['user'],
+            'service_reference=' . $r['service_reference'],
+            'status=' . $r['status'],
+            '',
+        ];
+
+        if ($r['request'] !== null) {
+            $out[] = 'REQUEST:';
+            $out[] = '- id=' . (string) $r['request']['id'];
+            $out[] = '- restaurant=' . (string) $r['request']['restaurant_name'];
+            $out[] = '- currency=' . (string) $r['request']['restaurant_currency'];
+            $out[] = '- total_requested_amount=' . (string) $r['request']['total_requested_amount'];
+            $out[] = '- total_sold_amount=' . (string) $r['request']['total_sold_amount'];
+            $out[] = '- status=' . (string) $r['request']['status'];
+            $out[] = '';
+        }
+
+        $out[] = 'ITEMS:';
+        if ($r['items'] === []) {
+            $out[] = '- none';
+        } else {
+            foreach ($r['items'] as $item) {
+                $out[] = '- item_id=' . (string) $item['id']
+                    . ' menu_item=' . (string) $item['menu_item_name']
+                    . ' requested_quantity=' . (string) $item['requested_quantity']
+                    . ' snapshot_unit_price=' . (string) $item['unit_price']
+                    . ' current_menu_price=' . (string) $item['current_menu_price']
+                    . ' requested_total=' . (string) $item['requested_total']
+                    . ' note=' . (string) ($item['note'] ?? '');
+            }
+        }
+
+        $out[] = '';
+        $out[] = 'SALES:';
+        if ($r['sales'] === []) {
+            $out[] = '- none';
+        } else {
+            foreach ($r['sales'] as $sale) {
+                $out[] = '- sale_id=' . (string) $sale['id']
+                    . ' status=' . (string) $sale['status']
+                    . ' total_amount=' . (string) $sale['total_amount']
+                    . ' validated_at=' . (string) ($sale['validated_at'] ?? '');
+            }
+        }
+
+        $out[] = '';
+        $out[] = 'SALE_ITEMS:';
+        if ($r['sale_items'] === []) {
+            $out[] = '- none';
+        } else {
+            foreach ($r['sale_items'] as $item) {
+                $out[] = '- sale_item_id=' . (string) $item['id']
+                    . ' menu_item=' . (string) $item['menu_item_name']
+                    . ' quantity=' . (string) $item['quantity']
+                    . ' unit_price=' . (string) $item['unit_price']
+                    . ' status=' . (string) $item['status'];
+            }
+        }
+
+        $out[] = '';
+        $out[] = 'ERRORS:';
+        foreach ($r['errors'] ?: ['aucune'] as $error) {
+            $out[] = '- ' . $error;
         }
 
         return implode(PHP_EOL, $out);

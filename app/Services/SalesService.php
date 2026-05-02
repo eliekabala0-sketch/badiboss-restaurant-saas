@@ -204,7 +204,8 @@ final class SalesService
                     throw new \RuntimeException('Quantite demandee invalide.');
                 }
 
-                $unitPrice = (float) ($item['unit_price'] ?? $menuItem['price']);
+                // Always snapshot the authoritative menu price from the current restaurant.
+                $unitPrice = (float) $menuItem['price'];
                 $requestedTotal = $quantity * $unitPrice;
                 $totalRequested += $requestedTotal;
                 $normalizedItems[] = [
@@ -212,6 +213,7 @@ final class SalesService
                     'requested_quantity' => $quantity,
                     'unit_price' => $unitPrice,
                     'requested_total' => $requestedTotal,
+                    'note' => trim((string) ($item['note'] ?? '')),
                 ];
             }
 
@@ -235,7 +237,7 @@ final class SalesService
                 'INSERT INTO server_request_items
                 (request_id, server_request_id, restaurant_id, menu_item_id, stock_item_id, requested_quantity, supplied_quantity, unavailable_quantity, sold_quantity, returned_quantity, returned_quantity_validated, unit_price, requested_total, supplied_total, sold_total, returned_total, server_loss_total, total_requested_amount, total_supplied_amount, total_sold_amount, status, supply_status, note, technical_confirmed_by, prepared_at, received_by, received_at, decided_by, created_at, updated_at)
                  VALUES
-                (:request_id, :server_request_id, :restaurant_id, :menu_item_id, NULL, :requested_quantity, 0, :requested_quantity, 0, 0, 0, :unit_price, :requested_total, 0, 0, 0, 0, :requested_total, 0, 0, "DEMANDE", "DEMANDE", NULL, NULL, NULL, NULL, NULL, NULL, NOW(), NOW())'
+                (:request_id, :server_request_id, :restaurant_id, :menu_item_id, NULL, :requested_quantity, 0, :requested_quantity, 0, 0, 0, :unit_price, :requested_total, 0, 0, 0, 0, :requested_total, 0, 0, "DEMANDE", "DEMANDE", :note, NULL, NULL, NULL, NULL, NULL, NOW(), NOW())'
             );
             foreach ($normalizedItems as $item) {
                 $itemStatement->execute([
@@ -246,6 +248,7 @@ final class SalesService
                     'requested_quantity' => $item['requested_quantity'],
                     'unit_price' => $item['unit_price'],
                     'requested_total' => $item['requested_total'],
+                    'note' => $item['note'] !== '' ? $item['note'] : null,
                 ]);
             }
 

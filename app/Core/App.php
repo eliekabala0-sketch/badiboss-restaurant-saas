@@ -67,6 +67,10 @@ final class App
             $this->respondRailwayCleanupTestRequest($request);
             return;
         }
+        if ($request->method === 'GET' && $request->uri === '/admin/inspect-test-request') {
+            $this->respondRailwayInspectTestRequest($request);
+            return;
+        }
 
         $container = Container::getInstance();
         $container->set('config', $this->config);
@@ -267,6 +271,31 @@ final class App
         http_response_code(($report['status'] ?? 'error') === 'error' ? 500 : 200);
         header('Content-Type: text/plain; charset=UTF-8');
         echo railway_cleanup_test_request_render_report($report);
+    }
+
+    private function respondRailwayInspectTestRequest(Request $request): void
+    {
+        if (!$this->canRunRailwayAdminTask($request)) {
+            http_response_code(403);
+            header('Content-Type: text/plain; charset=UTF-8');
+            echo 'Acces refuse';
+            return;
+        }
+
+        $serviceReference = trim((string) ($request->query['service_reference'] ?? ''));
+        if ($serviceReference === '') {
+            http_response_code(400);
+            header('Content-Type: text/plain; charset=UTF-8');
+            echo 'service_reference requis';
+            return;
+        }
+
+        require_once BASE_PATH . '/scripts/railway_inspect_test_request.php';
+        $report = railway_inspect_test_request_report($this->config, $serviceReference);
+
+        http_response_code(($report['status'] ?? 'error') === 'error' ? 500 : 200);
+        header('Content-Type: text/plain; charset=UTF-8');
+        echo railway_inspect_test_request_render_report($report);
     }
 
     private function canRunRailwayAdminTask(Request $request): bool
