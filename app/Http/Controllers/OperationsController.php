@@ -14,6 +14,7 @@ final class OperationsController
         $restaurantId = $this->resolveRestaurantId($request);
         authorize_access('stock.view');
         $incidentCatalog = $this->incidentCatalog();
+        $kitchenStockBlocks = Container::getInstance()->get('stockService')->listKitchenStockRequestBlocks($restaurantId);
 
         Container::getInstance()->get('salesService')->reconcileOverdueReturnsToAutomaticSales($restaurantId);
 
@@ -22,7 +23,8 @@ final class OperationsController
             'restaurant' => Container::getInstance()->get('restaurantAdmin')->findRestaurant($restaurantId),
             'items' => Container::getInstance()->get('stockService')->listItems($restaurantId),
             'movements' => Container::getInstance()->get('stockService')->listMovements($restaurantId),
-            'kitchen_stock_requests' => Container::getInstance()->get('stockService')->listKitchenStockRequests($restaurantId),
+            'kitchen_stock_requests' => $kitchenStockBlocks['requests'],
+            'kitchen_stock_request_items_by_request' => $kitchenStockBlocks['items_by_request'],
             'correction_requests' => Container::getInstance()->get('correctionService')->listRecentForRestaurant($restaurantId, 12),
             'stock_audits' => Container::getInstance()->get('stockService')->recentAudits($restaurantId, 12),
             'productions' => Container::getInstance()->get('kitchenService')->listProductions($restaurantId),
@@ -173,6 +175,7 @@ final class OperationsController
                 'status' => $request->input('status', 'FOURNI_TOTAL'),
                 'planning_status' => $request->input('planning_status', ''),
                 'note' => $request->input('note'),
+                'items' => $request->input('items', []),
             ],
             current_user()
         );
@@ -247,6 +250,7 @@ final class OperationsController
         $restaurantId = $this->resolveRestaurantId($request);
         authorize_access('kitchen.view');
         $incidentCatalog = $this->incidentCatalog();
+        $kitchenStockBlocks = Container::getInstance()->get('stockService')->listKitchenStockRequestBlocks($restaurantId);
 
         Container::getInstance()->get('salesService')->reconcileOverdueReturnsToAutomaticSales($restaurantId);
         $allCases = Container::getInstance()->get('incidentService')->listCases($restaurantId);
@@ -257,7 +261,8 @@ final class OperationsController
             'productions' => Container::getInstance()->get('kitchenService')->listProductions($restaurantId),
             'server_request_items' => Container::getInstance()->get('kitchenService')->listPendingServerRequestItems($restaurantId),
             'server_request_history_items' => Container::getInstance()->get('salesService')->listServerRequestItems($restaurantId),
-            'kitchen_stock_requests' => Container::getInstance()->get('stockService')->listKitchenStockRequests($restaurantId),
+            'kitchen_stock_requests' => $kitchenStockBlocks['requests'],
+            'kitchen_stock_request_items_by_request' => $kitchenStockBlocks['items_by_request'],
             'stock_items' => Container::getInstance()->get('stockService')->listItems($restaurantId),
             'menu_categories' => Container::getInstance()->get('menuAdmin')->listCategories($restaurantId),
             'menu_items' => Container::getInstance()->get('menuAdmin')->listItems($restaurantId),
@@ -355,6 +360,7 @@ final class OperationsController
             'quantity_requested' => $request->input('quantity_requested'),
             'priority_level' => $request->input('priority_level', 'normale'),
             'note' => $request->input('note'),
+            'items' => $this->kitchenStockRequestItemsPayload($request),
         ], current_user());
 
         flash('success', 'Demande cuisine vers stock enregistree.');
@@ -681,6 +687,41 @@ final class OperationsController
                 'requested_quantity' => $quantity,
                 'unit_price' => $line['unit_price'] ?? 0,
                 'note' => $note,
+            ];
+        }
+
+        return $items;
+    }
+
+    private function kitchenStockRequestItemsPayload(Request $request): array
+    {
+        $rawLines = $request->input('items', []);
+        if (!is_array($rawLines) || $rawLines === []) {
+            return [[
+                'stock_item_id' => $request->input('stock_item_id'),
+                'quantity_requested' => $request->input('quantity_requested', 1),
+                'priority_level' => $request->input('priority_level', 'normale'),
+                'note' => $request->input('line_note', ''),
+            ]];
+        }
+
+        $items = [];
+        foreach ($rawLines as $line) {
+            if (!is_array($line)) {
+                continue;
+            }
+
+            $stockItemId = (int) ($line['stock_item_id'] ?? 0);
+            $quantity = (float) ($line['quantity_requested'] ?? 0);
+            if ($stockItemId <= 0 || $quantity <= 0) {
+                continue;
+            }
+
+            $items[] = [
+                'stock_item_id' => $stockItemId,
+                'quantity_requested' => $quantity,
+                'priority_level' => $line['priority_level'] ?? $request->input('priority_level', 'normale'),
+                'note' => trim((string) ($line['note'] ?? '')),
             ];
         }
 

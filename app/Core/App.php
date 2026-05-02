@@ -12,6 +12,7 @@ use App\Services\AuthService;
 use App\Services\IncidentService;
 use App\Services\KitchenService;
 use App\Services\MenuAdminService;
+use App\Services\OperationalResetService;
 use App\Services\PlatformSettingsService;
 use App\Services\ReportService;
 use App\Services\RestaurantAdminService;
@@ -111,6 +112,7 @@ final class App
         $container->set('kitchenService', new KitchenService($database));
         $container->set('salesService', new SalesService($database));
         $container->set('reportService', new ReportService($database));
+        $container->set('operationalResetService', new OperationalResetService($database));
 
         try {
             $this->router->dispatch($request);

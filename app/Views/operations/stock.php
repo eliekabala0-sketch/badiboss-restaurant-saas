@@ -8,6 +8,7 @@ $historyPreviewLimit = 6;
 $activePreviewLimit = 5;
 $restaurantCurrency = restaurant_currency($restaurant);
 $restaurantLogo = restaurant_media_url_or_default($restaurant['logo_url'] ?? null, 'logo');
+$kitchenStockRequestItemsByRequest = $kitchen_stock_request_items_by_request ?? [];
 
 $stockRequestCases = array_values(array_filter(
     $cases,
@@ -89,15 +90,21 @@ usort($managerCases, static fn (array $left, array $right): int => strcmp((strin
 
 $historyEntries = [];
 foreach ($closedRequests as $request) {
+    $requestItems = $kitchenStockRequestItemsByRequest[(int) $request['id']] ?? [];
+    $details = [];
+    foreach ($requestItems as $detailItem) {
+        $details[] = (string) ($detailItem['stock_item_name'] ?? 'Article') . ' ' . (string) ($detailItem['quantity_requested'] ?? 0);
+    }
     $eventDate = (string) ($request['received_at'] ?: $request['responded_at'] ?: $request['created_at']);
     $historyEntries[] = [
         'type' => 'Demande stock cloturee',
-        'reference' => ($request['stock_item_name'] ?? 'Article') . ' · ' . priority_label($request['priority_level'] ?? null),
+        'reference' => 'Demande #' . (string) $request['id'] . ' · ' . ((int) ($request['item_count'] ?? count($requestItems) ?: 1)) . ' produit(s)',
         'status' => stock_request_status_label($request['status'] ?? null),
         'date' => $eventDate,
-        'details' => 'Cuisine ' . ($request['requested_by_name'] ?? '-') . ' · demande ' . (string) ($request['quantity_requested'] ?? 0)
-            . ' · fournie ' . (string) ($request['quantity_supplied'] ?? 0)
-            . ' · non fournie ' . (string) ($request['unavailable_quantity'] ?? 0),
+        'details' => 'Cuisine ' . ($request['requested_by_name'] ?? '-') . ' · '
+            . (($details !== []) ? implode(', ', $details) . ' · ' : '')
+            . 'fournie ' . (string) ($request['quantity_supplied_total'] ?? $request['quantity_supplied'] ?? 0)
+            . ' · non fournie ' . (string) ($request['unavailable_quantity_total'] ?? $request['unavailable_quantity'] ?? 0),
     ];
 }
 
@@ -290,13 +297,12 @@ $priorityBadgeClass = static function (?string $priority): string {
 </section>
 
 <?php foreach ($requestSections as $sectionTitle => $section): ?>
-    <?php $groupedRequests = $groupRequests($section['requests']); ?>
     <section class="card" style="margin-top:24px;">
         <div style="padding:22px 22px 12px;">
             <div class="topbar">
                 <div>
                     <h2 style="margin:0;"><?= e($sectionTitle) ?></h2>
-                    <p class="muted" style="margin:6px 0 0;"><?= e($section['empty']) ?> Regroupement visuel par produit pour accelerer la lecture.</p>
+                    <p class="muted" style="margin:6px 0 0;"><?= e($section['empty']) ?> Chaque demande reste group&eacute;e en un seul bloc pour &eacute;viter de m&eacute;langer les produits.</p>
                 </div>
                 <span class="pill badge-neutral"><?= e($section['counter']) ?></span>
             </div>
@@ -307,100 +313,123 @@ $priorityBadgeClass = static function (?string $priority): string {
                 <p class="muted">Aucune demande dans cette etape.</p>
             </div>
         <?php else: ?>
-            <div style="padding:0 22px 22px;">
-                <?php foreach ($groupedRequests as $productName => $productRequests): ?>
-                    <?php $productGroupId = $groupDomId($section['dom_id'], $productName); ?>
-                    <div style="border-top:1px solid var(--line); padding-top:16px; margin-top:16px;">
-                        <div class="topbar" style="margin-bottom:10px;">
+            <div style="padding:0 22px 22px;" class="section-stack">
+                <?php foreach ($section['requests'] as $index => $request): ?>
+                    <?php $requestItems = $kitchenStockRequestItemsByRequest[(int) $request['id']] ?? []; ?>
+                    <details class="<?= $index >= $activePreviewLimit ? 'history-extra' : '' ?>" data-history-group="<?= e($section['dom_id']) ?>" <?= $index >= $activePreviewLimit ? 'style="display:none;"' : '' ?> open style="border-top:1px solid var(--line); padding-top:16px;">
+                        <summary style="cursor:pointer; list-style:none; display:flex; justify-content:space-between; gap:12px; align-items:flex-start;">
                             <div>
-                                <h3 style="margin:0;"><?= e($productName) ?></h3>
-                                <p class="muted" style="margin:6px 0 0;"><?= e((string) count($productRequests)) ?> ligne(s) pour ce produit.</p>
+                                <strong>Demande #<?= e((string) $request['id']) ?></strong>
+                                <div class="muted"><?= e($request['requested_by_name'] ?? '-') ?> · <?= e(format_date_fr($request['created_at'] ?? null, $historyTimezone)) ?></div>
+                                <div class="muted"><?= e((string) ($request['item_count'] ?? count($requestItems) ?: 1)) ?> produit(s) demand&eacute;(s)</div>
                             </div>
-                            <span class="pill badge-neutral"><?= e((string) count($productRequests)) ?></span>
-                        </div>
+                            <div style="text-align:right;">
+                                <span class="pill <?= e($stockBadgeClass($request['status'] ?? null)) ?>"><?= e(stock_request_status_label($request['status'] ?? null)) ?></span>
+                                <div class="muted" style="margin-top:6px;"><?= e((string) ($request['quantity_requested_total'] ?? $request['quantity_requested'] ?? 0)) ?> demand&eacute;(s)</div>
+                            </div>
+                        </summary>
 
-                        <div class="table-wrap">
+                        <div class="table-wrap" style="margin-top:14px;">
                             <table>
                                 <thead>
                                 <tr>
-                                    <th>Heure</th>
-                                    <th>Demandeur cuisine</th>
-                                    <th>Demande</th>
+                                    <th>Produit</th>
+                                    <th>Demand&eacute;</th>
                                     <th>Fourni</th>
                                     <th>Non fourni</th>
-                                    <th>Priorite</th>
+                                    <th>Priorit&eacute;</th>
                                     <th>Statut</th>
-                                    <th>Trace des acteurs</th>
-                                    <th>Notes</th>
-                                    <th>Action stock</th>
+                                    <th>Note cuisine</th>
+                                    <th>Note stock</th>
                                 </tr>
                                 </thead>
                                 <tbody>
-                                <?php foreach ($productRequests as $index => $request): ?>
-                                    <tr class="<?= $index >= $activePreviewLimit ? 'history-extra' : '' ?>" data-history-group="<?= e($productGroupId) ?>" <?= $index >= $activePreviewLimit ? 'style="display:none;"' : '' ?>>
-                                        <td><?= e(format_date_fr($request['created_at'] ?? null, $historyTimezone)) ?></td>
-                                        <td><?= e($request['requested_by_name'] ?? '-') ?></td>
-                                        <td><?= e((string) $request['quantity_requested']) ?> <?= e((string) ($request['unit_name'] ?? '')) ?></td>
-                                        <td><?= e((string) $request['quantity_supplied']) ?> <?= e((string) ($request['unit_name'] ?? '')) ?></td>
-                                        <td><?= e((string) $request['unavailable_quantity']) ?> <?= e((string) ($request['unit_name'] ?? '')) ?></td>
-                                        <td><span class="pill <?= e($priorityBadgeClass($request['priority_level'] ?? null)) ?>"><?= e(priority_label($request['priority_level'] ?? null)) ?></span></td>
-                                        <td><span class="pill <?= e($stockBadgeClass($request['status'] ?? null)) ?>"><?= e(stock_request_status_label($request['status'] ?? null)) ?></span></td>
-                                        <td style="min-width:220px;">
-                                            <div><strong>Demande :</strong> <?= e(signed_actor_line('Demande', $request['requested_by_name'] ?: null, 'kitchen', $request['created_at'] ?? null, $restaurant, $historyTimezone)) ?></div>
-                                            <div><strong>Prise en charge :</strong> <?= e(signed_actor_line('Pris en charge', $request['responded_by_name'] ?: null, 'stock_manager', $request['responded_at'] ?? null, $restaurant, $historyTimezone)) ?></div>
-                                            <div><strong>Reception cuisine :</strong> <?= e(signed_actor_line('Recu', $request['received_by_name'] ?: null, 'kitchen', $request['received_at'] ?? null, $restaurant, $historyTimezone)) ?></div>
-                                            <div><strong>Heure reponse :</strong> <?= e(format_date_fr($request['responded_at'] ?? null, $historyTimezone)) ?></div>
-                                        </td>
-                                        <td style="min-width:220px;">
-                                            <div><strong>Note cuisine :</strong> <?= e((string) ($request['note'] ?: '-')) ?></div>
-                                            <div><strong>Note stock :</strong> <?= e((string) ($request['response_note'] ?: '-')) ?></div>
-                                        </td>
-                                        <td style="min-width:260px;">
-                                            <?php if (can_access('stock.request.respond')): ?>
-                                                <form method="post" action="/stock/demandes-cuisine/<?= e((string) $request['id']) ?>/reponse">
-                                                    <label>Quantite reellement fournie</label>
-                                                    <input name="quantity_supplied" value="<?= e((string) ((float) $request['quantity_supplied'] > 0 ? (float) $request['quantity_supplied'] : (float) $request['quantity_requested'])) ?>">
-                                                    <label>Classement</label>
-                                                    <select name="planning_status">
-                                                        <option value="">Aucun</option>
-                                                        <option value="urgence" <?= ($request['planning_status'] ?? '') === 'urgence' ? 'selected' : '' ?>>Urgence</option>
-                                                        <option value="a_prevoir" <?= ($request['planning_status'] ?? '') === 'a_prevoir' ? 'selected' : '' ?>>A prevoir</option>
-                                                    </select>
-                                                    <label>Reponse stock</label>
-                                                    <textarea name="note"><?= e((string) ($request['response_note'] ?: $request['note'])) ?></textarea>
-                                                    <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:10px;">
-                                                        <button type="submit" name="workflow_stage" value="EN_COURS_TRAITEMENT">Prendre en charge</button>
-                                                        <button type="submit" name="status" value="FOURNI_TOTAL">Valider fourni totalement</button>
-                                                        <button type="submit" name="status" value="FOURNI_PARTIEL">Valider fourni partiellement</button>
-                                                        <button type="submit" name="status" value="NON_FOURNI">Valider non fourni</button>
-                                                    </div>
-                                                </form>
-                                            <?php else: ?>
-                                                <span class="muted">Lecture seule.</span>
-                                            <?php endif; ?>
-
-                                            <?php if (can_access('stock.damage.signal')): ?>
-                                                <form method="post" action="/stock/demandes-cuisine/<?= e((string) $request['id']) ?>/incident" style="margin-top:14px;">
-                                                    <label>Soumettre un cas complexe au gerant</label>
-                                                    <input type="hidden" name="reported_category" value="litige_stock">
-                                                    <input name="quantity_affected" value="<?= e((string) ((float) $request['quantity_supplied'] > 0 ? (float) $request['quantity_supplied'] : (float) $request['quantity_requested'])) ?>">
-                                                    <textarea name="signal_notes">Cas complexe stock a arbitrer a partir de la trace reelle de la demande cuisine.</textarea>
-                                                    <button type="submit">Soumettre au gerant</button>
-                                                </form>
-                                            <?php endif; ?>
-                                        </td>
+                                <?php foreach ($requestItems as $item): ?>
+                                    <tr>
+                                        <td><strong><?= e($item['stock_item_name'] ?? '-') ?></strong></td>
+                                        <td><?= e((string) ($item['quantity_requested'] ?? 0)) ?> <?= e((string) ($item['unit_name'] ?? '')) ?></td>
+                                        <td><?= e((string) ($item['quantity_supplied'] ?? 0)) ?> <?= e((string) ($item['unit_name'] ?? '')) ?></td>
+                                        <td><?= e((string) ($item['unavailable_quantity'] ?? 0)) ?> <?= e((string) ($item['unit_name'] ?? '')) ?></td>
+                                        <td><span class="pill <?= e($priorityBadgeClass($item['priority_level'] ?? null)) ?>"><?= e(priority_label($item['priority_level'] ?? null)) ?></span></td>
+                                        <td><span class="pill <?= e($stockBadgeClass($item['status'] ?? null)) ?>"><?= e(stock_request_status_label($item['status'] ?? null)) ?></span></td>
+                                        <td><?= e((string) (($item['note'] ?? '') !== '' ? $item['note'] : '-')) ?></td>
+                                        <td><?= e((string) (($item['response_note'] ?? '') !== '' ? $item['response_note'] : '-')) ?></td>
                                     </tr>
                                 <?php endforeach; ?>
                                 </tbody>
                             </table>
                         </div>
 
-                        <?php if (count($productRequests) > $activePreviewLimit): ?>
-                            <div style="padding-top:12px;">
-                                <button type="button" data-history-toggle="<?= e($productGroupId) ?>">Voir plus</button>
-                            </div>
-                        <?php endif; ?>
-                    </div>
+                        <div style="margin-top:14px;">
+                            <div><strong>Demande :</strong> <?= e(signed_actor_line('Demande', $request['requested_by_name'] ?: null, 'kitchen', $request['created_at'] ?? null, $restaurant, $historyTimezone)) ?></div>
+                            <div><strong>Prise en charge :</strong> <?= e(signed_actor_line('Pris en charge', $request['responded_by_name'] ?: null, 'stock_manager', $request['responded_at'] ?? null, $restaurant, $historyTimezone)) ?></div>
+                            <div><strong>Reception cuisine :</strong> <?= e(signed_actor_line('Recu', $request['received_by_name'] ?: null, 'kitchen', $request['received_at'] ?? null, $restaurant, $historyTimezone)) ?></div>
+                            <div><strong>Note generale :</strong> <?= e((string) ($request['note'] ?: '-')) ?></div>
+                        </div>
+
+                        <div style="margin-top:14px;">
+                            <?php if (can_access('stock.request.respond')): ?>
+                                <form method="post" action="/stock/demandes-cuisine/<?= e((string) $request['id']) ?>/reponse">
+                                    <div class="table-wrap">
+                                        <table>
+                                            <thead>
+                                            <tr>
+                                                <th>Produit</th>
+                                                <th>Quantit&eacute; fournie</th>
+                                                <th>Quantit&eacute; non fournie</th>
+                                                <th>Classement</th>
+                                                <th>Note stock</th>
+                                            </tr>
+                                            </thead>
+                                            <tbody>
+                                            <?php foreach ($requestItems as $item): ?>
+                                                <?php
+                                                $requestedQuantity = (float) ($item['quantity_requested'] ?? 0);
+                                                $currentSupplied = (float) (($item['quantity_supplied'] ?? 0) > 0 ? $item['quantity_supplied'] : $requestedQuantity);
+                                                if ((string) ($item['status'] ?? '') === 'NON_FOURNI') {
+                                                    $currentSupplied = 0;
+                                                }
+                                                $currentUnavailable = max($requestedQuantity - $currentSupplied, 0);
+                                                ?>
+                                                <tr>
+                                                    <td><?= e($item['stock_item_name'] ?? '-') ?></td>
+                                                    <td><input name="items[<?= e((string) $item['id']) ?>][quantity_supplied]" value="<?= e((string) $currentSupplied) ?>"></td>
+                                                    <td><input value="<?= e((string) $currentUnavailable) ?>" readonly></td>
+                                                    <td>
+                                                        <select name="items[<?= e((string) $item['id']) ?>][planning_status]">
+                                                            <option value="">Aucun</option>
+                                                            <option value="urgence" <?= ($item['planning_status'] ?? '') === 'urgence' ? 'selected' : '' ?>>Urgence</option>
+                                                            <option value="a_prevoir" <?= ($item['planning_status'] ?? '') === 'a_prevoir' ? 'selected' : '' ?>>A prevoir</option>
+                                                        </select>
+                                                    </td>
+                                                    <td><textarea name="items[<?= e((string) $item['id']) ?>][response_note]"><?= e((string) (($item['response_note'] ?? '') !== '' ? $item['response_note'] : ($item['note'] ?? ''))) ?></textarea></td>
+                                                </tr>
+                                            <?php endforeach; ?>
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                    <label>Note globale stock</label>
+                                    <textarea name="note"><?= e((string) ($request['response_note'] ?: $request['note'])) ?></textarea>
+                                    <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:10px;">
+                                        <button type="submit" name="workflow_stage" value="EN_COURS_TRAITEMENT">Prendre en charge</button>
+                                        <button type="submit">Valider la remise globale</button>
+                                    </div>
+                                </form>
+                            <?php else: ?>
+                                <span class="muted">Lecture seule.</span>
+                            <?php endif; ?>
+
+                            <?php if (can_access('stock.damage.signal')): ?>
+                                <form method="post" action="/stock/demandes-cuisine/<?= e((string) $request['id']) ?>/incident" style="margin-top:14px;">
+                                    <label>Soumettre un cas complexe au gerant</label>
+                                    <input type="hidden" name="reported_category" value="litige_stock">
+                                    <input name="quantity_affected" value="<?= e((string) ($request['quantity_requested_total'] ?? $request['quantity_requested'] ?? 0)) ?>">
+                                    <textarea name="signal_notes">Cas complexe stock a arbitrer a partir de la trace reelle de la demande cuisine.</textarea>
+                                    <button type="submit">Soumettre au gerant</button>
+                                </form>
+                            <?php endif; ?>
+                        </div>
+                    </details>
                 <?php endforeach; ?>
             </div>
         <?php endif; ?>

@@ -467,6 +467,7 @@ final class StockService
 
     public function listKitchenStockRequests(int $restaurantId): array
     {
+        $this->ensureKitchenStockRequestItemsTable();
         $statement = $this->database->pdo()->prepare(
             'SELECT ksr.*,
                     si.name AS stock_item_name,
@@ -487,28 +488,91 @@ final class StockService
         return $statement->fetchAll(PDO::FETCH_ASSOC);
     }
 
+    public function listKitchenStockRequestBlocks(int $restaurantId): array
+    {
+        $headers = $this->listKitchenStockRequests($restaurantId);
+        $requestIds = array_map(static fn (array $row): int => (int) $row['id'], $headers);
+        $itemsByRequest = $this->kitchenStockRequestItemsByRequest($restaurantId, $requestIds);
+
+        foreach ($headers as &$header) {
+            $requestId = (int) $header['id'];
+            $items = $itemsByRequest[$requestId] ?? [];
+            if ($items === []) {
+                $items = [$this->legacyKitchenStockRequestAsItem($header)];
+                $itemsByRequest[$requestId] = $items;
+            }
+
+            $header['item_count'] = count($items);
+            $header['products_summary'] = count($items) . ' produit(s) demande(s)';
+            $header['quantity_requested_total'] = array_sum(array_map(static fn (array $item): float => (float) ($item['quantity_requested'] ?? 0), $items));
+            $header['quantity_supplied_total'] = array_sum(array_map(static fn (array $item): float => (float) ($item['quantity_supplied'] ?? 0), $items));
+            $header['unavailable_quantity_total'] = array_sum(array_map(static fn (array $item): float => (float) ($item['unavailable_quantity'] ?? 0), $items));
+            $header['status'] = $this->resolveKitchenStockRequestStatus($items, (string) ($header['status'] ?? 'DEMANDE'));
+        }
+        unset($header);
+
+        return [
+            'requests' => $headers,
+            'items_by_request' => $itemsByRequest,
+        ];
+    }
+
     public function createKitchenStockRequest(int $restaurantId, array $payload, array $actor): void
     {
-        $item = $this->findStockItemInRestaurant((int) $payload['stock_item_id'], $restaurantId);
-        $quantityRequested = (float) $payload['quantity_requested'];
-        if ($quantityRequested <= 0) {
-            throw new \RuntimeException('Quantite demandee au stock obligatoire.');
-        }
+        $this->ensureKitchenStockRequestItemsTable();
+        $items = $this->normalizeKitchenStockRequestItems($restaurantId, $payload);
+        $priorityLevel = $this->resolveKitchenStockPriority($items, (string) ($payload['priority_level'] ?? 'normale'));
+        $requestNote = trim((string) ($payload['note'] ?? 'Demande cuisine vers stock.'));
+        $totalRequested = array_sum(array_map(static fn (array $item): float => (float) $item['quantity_requested'], $items));
+        $primaryItem = $items[0];
 
-        $statement = $this->database->pdo()->prepare(
-            'INSERT INTO kitchen_stock_requests
-            (restaurant_id, requested_by, stock_item_id, quantity_requested, quantity_supplied, unavailable_quantity, status, priority_level, planning_status, note, response_note, responded_by, received_by, created_at, responded_at, received_at, updated_at)
-             VALUES
-            (:restaurant_id, :requested_by, :stock_item_id, :quantity_requested, 0, :quantity_requested, "DEMANDE", :priority_level, NULL, :note, NULL, NULL, NULL, NOW(), NULL, NULL, NOW())'
-        );
-        $statement->execute([
-            'restaurant_id' => $restaurantId,
-            'requested_by' => $actor['id'],
-            'stock_item_id' => $item['id'],
-            'quantity_requested' => $quantityRequested,
-            'priority_level' => ($payload['priority_level'] ?? 'normale') === 'urgente' ? 'urgente' : 'normale',
-            'note' => trim((string) ($payload['note'] ?? 'Demande cuisine vers stock.')),
-        ]);
+        $pdo = $this->database->pdo();
+        $pdo->beginTransaction();
+
+        try {
+            $statement = $pdo->prepare(
+                'INSERT INTO kitchen_stock_requests
+                (restaurant_id, requested_by, stock_item_id, quantity_requested, quantity_supplied, unavailable_quantity, status, priority_level, planning_status, note, response_note, responded_by, received_by, created_at, responded_at, received_at, updated_at)
+                 VALUES
+                (:restaurant_id, :requested_by, :stock_item_id, :quantity_requested, 0, :quantity_requested, "DEMANDE", :priority_level, NULL, :note, NULL, NULL, NULL, NOW(), NULL, NULL, NOW())'
+            );
+            $statement->execute([
+                'restaurant_id' => $restaurantId,
+                'requested_by' => $actor['id'],
+                'stock_item_id' => $primaryItem['stock_item_id'],
+                'quantity_requested' => $totalRequested,
+                'priority_level' => $priorityLevel,
+                'note' => $requestNote,
+            ]);
+
+            $requestId = (int) $pdo->lastInsertId();
+            $itemStatement = $pdo->prepare(
+                'INSERT INTO kitchen_stock_request_items
+                (request_id, restaurant_id, stock_item_id, quantity_requested, quantity_supplied, unavailable_quantity, status, priority_level, planning_status, note, response_note, responded_by, received_by, created_at, responded_at, received_at, updated_at)
+                 VALUES
+                (:request_id, :restaurant_id, :stock_item_id, :quantity_requested, 0, :unavailable_quantity, "DEMANDE", :priority_level, NULL, :note, NULL, NULL, NULL, NOW(), NULL, NULL, NOW())'
+            );
+
+            foreach ($items as $item) {
+                $itemStatement->execute([
+                    'request_id' => $requestId,
+                    'restaurant_id' => $restaurantId,
+                    'stock_item_id' => $item['stock_item_id'],
+                    'quantity_requested' => $item['quantity_requested'],
+                    'unavailable_quantity' => $item['quantity_requested'],
+                    'priority_level' => $item['priority_level'],
+                    'note' => $item['note'] !== '' ? $item['note'] : null,
+                ]);
+            }
+
+            $pdo->commit();
+        } catch (\Throwable $throwable) {
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+
+            throw $throwable;
+        }
 
         Container::getInstance()->get('audit')->log([
             'restaurant_id' => $restaurantId,
@@ -518,12 +582,12 @@ final class StockService
             'module_name' => 'stock',
             'action_name' => 'kitchen_stock_request_created',
             'entity_type' => 'kitchen_stock_requests',
-            'entity_id' => (string) $this->database->pdo()->lastInsertId(),
+            'entity_id' => (string) $requestId,
             'new_values' => [
-                'stock_item_id' => $item['id'],
-                'stock_item_name' => $item['name'],
-                'quantity_requested' => $quantityRequested,
-                'note' => $payload['note'] ?? null,
+                'items' => $items,
+                'quantity_requested_total' => $totalRequested,
+                'priority_level' => $priorityLevel,
+                'note' => $requestNote,
             ],
             'justification' => 'Demande cuisine vers stock',
         ]);
@@ -532,11 +596,18 @@ final class StockService
     public function respondKitchenStockRequest(int $restaurantId, int $requestId, array $payload, array $actor): void
     {
         $request = $this->findKitchenStockRequestInRestaurant($requestId, $restaurantId);
+        $requestItems = $this->kitchenStockRequestItemsForRequest($restaurantId, $requestId);
+        if ($requestItems !== []) {
+            $this->respondKitchenStockRequestBlock($restaurantId, $request, $requestItems, $payload, $actor);
+            return;
+        }
+
         $item = $this->findStockItemInRestaurant((int) $request['stock_item_id'], $restaurantId);
-        $quantitySupplied = max(0.0, (float) ($payload['quantity_supplied'] ?? 0));
+        $legacyLine = is_array(($payload['items'] ?? null)) ? reset($payload['items']) : null;
+        $quantitySupplied = max(0.0, (float) ($payload['quantity_supplied'] ?? ($legacyLine['quantity_supplied'] ?? 0)));
         $workflowStage = (string) ($payload['workflow_stage'] ?? 'FINALISER');
         $status = (string) ($payload['status'] ?? 'FOURNI_TOTAL');
-        $planningStatus = (string) ($payload['planning_status'] ?? '');
+        $planningStatus = (string) ($payload['planning_status'] ?? ($legacyLine['planning_status'] ?? ''));
 
         if (!in_array($workflowStage, ['EN_COURS_TRAITEMENT', 'FINALISER'], true)) {
             throw new \RuntimeException('Etape de traitement stock invalide.');
@@ -618,7 +689,7 @@ final class StockService
                  updated_at = NOW()
              WHERE id = :id AND restaurant_id = :restaurant_id'
         );
-        $responseNote = trim((string) ($payload['response_note'] ?? $payload['note'] ?? $request['response_note'] ?? $request['note']));
+        $responseNote = trim((string) ($payload['response_note'] ?? ($legacyLine['response_note'] ?? null) ?? $payload['note'] ?? $request['response_note'] ?? $request['note']));
         $statement->execute([
             'quantity_supplied' => $quantitySupplied,
             'unavailable_quantity' => $unavailableQuantity,
@@ -652,6 +723,13 @@ final class StockService
     public function confirmKitchenStockReceipt(int $restaurantId, int $requestId, array $actor): void
     {
         $request = $this->findKitchenStockRequestInRestaurant($requestId, $restaurantId);
+        $requestItems = $this->kitchenStockRequestItemsForRequest($restaurantId, $requestId);
+
+        if ($requestItems !== []) {
+            $this->confirmKitchenStockReceiptBlock($restaurantId, $request, $requestItems, $actor);
+            return;
+        }
+
         if ((int) $request['requested_by'] !== (int) $actor['id'] && ($actor['role_code'] ?? null) !== 'manager') {
             throw new \RuntimeException('Cette reception ne peut pas etre confirmee par cet utilisateur.');
         }
@@ -974,6 +1052,490 @@ final class StockService
         return $request;
     }
 
+    private function respondKitchenStockRequestBlock(int $restaurantId, array $request, array $requestItems, array $payload, array $actor): void
+    {
+        $workflowStage = (string) ($payload['workflow_stage'] ?? 'FINALISER');
+        if (!in_array($workflowStage, ['EN_COURS_TRAITEMENT', 'FINALISER'], true)) {
+            throw new \RuntimeException('Etape de traitement stock invalide.');
+        }
+
+        if ($workflowStage === 'EN_COURS_TRAITEMENT') {
+            $this->markKitchenStockRequestProcessing($restaurantId, (int) $request['id'], $requestItems, $payload, $actor);
+            return;
+        }
+
+        $rawItems = $payload['items'] ?? [];
+        if (!is_array($rawItems) || $rawItems === []) {
+            throw new \RuntimeException('Aucune ligne de reponse stock fournie.');
+        }
+
+        $normalizedById = [];
+        foreach ($requestItems as $requestItem) {
+            $itemId = (int) $requestItem['id'];
+            $line = $rawItems[$itemId] ?? null;
+            if (!is_array($line)) {
+                throw new \RuntimeException('Toutes les lignes de la demande doivent recevoir une reponse.');
+            }
+
+            $stockItem = $this->findStockItemInRestaurant((int) $requestItem['stock_item_id'], $restaurantId);
+            $quantityRequested = (float) $requestItem['quantity_requested'];
+            $quantitySupplied = max(0.0, (float) ($line['quantity_supplied'] ?? 0));
+            if ($quantitySupplied > $quantityRequested) {
+                throw new \RuntimeException('La quantite fournie ne peut pas depasser la demande cuisine.');
+            }
+            if ($quantitySupplied > (float) $stockItem['quantity_in_stock']) {
+                throw new \RuntimeException('Quantite fournie superieure au stock disponible.');
+            }
+
+            $unavailableQuantity = max($quantityRequested - $quantitySupplied, 0);
+            $status = match (true) {
+                $quantitySupplied <= 0 => 'NON_FOURNI',
+                abs($quantitySupplied - $quantityRequested) < 0.0001 => 'FOURNI_TOTAL',
+                default => 'FOURNI_PARTIEL',
+            };
+
+            $normalizedById[$itemId] = [
+                'quantity_supplied' => $quantitySupplied,
+                'unavailable_quantity' => $unavailableQuantity,
+                'status' => $status,
+                'planning_status' => trim((string) ($line['planning_status'] ?? '')),
+                'response_note' => trim((string) ($line['response_note'] ?? $line['note'] ?? '')),
+                'note' => trim((string) ($line['note'] ?? $requestItem['note'] ?? '')),
+            ];
+
+            if ($status === 'NON_FOURNI' && $normalizedById[$itemId]['planning_status'] === '') {
+                throw new \RuntimeException('Classer toute ligne non fournie en urgence ou a prevoir.');
+            }
+        }
+
+        $pdo = $this->database->pdo();
+        $pdo->beginTransaction();
+
+        try {
+            $itemStatement = $pdo->prepare(
+                'UPDATE kitchen_stock_request_items
+                 SET quantity_supplied = :quantity_supplied,
+                     unavailable_quantity = :unavailable_quantity,
+                     status = :status,
+                     planning_status = :planning_status,
+                     note = :note,
+                     response_note = :response_note,
+                     responded_by = :responded_by,
+                     responded_at = NOW(),
+                     updated_at = NOW()
+                 WHERE id = :id AND restaurant_id = :restaurant_id'
+            );
+
+            $totalSupplied = 0.0;
+            $totalUnavailable = 0.0;
+            $lineStatuses = [];
+
+            foreach ($requestItems as $requestItem) {
+                $itemId = (int) $requestItem['id'];
+                $line = $normalizedById[$itemId];
+                $itemStatement->execute([
+                    'quantity_supplied' => $line['quantity_supplied'],
+                    'unavailable_quantity' => $line['unavailable_quantity'],
+                    'status' => $line['status'],
+                    'planning_status' => $line['planning_status'] !== '' ? $line['planning_status'] : null,
+                    'note' => $line['note'] !== '' ? $line['note'] : null,
+                    'response_note' => $line['response_note'] !== '' ? $line['response_note'] : null,
+                    'responded_by' => $actor['id'],
+                    'id' => $itemId,
+                    'restaurant_id' => $restaurantId,
+                ]);
+                $totalSupplied += $line['quantity_supplied'];
+                $totalUnavailable += $line['unavailable_quantity'];
+                $lineStatuses[] = $line['status'];
+            }
+
+            $headerStatus = $this->resolveKitchenStockHeaderStatus($lineStatuses);
+            $responseNote = trim((string) ($payload['response_note'] ?? $payload['note'] ?? $request['response_note'] ?? $request['note']));
+            $headerNote = trim((string) ($payload['note'] ?? $request['note']));
+            $headerPlanning = trim((string) ($payload['planning_status'] ?? ''));
+
+            $headerStatement = $pdo->prepare(
+                'UPDATE kitchen_stock_requests
+                 SET quantity_supplied = :quantity_supplied,
+                     unavailable_quantity = :unavailable_quantity,
+                     status = :status,
+                     planning_status = :planning_status,
+                     note = :note,
+                     response_note = :response_note,
+                     responded_by = :responded_by,
+                     responded_at = NOW(),
+                     updated_at = NOW()
+                 WHERE id = :id AND restaurant_id = :restaurant_id'
+            );
+            $headerStatement->execute([
+                'quantity_supplied' => $totalSupplied,
+                'unavailable_quantity' => $totalUnavailable,
+                'status' => $headerStatus,
+                'planning_status' => $headerPlanning !== '' ? $headerPlanning : null,
+                'note' => $headerNote !== '' ? $headerNote : null,
+                'response_note' => $responseNote !== '' ? $responseNote : null,
+                'responded_by' => $actor['id'],
+                'id' => (int) $request['id'],
+                'restaurant_id' => $restaurantId,
+            ]);
+
+            $pdo->commit();
+        } catch (\Throwable $throwable) {
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+
+            throw $throwable;
+        }
+
+        Container::getInstance()->get('audit')->log([
+            'restaurant_id' => $restaurantId,
+            'user_id' => $actor['id'],
+            'actor_name' => $actor['full_name'],
+            'actor_role_code' => $actor['role_code'],
+            'module_name' => 'stock',
+            'action_name' => 'kitchen_stock_request_responded',
+            'entity_type' => 'kitchen_stock_requests',
+            'entity_id' => (string) $request['id'],
+            'new_values' => [
+                'items' => $normalizedById,
+                'status' => $this->resolveKitchenStockHeaderStatus(array_column($normalizedById, 'status')),
+            ],
+            'justification' => 'Reponse stock globale a la demande cuisine multi-produits',
+        ]);
+    }
+
+    private function confirmKitchenStockReceiptBlock(int $restaurantId, array $request, array $requestItems, array $actor): void
+    {
+        if ((int) $request['requested_by'] !== (int) $actor['id'] && ($actor['role_code'] ?? null) !== 'manager') {
+            throw new \RuntimeException('Cette reception ne peut pas etre confirmee par cet utilisateur.');
+        }
+
+        foreach ($requestItems as $requestItem) {
+            if (!in_array((string) ($requestItem['status'] ?? ''), ['FOURNI_TOTAL', 'FOURNI_PARTIEL', 'NON_FOURNI'], true)) {
+                throw new \RuntimeException('La demande stock n est pas encore prete a etre receptionnee.');
+            }
+        }
+
+        $pdo = $this->database->pdo();
+        $pdo->beginTransaction();
+
+        try {
+            $itemStatement = $pdo->prepare(
+                'UPDATE kitchen_stock_request_items
+                 SET received_by = :received_by,
+                     received_at = NOW(),
+                     updated_at = NOW()
+                 WHERE request_id = :request_id AND restaurant_id = :restaurant_id'
+            );
+            $itemStatement->execute([
+                'received_by' => $actor['id'],
+                'request_id' => (int) $request['id'],
+                'restaurant_id' => $restaurantId,
+            ]);
+
+            $headerStatement = $pdo->prepare(
+                'UPDATE kitchen_stock_requests
+                 SET status = "CLOTURE",
+                     received_by = :received_by,
+                     received_at = NOW(),
+                     updated_at = NOW()
+                 WHERE id = :id AND restaurant_id = :restaurant_id'
+            );
+            $headerStatement->execute([
+                'received_by' => $actor['id'],
+                'id' => (int) $request['id'],
+                'restaurant_id' => $restaurantId,
+            ]);
+
+            $pdo->commit();
+        } catch (\Throwable $throwable) {
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+
+            throw $throwable;
+        }
+
+        Container::getInstance()->get('audit')->log([
+            'restaurant_id' => $restaurantId,
+            'user_id' => $actor['id'],
+            'actor_name' => $actor['full_name'],
+            'actor_role_code' => $actor['role_code'],
+            'module_name' => 'stock',
+            'action_name' => 'kitchen_stock_request_received',
+            'entity_type' => 'kitchen_stock_requests',
+            'entity_id' => (string) $request['id'],
+            'new_values' => ['status' => 'CLOTURE', 'item_count' => count($requestItems)],
+            'justification' => 'Reception globale du stock confirmee par la cuisine',
+        ]);
+    }
+
+    private function markKitchenStockRequestProcessing(int $restaurantId, int $requestId, array $requestItems, array $payload, array $actor): void
+    {
+        $planningStatus = trim((string) ($payload['planning_status'] ?? ''));
+        $note = trim((string) ($payload['note'] ?? ''));
+        $pdo = $this->database->pdo();
+        $pdo->beginTransaction();
+
+        try {
+            $itemStatement = $pdo->prepare(
+                'UPDATE kitchen_stock_request_items
+                 SET status = "EN_COURS_TRAITEMENT",
+                     planning_status = COALESCE(:planning_status, planning_status),
+                     note = COALESCE(:note, note),
+                     responded_by = :responded_by,
+                     responded_at = COALESCE(responded_at, NOW()),
+                     updated_at = NOW()
+                 WHERE request_id = :request_id AND restaurant_id = :restaurant_id'
+            );
+            $itemStatement->execute([
+                'planning_status' => $planningStatus !== '' ? $planningStatus : null,
+                'note' => $note !== '' ? $note : null,
+                'responded_by' => $actor['id'],
+                'request_id' => $requestId,
+                'restaurant_id' => $restaurantId,
+            ]);
+
+            $headerStatement = $pdo->prepare(
+                'UPDATE kitchen_stock_requests
+                 SET status = "EN_COURS_TRAITEMENT",
+                     planning_status = COALESCE(:planning_status, planning_status),
+                     note = COALESCE(:note, note),
+                     responded_by = :responded_by,
+                     responded_at = COALESCE(responded_at, NOW()),
+                     updated_at = NOW()
+                 WHERE id = :id AND restaurant_id = :restaurant_id'
+            );
+            $headerStatement->execute([
+                'planning_status' => $planningStatus !== '' ? $planningStatus : null,
+                'note' => $note !== '' ? $note : null,
+                'responded_by' => $actor['id'],
+                'id' => $requestId,
+                'restaurant_id' => $restaurantId,
+            ]);
+
+            $pdo->commit();
+        } catch (\Throwable $throwable) {
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+
+            throw $throwable;
+        }
+
+        Container::getInstance()->get('audit')->log([
+            'restaurant_id' => $restaurantId,
+            'user_id' => $actor['id'],
+            'actor_name' => $actor['full_name'],
+            'actor_role_code' => $actor['role_code'],
+            'module_name' => 'stock',
+            'action_name' => 'kitchen_stock_request_processing_started',
+            'entity_type' => 'kitchen_stock_requests',
+            'entity_id' => (string) $requestId,
+            'new_values' => ['workflow_stage' => 'EN_COURS_TRAITEMENT', 'item_count' => count($requestItems)],
+            'justification' => 'Demande cuisine multi-produits prise en charge par le stock',
+        ]);
+    }
+
+    private function normalizeKitchenStockRequestItems(int $restaurantId, array $payload): array
+    {
+        $rawItems = $payload['items'] ?? [];
+        $normalized = [];
+
+        if (is_array($rawItems) && $rawItems !== []) {
+            foreach ($rawItems as $line) {
+                if (!is_array($line)) {
+                    continue;
+                }
+
+                $stockItemId = (int) ($line['stock_item_id'] ?? 0);
+                $quantityRequested = (float) ($line['quantity_requested'] ?? 0);
+                if ($stockItemId <= 0 || $quantityRequested <= 0) {
+                    continue;
+                }
+
+                $item = $this->findStockItemInRestaurant($stockItemId, $restaurantId);
+                $normalized[] = [
+                    'stock_item_id' => (int) $item['id'],
+                    'stock_item_name' => (string) $item['name'],
+                    'unit_name' => (string) $item['unit_name'],
+                    'quantity_requested' => $quantityRequested,
+                    'priority_level' => (($line['priority_level'] ?? 'normale') === 'urgente') ? 'urgente' : 'normale',
+                    'note' => trim((string) ($line['note'] ?? '')),
+                ];
+            }
+        }
+
+        if ($normalized !== []) {
+            return $normalized;
+        }
+
+        $item = $this->findStockItemInRestaurant((int) $payload['stock_item_id'], $restaurantId);
+        $quantityRequested = (float) ($payload['quantity_requested'] ?? 0);
+        if ($quantityRequested <= 0) {
+            throw new \RuntimeException('Quantite demandee au stock obligatoire.');
+        }
+
+        return [[
+            'stock_item_id' => (int) $item['id'],
+            'stock_item_name' => (string) $item['name'],
+            'unit_name' => (string) $item['unit_name'],
+            'quantity_requested' => $quantityRequested,
+            'priority_level' => (($payload['priority_level'] ?? 'normale') === 'urgente') ? 'urgente' : 'normale',
+            'note' => trim((string) ($payload['line_note'] ?? $payload['note'] ?? '')),
+        ]];
+    }
+
+    private function resolveKitchenStockPriority(array $items, string $fallback): string
+    {
+        foreach ($items as $item) {
+            if (($item['priority_level'] ?? 'normale') === 'urgente') {
+                return 'urgente';
+            }
+        }
+
+        return $fallback === 'urgente' ? 'urgente' : 'normale';
+    }
+
+    private function kitchenStockRequestItemsByRequest(int $restaurantId, array $requestIds): array
+    {
+        $this->ensureKitchenStockRequestItemsTable();
+        if ($requestIds === []) {
+            return [];
+        }
+
+        $idList = implode(',', array_map('intval', $requestIds));
+        $statement = $this->database->pdo()->query(
+            'SELECT ksri.*,
+                    si.name AS stock_item_name,
+                    si.unit_name,
+                    rp.full_name AS responded_by_name,
+                    ru.full_name AS received_by_name
+             FROM kitchen_stock_request_items ksri
+             INNER JOIN stock_items si ON si.id = ksri.stock_item_id
+             LEFT JOIN users rp ON rp.id = ksri.responded_by
+             LEFT JOIN users ru ON ru.id = ksri.received_by
+             WHERE ksri.restaurant_id = ' . (int) $restaurantId . '
+               AND ksri.request_id IN (' . $idList . ')
+             ORDER BY ksri.id ASC'
+        );
+        $rows = $statement->fetchAll(PDO::FETCH_ASSOC);
+        $grouped = [];
+        foreach ($rows as $row) {
+            $grouped[(int) $row['request_id']][] = $row;
+        }
+
+        return $grouped;
+    }
+
+    private function kitchenStockRequestItemsForRequest(int $restaurantId, int $requestId): array
+    {
+        $grouped = $this->kitchenStockRequestItemsByRequest($restaurantId, [$requestId]);
+        return $grouped[$requestId] ?? [];
+    }
+
+    private function legacyKitchenStockRequestAsItem(array $request): array
+    {
+        return [
+            'id' => 0,
+            'request_id' => (int) $request['id'],
+            'stock_item_id' => (int) $request['stock_item_id'],
+            'stock_item_name' => (string) ($request['stock_item_name'] ?? 'Article'),
+            'unit_name' => (string) ($request['unit_name'] ?? ''),
+            'quantity_requested' => (float) ($request['quantity_requested'] ?? 0),
+            'quantity_supplied' => (float) ($request['quantity_supplied'] ?? 0),
+            'unavailable_quantity' => (float) ($request['unavailable_quantity'] ?? 0),
+            'priority_level' => (string) ($request['priority_level'] ?? 'normale'),
+            'planning_status' => (string) ($request['planning_status'] ?? ''),
+            'note' => (string) ($request['note'] ?? ''),
+            'response_note' => (string) ($request['response_note'] ?? ''),
+            'status' => (string) ($request['status'] ?? 'DEMANDE'),
+            'responded_by_name' => (string) ($request['responded_by_name'] ?? ''),
+            'received_by_name' => (string) ($request['received_by_name'] ?? ''),
+            'responded_at' => $request['responded_at'] ?? null,
+            'received_at' => $request['received_at'] ?? null,
+        ];
+    }
+
+    private function resolveKitchenStockRequestStatus(array $items, string $fallback): string
+    {
+        if ($items === []) {
+            return $fallback;
+        }
+
+        $statuses = array_values(array_unique(array_map(static fn (array $item): string => (string) ($item['status'] ?? 'DEMANDE'), $items)));
+        if ($statuses === ['CLOTURE']) {
+            return 'CLOTURE';
+        }
+        if (count(array_diff($statuses, ['FOURNI_TOTAL'])) === 0) {
+            return 'FOURNI_TOTAL';
+        }
+        if (count(array_diff($statuses, ['NON_FOURNI'])) === 0) {
+            return 'NON_FOURNI';
+        }
+        if (in_array('EN_COURS_TRAITEMENT', $statuses, true)) {
+            return 'EN_COURS_TRAITEMENT';
+        }
+        if (in_array('FOURNI_PARTIEL', $statuses, true) || in_array('FOURNI_TOTAL', $statuses, true) || in_array('NON_FOURNI', $statuses, true)) {
+            return 'FOURNI_PARTIEL';
+        }
+
+        return $fallback;
+    }
+
+    private function resolveKitchenStockHeaderStatus(array $lineStatuses): string
+    {
+        if ($lineStatuses === []) {
+            return 'DEMANDE';
+        }
+        if (count(array_diff($lineStatuses, ['FOURNI_TOTAL'])) === 0) {
+            return 'FOURNI_TOTAL';
+        }
+        if (count(array_diff($lineStatuses, ['NON_FOURNI'])) === 0) {
+            return 'NON_FOURNI';
+        }
+
+        return 'FOURNI_PARTIEL';
+    }
+
+    private function ensureKitchenStockRequestItemsTable(): void
+    {
+        if ($this->tableExists('kitchen_stock_request_items')) {
+            return;
+        }
+
+        $this->database->pdo()->exec(
+            'CREATE TABLE IF NOT EXISTS kitchen_stock_request_items (
+                id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+                request_id BIGINT UNSIGNED NOT NULL,
+                restaurant_id BIGINT UNSIGNED NOT NULL,
+                stock_item_id BIGINT UNSIGNED NOT NULL,
+                quantity_requested DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+                quantity_supplied DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+                unavailable_quantity DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+                status VARCHAR(80) NOT NULL DEFAULT "DEMANDE",
+                priority_level VARCHAR(40) NOT NULL DEFAULT "normale",
+                planning_status VARCHAR(40) NULL,
+                note TEXT NULL,
+                response_note TEXT NULL,
+                responded_by BIGINT UNSIGNED NULL,
+                received_by BIGINT UNSIGNED NULL,
+                created_at DATETIME NOT NULL,
+                responded_at DATETIME NULL,
+                received_at DATETIME NULL,
+                updated_at DATETIME NOT NULL,
+                INDEX idx_kitchen_stock_request_items_request (request_id),
+                INDEX idx_kitchen_stock_request_items_restaurant_date (restaurant_id, created_at),
+                CONSTRAINT fk_kitchen_stock_request_items_request FOREIGN KEY (request_id) REFERENCES kitchen_stock_requests(id),
+                CONSTRAINT fk_kitchen_stock_request_items_restaurant FOREIGN KEY (restaurant_id) REFERENCES restaurants(id),
+                CONSTRAINT fk_kitchen_stock_request_items_stock_item FOREIGN KEY (stock_item_id) REFERENCES stock_items(id),
+                CONSTRAINT fk_kitchen_stock_request_items_responded_by FOREIGN KEY (responded_by) REFERENCES users(id),
+                CONSTRAINT fk_kitchen_stock_request_items_received_by FOREIGN KEY (received_by) REFERENCES users(id)
+            )'
+        );
+    }
+
     private function stockItemOptionalColumns(): array
     {
         return [
@@ -995,6 +1557,21 @@ final class StockService
         $statement->execute([
             'table_name' => $table,
             'column_name' => $column,
+        ]);
+
+        return (int) $statement->fetchColumn() > 0;
+    }
+
+    private function tableExists(string $table): bool
+    {
+        $statement = $this->database->pdo()->prepare(
+            'SELECT COUNT(*)
+             FROM information_schema.tables
+             WHERE table_schema = DATABASE()
+               AND table_name = :table_name'
+        );
+        $statement->execute([
+            'table_name' => $table,
         ]);
 
         return (int) $statement->fetchColumn() > 0;

@@ -31,37 +31,61 @@ final class DashboardController
     public function superAdmin(Request $request): void
     {
         authorize_access('platform.admin.view');
-        $pdo = Container::getInstance()->get('db')->pdo();
-
-        $stats = [
-            'restaurants_total' => (int) $pdo->query('SELECT COUNT(*) FROM restaurants')->fetchColumn(),
-            'restaurants_active' => (int) $pdo->query("SELECT COUNT(*) FROM restaurants WHERE status = 'active'")->fetchColumn(),
-            'users_total' => (int) $pdo->query('SELECT COUNT(*) FROM users')->fetchColumn(),
-            'audit_entries' => (int) $pdo->query('SELECT COUNT(*) FROM audit_logs')->fetchColumn(),
-        ];
-
-        $restaurants = $pdo->query(
-            'SELECT r.id, r.name, r.slug, r.status, r.access_url, rb.public_name, rb.primary_color, rb.web_subdomain
-             FROM restaurants r
-             LEFT JOIN restaurant_branding rb ON rb.restaurant_id = r.id
-             ORDER BY r.id DESC'
-        )->fetchAll(PDO::FETCH_ASSOC);
-
-        $plans = $pdo->query(
-            'SELECT id, name, code FROM subscription_plans WHERE status = "active" ORDER BY id ASC'
-        )->fetchAll(PDO::FETCH_ASSOC);
-
-        view('super-admin/dashboard', [
-            'title' => 'Super administration',
-            'stats' => $stats,
-            'restaurants' => $restaurants,
-            'plans' => $plans,
-            'user' => $_SESSION['user'],
-            'flash_success' => flash('success'),
-            'flash_error' => flash('error'),
-        ]);
+        view('super-admin/dashboard', $this->superAdminDashboardPayload());
 
         audit_access('dashboard', null, 'screens', 'super-admin', 'Consultation tableau de bord super administrateur');
+    }
+
+    public function previewOperationalReset(Request $request): void
+    {
+        authorize_access('platform.admin.view');
+
+        try {
+            $preview = Container::getInstance()->get('operationalResetService')->preview([
+                'restaurant_id' => $request->input('restaurant_id'),
+                'scope' => $request->input('scope', 'restaurant'),
+                'user_id' => $request->input('user_id', 0),
+                'period_type' => $request->input('period_type', 'day'),
+                'day_value' => $request->input('day_value', ''),
+                'week_value' => $request->input('week_value', ''),
+                'month_value' => $request->input('month_value', ''),
+                'date_from' => $request->input('date_from', ''),
+                'date_to' => $request->input('date_to', ''),
+                'data_types' => $request->input('data_types', []),
+            ]);
+
+            view('super-admin/dashboard', $this->superAdminDashboardPayload($preview, null));
+            return;
+        } catch (\RuntimeException $exception) {
+            view('super-admin/dashboard', $this->superAdminDashboardPayload(null, null, $exception->getMessage()));
+        }
+    }
+
+    public function executeOperationalReset(Request $request): void
+    {
+        authorize_access('platform.admin.view');
+
+        try {
+            $result = Container::getInstance()->get('operationalResetService')->execute([
+                'restaurant_id' => $request->input('restaurant_id'),
+                'scope' => $request->input('scope', 'restaurant'),
+                'user_id' => $request->input('user_id', 0),
+                'period_type' => $request->input('period_type', 'day'),
+                'day_value' => $request->input('day_value', ''),
+                'week_value' => $request->input('week_value', ''),
+                'month_value' => $request->input('month_value', ''),
+                'date_from' => $request->input('date_from', ''),
+                'date_to' => $request->input('date_to', ''),
+                'data_types' => $request->input('data_types', []),
+                'confirmation_text' => $request->input('confirmation_text', ''),
+                'reset_reason' => $request->input('reset_reason', ''),
+            ], current_user() ?? []);
+
+            view('super-admin/dashboard', $this->superAdminDashboardPayload($result['preview'], $result));
+            return;
+        } catch (\RuntimeException $exception) {
+            view('super-admin/dashboard', $this->superAdminDashboardPayload(null, null, $exception->getMessage()));
+        }
     }
 
     public function owner(Request $request): void
@@ -94,5 +118,48 @@ final class DashboardController
         ]);
 
         audit_access('dashboard', $restaurantId, 'screens', 'owner-dashboard', 'Consultation tableau de bord restaurant');
+    }
+
+    private function superAdminDashboardPayload(?array $resetPreview = null, ?array $resetReport = null, ?string $inlineError = null): array
+    {
+        $pdo = Container::getInstance()->get('db')->pdo();
+
+        $stats = [
+            'restaurants_total' => (int) $pdo->query('SELECT COUNT(*) FROM restaurants')->fetchColumn(),
+            'restaurants_active' => (int) $pdo->query("SELECT COUNT(*) FROM restaurants WHERE status = 'active'")->fetchColumn(),
+            'users_total' => (int) $pdo->query('SELECT COUNT(*) FROM users')->fetchColumn(),
+            'audit_entries' => (int) $pdo->query('SELECT COUNT(*) FROM audit_logs')->fetchColumn(),
+        ];
+
+        $restaurants = $pdo->query(
+            'SELECT r.id, r.name, r.slug, r.status, r.access_url, rb.public_name, rb.primary_color, rb.web_subdomain
+             FROM restaurants r
+             LEFT JOIN restaurant_branding rb ON rb.restaurant_id = r.id
+             ORDER BY r.id DESC'
+        )->fetchAll(PDO::FETCH_ASSOC);
+
+        $plans = $pdo->query(
+            'SELECT id, name, code FROM subscription_plans WHERE status = "active" ORDER BY id ASC'
+        )->fetchAll(PDO::FETCH_ASSOC);
+
+        $restaurantUsers = $pdo->query(
+            'SELECT id, restaurant_id, full_name, email
+             FROM users
+             WHERE restaurant_id IS NOT NULL
+             ORDER BY full_name ASC'
+        )->fetchAll(PDO::FETCH_ASSOC);
+
+        return [
+            'title' => 'Super administration',
+            'stats' => $stats,
+            'restaurants' => $restaurants,
+            'plans' => $plans,
+            'restaurant_users' => $restaurantUsers,
+            'reset_preview' => $resetPreview,
+            'reset_report' => $resetReport,
+            'user' => $_SESSION['user'],
+            'flash_success' => flash('success'),
+            'flash_error' => $inlineError ?? flash('error'),
+        ];
     }
 }
