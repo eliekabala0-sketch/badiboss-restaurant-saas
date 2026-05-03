@@ -374,6 +374,28 @@ $stockBadgeClass = static function (?string $status): string {
 </section>
 
 <section class="card" style="padding:22px; margin-top:24px;">
+    <h2 style="margin-top:0;">Matieres premieres disponibles en cuisine</h2>
+    <?php if (($kitchen_inventory ?? []) === []): ?>
+        <p class="muted">Aucune matiere premiere disponible en cuisine pour le moment. Demandez au stock si necessaire.</p>
+    <?php else: ?>
+        <div class="table-wrap">
+            <table>
+                <thead><tr><th>Matiere</th><th>Disponible</th><th>Unite</th></tr></thead>
+                <tbody>
+                <?php foreach (($kitchen_inventory ?? []) as $inventoryItem): ?>
+                    <tr>
+                        <td><?= e((string) ($inventoryItem['stock_item_name'] ?? '-')) ?></td>
+                        <td><?= e((string) ($inventoryItem['quantity_available'] ?? 0)) ?></td>
+                        <td><?= e((string) ($inventoryItem['unit_name'] ?? '')) ?></td>
+                    </tr>
+                <?php endforeach; ?>
+                </tbody>
+            </table>
+        </div>
+    <?php endif; ?>
+</section>
+
+<section class="card" style="padding:22px; margin-top:24px;">
     <div class="topbar" style="margin-bottom:10px;">
         <div>
             <h2 style="margin:0;">File cuisine active</h2>
@@ -450,7 +472,7 @@ $stockBadgeClass = static function (?string $status): string {
                                             <?php if (can_access('kitchen.request.fulfill')): ?>
                                                 <form method="post" action="/cuisine/demandes-serveur/<?= e((string) $item['id']) ?>/fourni">
                                                     <label>Quantite preparee</label>
-                                                    <input name="supplied_quantity" value="<?= e((string) ((float) $item['supplied_quantity'] > 0 ? (float) $item['supplied_quantity'] : (float) $item['requested_quantity'])) ?>">
+                                                    <div class="quantity-stepper" data-quantity-stepper><button type="button" data-stepper-minus>-</button><input name="supplied_quantity" value="<?= e((string) ((float) $item['supplied_quantity'] > 0 ? (float) $item['supplied_quantity'] : (float) $item['requested_quantity'])) ?>" min="0" step="1"><button type="button" data-stepper-plus>+</button></div>
                                                     <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:10px;">
                                                         <button type="submit" name="workflow_stage" value="EN_PREPARATION">Prendre en charge</button>
                                                         <button type="submit" name="workflow_stage" value="PRET_A_SERVIR">Marquer pret</button>
@@ -682,10 +704,12 @@ $stockBadgeClass = static function (?string $status): string {
 
 <section class="split" style="margin-top:24px;">
     <article class="card" style="padding:22px;">
+        <details class="compact-card" data-autoclose-details>
+            <summary><strong>Declarer un plat prepare</strong></summary>
         <h2 style="margin-top:0;">Nouvelle production</h2>
         <?php if (can_access('kitchen.production.create')): ?>
             <form method="post" action="/cuisine/productions">
-                <label>Matiere utilisee</label>
+                <label>Matiere principale de reference</label>
                 <select name="stock_item_id">
                     <?php foreach ($stock_items as $item): ?>
                         <option value="<?= e((string) $item['id']) ?>"><?= e($item['name']) ?></option>
@@ -714,10 +738,26 @@ $stockBadgeClass = static function (?string $status): string {
                 <input name="menu_price" value="0.00">
                 <label>Description menu</label>
                 <textarea name="menu_description">Plat propose par la cuisine et publie dans le menu.</textarea>
+                <label>Matieres premieres disponibles en cuisine</label>
+                <div class="repeat-list" data-repeat-list="kitchen-material-lines">
+                    <div class="repeat-item" data-repeat-template>
+                        <select name="materials[0][stock_item_id]">
+                            <?php foreach (($kitchen_inventory ?? []) as $inventoryItem): ?>
+                                <option value="<?= e((string) $inventoryItem['stock_item_id']) ?>"><?= e($inventoryItem['stock_item_name']) ?> - disponible <?= e((string) $inventoryItem['quantity_available']) ?> <?= e((string) $inventoryItem['unit_name']) ?></option>
+                            <?php endforeach; ?>
+                        </select>
+                        <div class="quantity-stepper" data-quantity-stepper><button type="button" data-stepper-minus>-</button><input name="materials[0][quantity_used]" value="1" min="0" step="0.5" placeholder="Quantite utilisee"><button type="button" data-stepper-plus>+</button></div>
+                        <input name="materials[0][note]" placeholder="Note matiere">
+                        <button type="button" class="button-muted" data-repeat-remove>Retirer</button>
+                    </div>
+                </div>
+                <div class="toolbar-actions" style="margin-bottom:14px;">
+                    <button type="button" class="button-muted" data-repeat-add="kitchen-material-lines">Ajouter une matiere</button>
+                </div>
                 <label>Quantite sortie du stock</label>
-                <input name="quantity" value="1">
+                <div class="quantity-stepper" data-quantity-stepper><button type="button" data-stepper-minus>-</button><input name="quantity" value="1" min="0" step="0.5"><button type="button" data-stepper-plus>+</button></div>
                 <label>Quantite produite</label>
-                <input name="quantity_produced" value="1">
+                <div class="quantity-stepper" data-quantity-stepper><button type="button" data-stepper-minus>-</button><input name="quantity_produced" value="1" min="1" step="1"><button type="button" data-stepper-plus>+</button></div>
                 <label>Note</label>
                 <textarea name="note">Production cuisine du service.</textarea>
                 <button type="submit">Enregistrer la production</button>
@@ -725,9 +765,12 @@ $stockBadgeClass = static function (?string $status): string {
         <?php else: ?>
             <p class="muted">Lecture seule.</p>
         <?php endif; ?>
+        </details>
     </article>
 
     <article class="card" style="padding:22px;">
+        <details class="compact-card" data-autoclose-details>
+            <summary><strong>Demander au stock</strong></summary>
         <h2 style="margin-top:0;">Demande cuisine vers stock</h2>
         <?php if (can_access('kitchen.stock.request')): ?>
             <form method="post" action="/cuisine/demandes-stock">
@@ -745,7 +788,7 @@ $stockBadgeClass = static function (?string $status): string {
                                 <option value="<?= e((string) $item['id']) ?>"><?= e($item['name']) ?> (<?= e((string) $item['quantity_in_stock']) ?> <?= e($item['unit_name']) ?>)</option>
                             <?php endforeach; ?>
                         </select>
-                        <input name="items[0][quantity_requested]" value="1" placeholder="Quantite">
+                        <div class="quantity-stepper" data-quantity-stepper><button type="button" data-stepper-minus>-</button><input name="items[0][quantity_requested]" value="1" min="0" step="0.5" placeholder="Quantite"><button type="button" data-stepper-plus>+</button></div>
                         <input name="items[0][note]" placeholder="Note eventuelle">
                         <button type="button" class="button-muted" data-repeat-remove>Retirer</button>
                     </div>
@@ -758,6 +801,7 @@ $stockBadgeClass = static function (?string $status): string {
         <?php else: ?>
             <p class="muted">Action reservee a la cuisine.</p>
         <?php endif; ?>
+        </details>
     </article>
 </section>
 

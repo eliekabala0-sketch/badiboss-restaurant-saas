@@ -105,7 +105,7 @@ final class RoleAdminService
             $groups[$module]['permissions'][] = $permission;
         }
 
-        $orderedCodes = ['dashboard', 'stock', 'kitchen', 'sales', 'reports', 'menu', 'users', 'roles', 'incidents'];
+        $orderedCodes = ['dashboard', 'stock', 'kitchen', 'sales', 'cash', 'reports', 'menu', 'users', 'roles', 'incidents'];
         $ordered = [];
 
         foreach ($orderedCodes as $code) {
@@ -188,7 +188,7 @@ final class RoleAdminService
 
     public function syncPermissions(int $roleId, int $restaurantId, array $permissionIds, array $actor): void
     {
-        $this->assertRoleBelongsToRestaurant($roleId, $restaurantId);
+        $role = $this->findAssignableRole($roleId, $restaurantId);
         $pdo = $this->database->pdo();
         $pdo->beginTransaction();
 
@@ -222,11 +222,15 @@ final class RoleAdminService
                 'actor_name' => $actor['full_name'],
                 'actor_role_code' => $actor['role_code'],
                 'module_name' => 'roles',
-                'action_name' => 'tenant_role_permissions_synced',
+                'action_name' => ($role['scope'] ?? 'tenant') === 'system'
+                    ? 'system_role_permissions_overridden'
+                    : 'tenant_role_permissions_synced',
                 'entity_type' => 'roles',
                 'entity_id' => (string) $roleId,
                 'new_values' => ['permission_ids' => array_values($permissionIds)],
-                'justification' => 'Mise a jour permissions role dynamique',
+                'justification' => ($role['scope'] ?? 'tenant') === 'system'
+                    ? 'Mise a jour locale des permissions du role predefini pour ce restaurant'
+                    : 'Mise a jour permissions role dynamique',
             ]);
         } catch (\Throwable $throwable) {
             if ($pdo->inTransaction()) {
@@ -311,6 +315,72 @@ final class RoleAdminService
         }
 
         return $this->findAssignableRole($roleId, $restaurantId);
+    }
+
+    public function userActivitySnapshot(int $restaurantId, int $userId): array
+    {
+        $user = $this->findRestaurantUser($userId, $restaurantId);
+        if ($user === null) {
+            throw new \RuntimeException('Utilisateur introuvable pour ce restaurant.');
+        }
+
+        $statement = $this->database->pdo()->prepare(
+            'SELECT u.id, u.full_name, u.email, r.code AS role_code, r.name AS role_name
+             FROM users u
+             INNER JOIN roles r ON r.id = u.role_id
+             WHERE u.id = :id AND u.restaurant_id = :restaurant_id
+             LIMIT 1'
+        );
+        $statement->execute([
+            'id' => $userId,
+            'restaurant_id' => $restaurantId,
+        ]);
+        $profile = $statement->fetch(PDO::FETCH_ASSOC) ?: [];
+
+        $sales = $this->database->pdo()->prepare(
+            'SELECT COUNT(*) AS sales_count, COALESCE(SUM(total_amount), 0) AS sales_total
+             FROM sales
+             WHERE restaurant_id = :restaurant_id
+               AND server_id = :user_id'
+        );
+        $sales->execute(['restaurant_id' => $restaurantId, 'user_id' => $userId]);
+
+        $requests = $this->database->pdo()->prepare(
+            'SELECT COUNT(*) FROM server_requests WHERE restaurant_id = :restaurant_id AND server_id = :user_id'
+        );
+        $requests->execute(['restaurant_id' => $restaurantId, 'user_id' => $userId]);
+
+        $cases = $this->database->pdo()->prepare(
+            'SELECT COUNT(*) FROM operation_cases WHERE restaurant_id = :restaurant_id AND (signaled_by = :user_id OR technical_confirmed_by = :user_id OR decided_by = :user_id)'
+        );
+        $cases->execute(['restaurant_id' => $restaurantId, 'user_id' => $userId]);
+
+        $losses = $this->database->pdo()->prepare(
+            'SELECT COUNT(*) AS losses_count, COALESCE(SUM(amount), 0) AS losses_total
+             FROM losses
+             WHERE restaurant_id = :restaurant_id
+               AND created_by = :user_id'
+        );
+        $losses->execute(['restaurant_id' => $restaurantId, 'user_id' => $userId]);
+
+        $audits = $this->database->pdo()->prepare(
+            'SELECT module_name, action_name, created_at
+             FROM audit_logs
+             WHERE restaurant_id = :restaurant_id
+               AND user_id = :user_id
+             ORDER BY id DESC
+             LIMIT 40'
+        );
+        $audits->execute(['restaurant_id' => $restaurantId, 'user_id' => $userId]);
+
+        return [
+            'user' => $profile,
+            'sales' => $sales->fetch(PDO::FETCH_ASSOC) ?: ['sales_count' => 0, 'sales_total' => 0],
+            'server_requests_count' => (int) $requests->fetchColumn(),
+            'operation_cases_count' => (int) $cases->fetchColumn(),
+            'losses' => $losses->fetch(PDO::FETCH_ASSOC) ?: ['losses_count' => 0, 'losses_total' => 0],
+            'audits' => $audits->fetchAll(PDO::FETCH_ASSOC),
+        ];
     }
 
     public function customerRoleId(): int

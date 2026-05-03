@@ -40,6 +40,14 @@ final class AuthorizationService
         'sales.create' => ['roles' => ['cashier_server'], 'permissions' => ['sales.manage']],
         'sales.request.create' => ['roles' => ['cashier_server'], 'permissions' => ['sales.manage']],
         'sales.request.close' => ['roles' => ['cashier_server', 'manager'], 'permissions' => ['sales.manage']],
+        'cash.view' => ['roles' => ['owner', 'manager', 'cashier_accountant', 'stock_manager'], 'permissions' => ['cash.manage']],
+        'cash.remit.server' => ['roles' => ['cashier_server'], 'permissions' => ['cash.manage', 'sales.manage']],
+        'cash.receive.cashier' => ['roles' => ['cashier_accountant', 'stock_manager'], 'permissions' => ['cash.manage']],
+        'cash.transfer.manager' => ['roles' => ['cashier_accountant', 'stock_manager'], 'permissions' => ['cash.manage']],
+        'cash.receive.manager' => ['roles' => ['manager'], 'permissions' => ['cash.manage']],
+        'cash.transfer.owner' => ['roles' => ['manager'], 'permissions' => ['cash.manage']],
+        'cash.receive.owner' => ['roles' => ['owner'], 'permissions' => ['cash.manage']],
+        'cash.expense.manage' => ['roles' => ['cashier_accountant', 'stock_manager', 'manager'], 'permissions' => ['cash.manage']],
         'sales.cancel' => ['roles' => ['manager'], 'permissions' => ['sales.manage']],
         'sales.return.validate' => ['roles' => ['manager'], 'permissions' => ['sales.manage']],
         'sales.incident.signal' => ['roles' => ['cashier_server'], 'permissions' => ['incidents.signal']],
@@ -79,6 +87,14 @@ final class AuthorizationService
         'sales.create',
         'sales.request.create',
         'sales.request.close',
+        'cash.view',
+        'cash.remit.server',
+        'cash.receive.cashier',
+        'cash.transfer.manager',
+        'cash.receive.manager',
+        'cash.transfer.owner',
+        'cash.receive.owner',
+        'cash.expense.manage',
         'sales.cancel',
         'sales.return.validate',
         'sales.incident.signal',
@@ -131,17 +147,17 @@ final class AuthorizationService
         $matchesRole = in_array($roleCode, $rule['roles'], true);
         $permissionCodes = $rule['permissions'] ?? [];
 
-        if (!$matchesRole) {
+        if ($permissionCodes === [] && !$matchesRole) {
             return false;
         }
 
-        if ($permissionCodes === []) {
+        if ($permissionCodes === [] && $matchesRole) {
             return true;
         }
 
         $rolePermissions = $this->permissionCodesForRole((int) ($user['role_id'] ?? 0), (int) ($user['restaurant_id'] ?? 0));
         if ($rolePermissions['allow'] === [] && $rolePermissions['deny'] === []) {
-            return true;
+            return $matchesRole;
         }
 
         foreach ($permissionCodes as $permissionCode) {
@@ -156,7 +172,7 @@ final class AuthorizationService
             }
         }
 
-        return true;
+        return $matchesRole;
     }
 
     private function permissionCodesForRole(int $roleId, int $restaurantId): array

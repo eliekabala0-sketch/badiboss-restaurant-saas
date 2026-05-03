@@ -95,6 +95,7 @@
                         <strong><?= e($user['full_name']) ?></strong><br>
                         <span class="muted"><?= e($user['email']) ?> · Role actuel : <?= e($user['role_display_name'] ?? $user['role_name']) ?></span>
                     </p>
+                    <p style="margin:0 0 10px;"><a href="/owner/access/users/<?= e((string) $user['id']) ?>" class="button-muted">Voir son historique</a></p>
                     <select name="role_id">
                         <?php foreach ($roles as $role): ?>
                             <option value="<?= e((string) $role['id']) ?>" <?= (int) $user['role_id'] === (int) $role['id'] ? 'selected' : '' ?>><?= e($role['display_name'] ?? $role['name']) ?></option>
@@ -109,7 +110,7 @@
 
 <section class="card" style="padding:22px;">
     <h2 style="margin-top:0;">Roles disponibles</h2>
-    <p class="muted">Les roles systeme restent attribuables. Seuls les roles personnalises du restaurant peuvent etre modifies ici.</p>
+    <p class="muted">Les roles systeme restent attribuables. Les permissions peuvent maintenant etre ajustees localement pour ce restaurant sans impacter les autres restaurants.</p>
 
     <?php foreach ($roles as $role): ?>
         <div class="role-panel" style="margin-bottom:14px;">
@@ -131,7 +132,7 @@
                 <p class="muted">Aucun acces operationnel selectionne.</p>
             <?php endif; ?>
 
-            <?php if ((int) ($role['is_locked'] ?? 0) !== 1): ?>
+            <?php if (true): ?>
                 <form method="post" action="/owner/access/roles/<?= e((string) $role['id']) ?>/permissions">
                     <div class="section-stack">
                         <?php foreach ($permission_groups as $group): ?>
@@ -153,16 +154,18 @@
                     </div>
                 </form>
 
-                <form method="post" action="/owner/access/roles/<?= e((string) $role['id']) ?>/status" class="toolbar-actions" style="margin-top:14px;">
-                    <select name="status" style="max-width:220px;">
-                        <option value="active" <?= ($role['status'] ?? '') === 'active' ? 'selected' : '' ?>>Actif</option>
-                        <option value="inactive" <?= ($role['status'] ?? '') === 'inactive' ? 'selected' : '' ?>>Inactif</option>
-                        <option value="archived">Archive</option>
-                    </select>
-                    <button type="submit" class="button-muted">Changer le statut</button>
-                </form>
-            <?php else: ?>
-                <p class="muted" style="margin-bottom:0;">Ce role predefini reste attribuable mais sa structure n'est pas modifiable ici.</p>
+                <?php if ((int) ($role['is_locked'] ?? 0) !== 1): ?>
+                    <form method="post" action="/owner/access/roles/<?= e((string) $role['id']) ?>/status" class="toolbar-actions" style="margin-top:14px;">
+                        <select name="status" style="max-width:220px;">
+                            <option value="active" <?= ($role['status'] ?? '') === 'active' ? 'selected' : '' ?>>Actif</option>
+                            <option value="inactive" <?= ($role['status'] ?? '') === 'inactive' ? 'selected' : '' ?>>Inactif</option>
+                            <option value="archived">Archive</option>
+                        </select>
+                        <button type="submit" class="button-muted">Changer le statut</button>
+                    </form>
+                <?php else: ?>
+                    <p class="muted" style="margin-bottom:0;">Le role predefini garde son statut global, mais ses permissions sont maintenant ajustables pour ce restaurant.</p>
+                <?php endif; ?>
             <?php endif; ?>
         </div>
     <?php endforeach; ?>

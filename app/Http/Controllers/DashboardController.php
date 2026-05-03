@@ -112,6 +112,7 @@ final class DashboardController
             'can_access_stock' => can_access('stock.view'),
             'can_access_kitchen' => can_access('kitchen.view'),
             'can_access_sales' => can_access('sales.view'),
+            'can_access_cash' => can_access('cash.view'),
             'can_access_reports' => can_access('reports.view'),
             'flash_success' => flash('success'),
             'flash_error' => flash('error'),

@@ -20,7 +20,7 @@ final class ReportService
         [$startAt, $endAt, $label] = $this->periodBounds($selectedDate, $period, $timezone);
         $displayEndAt = $endAt->sub(new DateInterval('PT1S'));
         $currentStock = (float) $this->scalar('SELECT COALESCE(SUM(quantity_in_stock), 0) FROM stock_items WHERE restaurant_id = :restaurant_id', ['restaurant_id' => $restaurantId]);
-        $summary = ['period' => $period, 'period_label' => $label, 'selected_date' => $selectedDate->format('Y-m-d'), 'timezone' => $timezone->getName(), 'range_start' => $startAt->format('Y-m-d H:i:s'), 'range_end' => $displayEndAt->format('Y-m-d H:i:s'), 'opening_stock_total' => $this->openingStock($restaurantId, $startAt, $currentStock), 'current_stock_total' => $currentStock, 'kitchen_outputs' => $this->sumMovement($restaurantId, $startAt, $endAt, 'SORTIE_CUISINE'), 'stock_returns' => $this->sumMovement($restaurantId, $startAt, $endAt, 'RETOUR_STOCK'), 'kitchen_production' => $this->sumProduction($restaurantId, $startAt, $endAt), 'stock_report' => $this->stockReport($restaurantId, $startAt, $endAt), 'kitchen_report' => $this->kitchenReport($restaurantId, $startAt, $endAt), 'server_report' => $this->serverReport($restaurantId, $startAt, $endAt), 'product_margins' => $this->productMargins($restaurantId, $startAt, $endAt), 'sales_by_server' => $this->salesByServer($restaurantId, $startAt, $endAt), 'sales_by_type' => $this->salesByType($restaurantId, $startAt, $endAt), 'material_losses' => $this->sumLosses($restaurantId, $startAt, $endAt, 'MATIERE_PREMIERE'), 'financial_losses' => $this->sumLosses($restaurantId, $startAt, $endAt, 'ARGENT'), 'dish_yields' => $this->dishYields($restaurantId, $startAt, $endAt), 'product_issues' => $this->productIssues($restaurantId, $startAt, $endAt), 'incident_statuses' => $this->incidentsByField($restaurantId, $startAt, $endAt, 'status'), 'incident_qualifications' => $this->incidentsByField($restaurantId, $startAt, $endAt, 'final_qualification'), 'incident_responsibilities' => $this->incidentsByField($restaurantId, $startAt, $endAt, 'responsibility_scope'), 'incident_cases' => $this->incidentCases($restaurantId, $startAt, $endAt), 'fraud_alerts' => $this->fraudAlerts($restaurantId, $startAt, $endAt)];
+        $summary = ['period' => $period, 'period_label' => $label, 'selected_date' => $selectedDate->format('Y-m-d'), 'timezone' => $timezone->getName(), 'range_start' => $startAt->format('Y-m-d H:i:s'), 'range_end' => $displayEndAt->format('Y-m-d H:i:s'), 'opening_stock_total' => $this->openingStock($restaurantId, $startAt, $currentStock), 'current_stock_total' => $currentStock, 'kitchen_outputs' => $this->sumMovement($restaurantId, $startAt, $endAt, 'SORTIE_CUISINE'), 'stock_returns' => $this->sumMovement($restaurantId, $startAt, $endAt, 'RETOUR_STOCK'), 'kitchen_production' => $this->sumProduction($restaurantId, $startAt, $endAt), 'stock_report' => $this->stockReport($restaurantId, $startAt, $endAt), 'kitchen_report' => $this->kitchenReport($restaurantId, $startAt, $endAt), 'server_report' => $this->serverReport($restaurantId, $startAt, $endAt), 'financial_report' => $this->financialReport($restaurantId, $startAt, $endAt), 'product_margins' => $this->productMargins($restaurantId, $startAt, $endAt), 'sales_by_server' => $this->salesByServer($restaurantId, $startAt, $endAt), 'sales_by_type' => $this->salesByType($restaurantId, $startAt, $endAt), 'material_losses' => $this->sumLosses($restaurantId, $startAt, $endAt, 'MATIERE_PREMIERE'), 'financial_losses' => $this->sumLosses($restaurantId, $startAt, $endAt, 'ARGENT'), 'dish_yields' => $this->dishYields($restaurantId, $startAt, $endAt), 'product_issues' => $this->productIssues($restaurantId, $startAt, $endAt), 'incident_statuses' => $this->incidentsByField($restaurantId, $startAt, $endAt, 'status'), 'incident_qualifications' => $this->incidentsByField($restaurantId, $startAt, $endAt, 'final_qualification'), 'incident_responsibilities' => $this->incidentsByField($restaurantId, $startAt, $endAt, 'responsibility_scope'), 'incident_cases' => $this->incidentCases($restaurantId, $startAt, $endAt), 'fraud_alerts' => $this->fraudAlerts($restaurantId, $startAt, $endAt)];
         $salesTotal = 0.0; foreach ($summary['sales_by_type'] as $row) { $salesTotal += (float) $row['total_amount']; }
         $summary['general_report'] = ['total_product_value' => (float) $summary['kitchen_report']['value_produced'], 'total_sold_value' => $salesTotal, 'real_material_cost_value' => (float) $summary['kitchen_report']['real_material_cost_of_sales'], 'total_losses_value' => (float) $summary['stock_report']['stock_losses_value'] + (float) $summary['kitchen_report']['kitchen_losses_value'] + (float) $summary['server_report']['server_loss_value'] + (float) $summary['financial_losses'], 'stock_loss_value' => (float) $summary['stock_report']['stock_losses_value'], 'kitchen_loss_value' => (float) $summary['kitchen_report']['kitchen_losses_value'], 'server_loss_value' => (float) $summary['server_report']['server_loss_value']];
         $summary['estimated_profit'] = $salesTotal - (float) $summary['kitchen_report']['real_material_cost_of_sales'] - (float) $summary['stock_report']['stock_losses_value'] - (float) $summary['kitchen_report']['kitchen_losses_value'] - (float) $summary['server_report']['server_loss_value'] - (float) $summary['financial_losses'];
@@ -77,6 +77,37 @@ final class ReportService
         $incidents = $this->database->pdo()->prepare('SELECT COALESCE(u.full_name, "Serveur inconnu") AS server_name, COUNT(*) AS incidents FROM operation_cases oc LEFT JOIN users u ON u.id = oc.signaled_by LEFT JOIN roles r ON r.id = u.role_id WHERE oc.restaurant_id = :restaurant_id AND oc.created_at >= :start_at AND oc.created_at < :end_at AND r.code = "cashier_server" GROUP BY COALESCE(u.full_name, "Serveur inconnu") ORDER BY incidents DESC');
         $incidents->execute(['restaurant_id' => $restaurantId, 'start_at' => $startAt->format('Y-m-d H:i:s'), 'end_at' => $endAt->format('Y-m-d H:i:s')]);
         return ['total_requested' => (float) ($totals['total_requested'] ?? 0), 'total_supplied' => (float) ($totals['total_supplied'] ?? 0), 'total_sold' => (float) ($totals['total_sold'] ?? 0), 'total_returned' => (float) ($totals['total_returned'] ?? 0), 'server_loss_value' => (float) ($totals['total_server_loss'] ?? 0), 'incidents_by_server' => $incidents->fetchAll(PDO::FETCH_ASSOC)];
+    }
+    private function financialReport(int $restaurantId, DateTimeImmutable $startAt, DateTimeImmutable $endAt): array
+    {
+        $transfers = Container::getInstance()->get('cashService')->dashboard($restaurantId, [
+            'date_from' => $startAt->format('Y-m-d'),
+            'date_to' => $endAt->sub(new DateInterval('PT1S'))->format('Y-m-d'),
+        ]);
+
+        $byServer = $this->database->pdo()->prepare(
+            'SELECT COALESCE(u.full_name, "Utilisateur non identifie") AS server_name,
+                    COUNT(ct.id) AS transfer_count,
+                    COALESCE(SUM(ct.amount), 0) AS total_amount
+             FROM cash_transfers ct
+             LEFT JOIN users u ON u.id = ct.from_user_id
+             WHERE ct.restaurant_id = :restaurant_id
+               AND ct.source_type = "sale"
+               AND COALESCE(ct.received_at, ct.requested_at, ct.created_at) >= :start_at
+               AND COALESCE(ct.received_at, ct.requested_at, ct.created_at) < :end_at
+             GROUP BY COALESCE(u.full_name, "Utilisateur non identifie")
+             ORDER BY total_amount DESC'
+        );
+        $byServer->execute([
+            'restaurant_id' => $restaurantId,
+            'start_at' => $startAt->format('Y-m-d H:i:s'),
+            'end_at' => $endAt->format('Y-m-d H:i:s'),
+        ]);
+
+        return [
+            'summary' => $transfers['summary'] ?? [],
+            'remittances_by_server' => $byServer->fetchAll(PDO::FETCH_ASSOC),
+        ];
     }
     private function productMargins(int $restaurantId, DateTimeImmutable $startAt, DateTimeImmutable $endAt): array
     {

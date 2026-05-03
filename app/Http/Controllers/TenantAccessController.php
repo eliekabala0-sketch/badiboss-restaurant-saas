@@ -93,4 +93,22 @@ final class TenantAccessController
         flash('success', 'Utilisateur affecte au role.');
         redirect('/owner/access');
     }
+
+    public function showUserHistory(Request $request): void
+    {
+        authorize_access('tenant.access.manage');
+        $restaurantId = current_restaurant_id();
+        $snapshot = Container::getInstance()->get('roleAdmin')->userActivitySnapshot(
+            $restaurantId,
+            (int) $request->route('id')
+        );
+
+        view('owner/user-history', [
+            'title' => 'Historique utilisateur',
+            'snapshot' => $snapshot,
+            'restaurant' => current_restaurant_context(),
+            'flash_success' => flash('success'),
+            'flash_error' => flash('error'),
+        ]);
+    }
 }

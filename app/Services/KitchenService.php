@@ -19,8 +19,8 @@ final class KitchenService
         $statement = $this->database->pdo()->prepare(
             'SELECT kp.*, mi.name AS menu_item_name, mi.image_url AS menu_item_image_url, si.name AS stock_item_name, si.unit_name AS stock_unit_name, u.full_name AS created_by_name
              FROM kitchen_production kp
-             INNER JOIN stock_movements sm ON sm.id = kp.stock_movement_id
-             INNER JOIN stock_items si ON si.id = sm.stock_item_id
+             LEFT JOIN stock_movements sm ON sm.id = kp.stock_movement_id
+             LEFT JOIN stock_items si ON si.id = sm.stock_item_id
              LEFT JOIN menu_items mi ON mi.id = kp.menu_item_id
              INNER JOIN users u ON u.id = kp.created_by
              WHERE kp.restaurant_id = :restaurant_id
@@ -48,8 +48,18 @@ final class KitchenService
         }
 
         $stockService = Container::getInstance()->get('stockService');
-        $movementId = $stockService->sendToKitchen($restaurantId, $payload, $actor);
-        $movement = $this->findStockMovementInRestaurant($movementId, $restaurantId);
+        $materials = $this->normalizeProductionMaterials($payload['materials'] ?? []);
+        if ($materials !== []) {
+            $consumption = $stockService->consumeKitchenMaterials($restaurantId, $materials, $actor, $payload['menu_item_id'] !== '' ? (int) $payload['menu_item_id'] : null);
+            $movementId = (int) ($consumption['movement_ids'][0] ?? 0);
+            $movement = $movementId > 0 ? $this->findStockMovementInRestaurant($movementId, $restaurantId) : [
+                'total_cost_snapshot' => 0,
+            ];
+        } else {
+            $movementId = $stockService->sendToKitchen($restaurantId, $payload, $actor);
+            $movement = $this->findStockMovementInRestaurant($movementId, $restaurantId);
+            $consumption = ['materials' => []];
+        }
         $quantityProduced = (float) $payload['quantity_produced'];
         if ($quantityProduced <= 0) {
             throw new \RuntimeException('Quantite produite obligatoire.');
@@ -86,6 +96,24 @@ final class KitchenService
             'id' => $movementId,
         ]);
 
+        if (($consumption['materials'] ?? []) !== []) {
+            $materialStatement = $this->database->pdo()->prepare(
+                'INSERT INTO kitchen_production_materials
+                (kitchen_production_id, restaurant_id, stock_item_id, quantity_used, note, created_at)
+                 VALUES
+                (:kitchen_production_id, :restaurant_id, :stock_item_id, :quantity_used, :note, NOW())'
+            );
+            foreach ($consumption['materials'] as $material) {
+                $materialStatement->execute([
+                    'kitchen_production_id' => $productionId,
+                    'restaurant_id' => $restaurantId,
+                    'stock_item_id' => (int) $material['stock_item_id'],
+                    'quantity_used' => (float) $material['quantity_used'],
+                    'note' => trim((string) ($material['note'] ?? '')) ?: null,
+                ]);
+            }
+        }
+
         Container::getInstance()->get('audit')->log([
             'restaurant_id' => $restaurantId,
             'user_id' => $actor['id'],
@@ -117,6 +145,7 @@ final class KitchenService
                     u.full_name AS server_name,
                     mi.name AS menu_item_name,
                     mi.image_url AS menu_item_image_url,
+                    mc.name AS menu_category_name,
                     requested_user.full_name AS requested_by_name,
                     prepared_user.full_name AS prepared_by_name,
                     ready_user.full_name AS ready_by_name,
@@ -125,6 +154,7 @@ final class KitchenService
              INNER JOIN server_requests sr ON sr.id = sri.request_id
              INNER JOIN users u ON u.id = sr.server_id
              INNER JOIN menu_items mi ON mi.id = sri.menu_item_id
+             LEFT JOIN menu_categories mc ON mc.id = mi.category_id
              LEFT JOIN users requested_user ON requested_user.id = sr.requested_by
              LEFT JOIN users prepared_user ON prepared_user.id = sri.technical_confirmed_by
              LEFT JOIN users ready_user ON ready_user.id = sr.ready_by
@@ -155,6 +185,10 @@ final class KitchenService
         }
 
         $requestedQuantity = (float) $item['requested_quantity'];
+        $isBeverage = mb_strtolower(trim((string) ($item['menu_category_name'] ?? ''))) === 'boisson';
+        if (!$isBeverage && $workflowStage === 'PRET_A_SERVIR') {
+            $this->reservePreparedQuantity((int) $item['menu_item_id'], $restaurantId, $suppliedQuantity);
+        }
         $unavailableQuantity = max($requestedQuantity - $suppliedQuantity, 0);
         $suppliedTotal = $suppliedQuantity * (float) $item['unit_price'];
         $itemStatus = match (true) {
@@ -404,6 +438,82 @@ final class KitchenService
         }
 
         return $row;
+    }
+
+    private function reservePreparedQuantity(int $menuItemId, int $restaurantId, float $quantity): void
+    {
+        if ($quantity <= 0) {
+            return;
+        }
+
+        $statement = $this->database->pdo()->prepare(
+            'SELECT id, quantity_remaining
+             FROM kitchen_production
+             WHERE restaurant_id = :restaurant_id
+               AND menu_item_id = :menu_item_id
+               AND quantity_remaining > 0
+             ORDER BY created_at ASC, id ASC'
+        );
+        $statement->execute([
+            'restaurant_id' => $restaurantId,
+            'menu_item_id' => $menuItemId,
+        ]);
+        $rows = $statement->fetchAll(PDO::FETCH_ASSOC);
+
+        $remaining = $quantity;
+        foreach ($rows as $row) {
+            if ($remaining <= 0) {
+                break;
+            }
+
+            $available = (float) ($row['quantity_remaining'] ?? 0);
+            if ($available <= 0) {
+                continue;
+            }
+
+            $deduct = min($available, $remaining);
+            $update = $this->database->pdo()->prepare(
+                'UPDATE kitchen_production
+                 SET quantity_remaining = GREATEST(quantity_remaining - :quantity, 0),
+                     status = CASE WHEN GREATEST(quantity_remaining - :quantity, 0) = 0 THEN "TERMINE" ELSE status END,
+                     closed_at = CASE WHEN GREATEST(quantity_remaining - :quantity, 0) = 0 THEN NOW() ELSE closed_at END
+                 WHERE id = :id AND restaurant_id = :restaurant_id'
+            );
+            $update->execute([
+                'quantity' => $deduct,
+                'id' => (int) $row['id'],
+                'restaurant_id' => $restaurantId,
+            ]);
+            $remaining -= $deduct;
+        }
+
+        if ($remaining > 0.0001) {
+            throw new \RuntimeException('Plat non prepare ou quantite insuffisante.');
+        }
+    }
+
+    private function normalizeProductionMaterials(array $rawMaterials): array
+    {
+        $normalized = [];
+        foreach ($rawMaterials as $material) {
+            if (!is_array($material)) {
+                continue;
+            }
+
+            $stockItemId = (int) ($material['stock_item_id'] ?? 0);
+            $quantityUsed = (float) ($material['quantity_used'] ?? 0);
+            if ($stockItemId <= 0 || $quantityUsed <= 0) {
+                continue;
+            }
+
+            $normalized[] = [
+                'stock_item_id' => $stockItemId,
+                'quantity_used' => $quantityUsed,
+                'note' => trim((string) ($material['note'] ?? '')),
+            ];
+        }
+
+        return $normalized;
     }
 
     private function findStockMovementInRestaurant(int $movementId, int $restaurantId): array

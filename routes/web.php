@@ -61,6 +61,7 @@ $router->post('/owner/menu/categories', [MenuAdminController::class, 'storeOwner
 $router->post('/owner/menu/items', [MenuAdminController::class, 'storeOwnerItem'], [AuthMiddleware::class, OwnerOrManagerMiddleware::class]);
 $router->post('/owner/menu/items/{id}/update', [MenuAdminController::class, 'updateOwnerItem'], [AuthMiddleware::class, OwnerOrManagerMiddleware::class]);
 $router->get('/owner/access', [TenantAccessController::class, 'index'], [AuthMiddleware::class, OwnerAreaMiddleware::class]);
+$router->get('/owner/access/users/{id}', [TenantAccessController::class, 'showUserHistory'], [AuthMiddleware::class, OwnerAreaMiddleware::class]);
 $router->post('/owner/access/roles', [TenantAccessController::class, 'storeRole'], [AuthMiddleware::class, OwnerAreaMiddleware::class]);
 $router->post('/owner/access/roles/{id}/permissions', [TenantAccessController::class, 'updateRolePermissions'], [AuthMiddleware::class, OwnerAreaMiddleware::class]);
 $router->post('/owner/access/roles/{id}/status', [TenantAccessController::class, 'changeRoleStatus'], [AuthMiddleware::class, OwnerAreaMiddleware::class]);
@@ -86,6 +87,7 @@ $router->post('/cuisine/demandes-stock', [OperationsController::class, 'requestK
 $router->post('/cuisine/demandes-stock/{id}/reception', [OperationsController::class, 'confirmKitchenStockReceipt'], [AuthMiddleware::class, KitchenAccessMiddleware::class]);
 $router->post('/cuisine/demandes-serveur/{id}/fourni', [OperationsController::class, 'fulfillServerRequestItem'], [AuthMiddleware::class, KitchenAccessMiddleware::class]);
 $router->get('/ventes', [OperationsController::class, 'sales'], [AuthMiddleware::class, SalesAccessMiddleware::class]);
+$router->get('/ventes/factures/{id}', [OperationsController::class, 'printSaleReceipt'], [AuthMiddleware::class, SalesAccessMiddleware::class]);
 $router->post('/ventes', [OperationsController::class, 'createSale'], [AuthMiddleware::class, SalesAccessMiddleware::class]);
 $router->post('/ventes/demandes', [OperationsController::class, 'createServerRequest'], [AuthMiddleware::class, SalesAccessMiddleware::class]);
 $router->post('/ventes/demandes/{id}/reception', [OperationsController::class, 'confirmServerRequestReceipt'], [AuthMiddleware::class, SalesAccessMiddleware::class]);
@@ -94,6 +96,14 @@ $router->post('/ventes/incidents', [OperationsController::class, 'signalSaleInci
 $router->post('/operations/cases/{id}/decision', [OperationsController::class, 'decideCase'], [AuthMiddleware::class]);
 $router->post('/ventes/pertes-argent', [OperationsController::class, 'createCashLoss'], [AuthMiddleware::class, SalesAccessMiddleware::class]);
 $router->get('/rapport', [OperationsController::class, 'report'], [AuthMiddleware::class, ReportsAccessMiddleware::class]);
+$router->get('/caisse', [OperationsController::class, 'cash'], [AuthMiddleware::class]);
+$router->post('/caisse/remises-serveur', [OperationsController::class, 'remitServerCash'], [AuthMiddleware::class]);
+$router->post('/caisse/transferts/{id}/reception-caisse', [OperationsController::class, 'receiveCashAtCashier'], [AuthMiddleware::class]);
+$router->post('/caisse/mouvements', [OperationsController::class, 'createCashMovement'], [AuthMiddleware::class]);
+$router->post('/caisse/remises-gerant', [OperationsController::class, 'transferCashToManager'], [AuthMiddleware::class]);
+$router->post('/caisse/transferts/{id}/reception-gerant', [OperationsController::class, 'receiveCashAtManager'], [AuthMiddleware::class]);
+$router->post('/caisse/remises-proprietaire', [OperationsController::class, 'transferCashToOwner'], [AuthMiddleware::class]);
+$router->post('/caisse/transferts/{id}/reception-proprietaire', [OperationsController::class, 'receiveCashAtOwner'], [AuthMiddleware::class]);
 $router->post('/owner/correction-requests/{id}/decision', [OperationsController::class, 'decideCorrectionRequest'], [AuthMiddleware::class, OwnerOrManagerMiddleware::class]);
 $router->get('/portal/register', [TenantPortalController::class, 'showRegistration']);
 $router->post('/portal/register', [TenantPortalController::class, 'register']);

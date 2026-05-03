@@ -211,6 +211,7 @@ function redirect_after_login(array $user): never
         'owner', 'manager' => '/owner',
         'stock_manager' => '/stock',
         'kitchen' => '/cuisine',
+        'cashier_accountant' => '/caisse',
         'cashier_server' => '/ventes',
         'customer' => !empty($user['restaurant_slug']) ? '/portal/' . rawurlencode((string) $user['restaurant_slug']) : '/login',
         default => '/login',
@@ -461,6 +462,7 @@ function role_label(?string $roleCode): string
         'owner' => 'Propriétaire',
         'manager' => 'Manager',
         'stock_manager' => 'Gestionnaire de stock',
+        'cashier_accountant' => 'Caissier / comptable',
         'kitchen' => 'Cuisine',
         'cashier_server' => 'Serveur / Caissier',
         'customer' => 'Client',
@@ -479,6 +481,7 @@ function restaurant_role_label(?string $roleCode): string
         'owner' => 'Propriétaire',
         'manager' => 'Gérant',
         'stock_manager' => 'Responsable stock',
+        'cashier_accountant' => 'Caissier / comptable',
         'cashier_server' => 'Serveur / caissier',
         default => role_label($roleCode),
     };
@@ -489,6 +492,7 @@ function permission_module_label(?string $moduleCode): string
     return match ((string) $moduleCode) {
         'branding' => 'Image du restaurant',
         'dashboard', 'owner', 'owner.dashboard' => 'Tableau de bord',
+        'cash', 'cashier', 'finance' => 'Caisse',
         'incidents' => 'Décisions gérant',
         'kitchen' => 'Cuisine',
         'menu' => 'Menu',

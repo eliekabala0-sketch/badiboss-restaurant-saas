@@ -21,6 +21,35 @@ $printQuery = http_build_query(array_filter([
         <p>Suivi détaillé du stock, de la cuisine, des ventes, des pertes et des incidents sur une vraie période calendrier.</p>
     </div>
 </section>
+
+<?php if (!empty($report['financial_report']['summary'] ?? [])): ?>
+    <section class="card" style="padding:22px; margin-top:24px;">
+        <h2 style="margin-top:0;">Rapport financier</h2>
+        <p><strong>Total remis a caisse</strong> : <?= e(format_money($report['financial_report']['summary']['total_remitted_to_cash'] ?? 0, $restaurantCurrency)) ?></p>
+        <p><strong>Total recu caisse</strong> : <?= e(format_money($report['financial_report']['summary']['total_received_by_cash'] ?? 0, $restaurantCurrency)) ?></p>
+        <p><strong>Depenses caisse</strong> : <?= e(format_money($report['financial_report']['summary']['cash_expenses'] ?? 0, $restaurantCurrency)) ?></p>
+        <p><strong>Solde caisse</strong> : <?= e(format_money($report['financial_report']['summary']['cash_balance'] ?? 0, $restaurantCurrency)) ?></p>
+        <p><strong>Remises caisse vers gerant</strong> : <?= e(format_money($report['financial_report']['summary']['transferred_to_manager'] ?? 0, $restaurantCurrency)) ?></p>
+        <p><strong>Remises gerant vers proprietaire</strong> : <?= e(format_money($report['financial_report']['summary']['transferred_to_owner'] ?? 0, $restaurantCurrency)) ?></p>
+        <p><strong>Ecarts signales</strong> : <?= e(format_money($report['financial_report']['summary']['discrepancies'] ?? 0, $restaurantCurrency)) ?></p>
+        <?php if (($report['financial_report']['remittances_by_server'] ?? []) !== []): ?>
+            <div class="table-wrap" style="margin-top:14px;">
+                <table>
+                    <thead><tr><th>Serveur</th><th>Remises</th><th>Total</th></tr></thead>
+                    <tbody>
+                    <?php foreach ($report['financial_report']['remittances_by_server'] as $row): ?>
+                        <tr>
+                            <td><?= e(named_actor_label($row['server_name'] ?? null, 'cashier_server')) ?></td>
+                            <td><?= e((string) ($row['transfer_count'] ?? 0)) ?></td>
+                            <td><?= e(format_money($row['total_amount'] ?? 0, $restaurantCurrency)) ?></td>
+                        </tr>
+                    <?php endforeach; ?>
+                    </tbody>
+                </table>
+            </div>
+        <?php endif; ?>
+    </section>
+<?php endif; ?>
 <section class="card" style="padding:18px; margin-bottom:24px;">
     <div class="menu-thumb">
         <img src="<?= e($restaurantLogo) ?>" alt="Logo restaurant">
@@ -38,7 +67,9 @@ $printQuery = http_build_query(array_filter([
 </section>
 
 <section class="card" style="padding:22px; margin-bottom:24px;">
-    <form method="get" action="/rapport">
+    <details class="compact-card" data-autoclose-details>
+    <summary><strong>Afficher les filtres</strong></summary>
+    <form method="get" action="/rapport" style="margin-top:14px;">
         <?php if ((current_user()['scope'] ?? null) === 'super_admin'): ?>
             <input type="hidden" name="restaurant_id" value="<?= e((string) $restaurant['id']) ?>">
         <?php endif; ?>
@@ -52,6 +83,7 @@ $printQuery = http_build_query(array_filter([
         </select>
         <button type="submit">Afficher</button>
     </form>
+    </details>
     <p class="muted" style="margin-bottom:0;"><?= e($report['period_label'] ?? '') ?> · du <?= e(format_date_fr($report['range_start'] ?? null, $reportTimezone)) ?> au <?= e(format_date_fr($report['range_end'] ?? null, $reportTimezone)) ?> · Fuseau <?= e($report['timezone'] ?? $reportTimezone->getName()) ?></p>
 </section>
 

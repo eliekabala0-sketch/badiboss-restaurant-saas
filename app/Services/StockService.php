@@ -517,6 +517,95 @@ final class StockService
         ];
     }
 
+    public function listKitchenInventory(int $restaurantId): array
+    {
+        $this->ensureKitchenInventoryTables();
+        $statement = $this->database->pdo()->prepare(
+            'SELECT ki.*, si.name AS stock_item_name, si.unit_name
+             FROM kitchen_inventory ki
+             INNER JOIN stock_items si ON si.id = ki.stock_item_id
+             WHERE ki.restaurant_id = :restaurant_id
+             ORDER BY si.name ASC'
+        );
+        $statement->execute(['restaurant_id' => $restaurantId]);
+
+        return $statement->fetchAll(PDO::FETCH_ASSOC);
+    }
+
+    public function consumeKitchenMaterials(int $restaurantId, array $materials, array $actor, ?int $menuItemId = null): array
+    {
+        $this->ensureKitchenInventoryTables();
+        if ($materials === []) {
+            throw new \RuntimeException('Aucune matiere premiere selectionnee.');
+        }
+
+        $pdo = $this->database->pdo();
+        $movementIds = [];
+        $normalized = [];
+        $pdo->beginTransaction();
+
+        try {
+            foreach ($materials as $material) {
+                $stockItemId = (int) ($material['stock_item_id'] ?? 0);
+                $quantityUsed = (float) ($material['quantity_used'] ?? 0);
+                if ($stockItemId <= 0 || $quantityUsed <= 0) {
+                    continue;
+                }
+
+                $inventory = $this->findKitchenInventoryItem($restaurantId, $stockItemId);
+                if ($inventory === null || (float) ($inventory['quantity_available'] ?? 0) < $quantityUsed) {
+                    throw new \RuntimeException('Matiere premiere indisponible ou insuffisante en cuisine.');
+                }
+
+                $statement = $pdo->prepare(
+                    'UPDATE kitchen_inventory
+                     SET quantity_available = quantity_available - :quantity_used,
+                         updated_at = NOW()
+                     WHERE restaurant_id = :restaurant_id AND stock_item_id = :stock_item_id'
+                );
+                $statement->execute([
+                    'quantity_used' => $quantityUsed,
+                    'restaurant_id' => $restaurantId,
+                    'stock_item_id' => $stockItemId,
+                ]);
+
+                $stockItem = $this->findStockItemInRestaurant($stockItemId, $restaurantId);
+                $movementIds[] = $this->insertMovement($restaurantId, [
+                    'stock_item_id' => $stockItemId,
+                    'movement_type' => 'CONSOMMATION_CUISINE',
+                    'quantity' => $quantityUsed,
+                    'unit_cost_snapshot' => (float) ($stockItem['estimated_unit_cost'] ?? 0),
+                    'total_cost_snapshot' => $quantityUsed * (float) ($stockItem['estimated_unit_cost'] ?? 0),
+                    'status' => 'VALIDE',
+                    'user_id' => $actor['id'],
+                    'validated_by' => $actor['id'],
+                    'reference_type' => 'kitchen_production',
+                    'reference_id' => $menuItemId,
+                    'note' => trim((string) ($material['note'] ?? 'Consommation cuisine.')) ?: null,
+                ]);
+
+                $normalized[] = [
+                    'stock_item_id' => $stockItemId,
+                    'quantity_used' => $quantityUsed,
+                    'note' => trim((string) ($material['note'] ?? '')),
+                ];
+            }
+
+            if ($normalized === []) {
+                throw new \RuntimeException('Aucune matiere premiere valide n a ete fournie.');
+            }
+
+            $pdo->commit();
+        } catch (\Throwable $throwable) {
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+            throw $throwable;
+        }
+
+        return ['movement_ids' => $movementIds, 'materials' => $normalized];
+    }
+
     public function createKitchenStockRequest(int $restaurantId, array $payload, array $actor): void
     {
         $this->ensureKitchenStockRequestItemsTable();
@@ -751,6 +840,10 @@ final class StockService
             'id' => $requestId,
             'restaurant_id' => $restaurantId,
         ]);
+
+        if ((float) ($request['quantity_supplied'] ?? 0) > 0) {
+            $this->increaseKitchenInventory($restaurantId, (int) $request['stock_item_id'], (float) $request['quantity_supplied']);
+        }
 
         Container::getInstance()->get('audit')->log([
             'restaurant_id' => $restaurantId,
@@ -1248,6 +1341,12 @@ final class StockService
                 'restaurant_id' => $restaurantId,
             ]);
 
+            foreach ($requestItems as $requestItem) {
+                if ((float) ($requestItem['quantity_supplied'] ?? 0) > 0) {
+                    $this->increaseKitchenInventory($restaurantId, (int) $requestItem['stock_item_id'], (float) $requestItem['quantity_supplied']);
+                }
+            }
+
             $pdo->commit();
         } catch (\Throwable $throwable) {
             if ($pdo->inTransaction()) {
@@ -1499,6 +1598,38 @@ final class StockService
         return 'FOURNI_PARTIEL';
     }
 
+    private function increaseKitchenInventory(int $restaurantId, int $stockItemId, float $quantity): void
+    {
+        $this->ensureKitchenInventoryTables();
+        $statement = $this->database->pdo()->prepare(
+            'INSERT INTO kitchen_inventory (restaurant_id, stock_item_id, quantity_available, created_at, updated_at)
+             VALUES (:restaurant_id, :stock_item_id, :quantity_available, NOW(), NOW())
+             ON DUPLICATE KEY UPDATE quantity_available = quantity_available + VALUES(quantity_available), updated_at = NOW()'
+        );
+        $statement->execute([
+            'restaurant_id' => $restaurantId,
+            'stock_item_id' => $stockItemId,
+            'quantity_available' => $quantity,
+        ]);
+    }
+
+    private function findKitchenInventoryItem(int $restaurantId, int $stockItemId): ?array
+    {
+        $this->ensureKitchenInventoryTables();
+        $statement = $this->database->pdo()->prepare(
+            'SELECT * FROM kitchen_inventory
+             WHERE restaurant_id = :restaurant_id AND stock_item_id = :stock_item_id
+             LIMIT 1'
+        );
+        $statement->execute([
+            'restaurant_id' => $restaurantId,
+            'stock_item_id' => $stockItemId,
+        ]);
+        $row = $statement->fetch(PDO::FETCH_ASSOC);
+
+        return $row === false ? null : $row;
+    }
+
     private function ensureKitchenStockRequestItemsTable(): void
     {
         if ($this->tableExists('kitchen_stock_request_items')) {
@@ -1534,6 +1665,42 @@ final class StockService
                 CONSTRAINT fk_kitchen_stock_request_items_received_by FOREIGN KEY (received_by) REFERENCES users(id)
             )'
         );
+    }
+
+    private function ensureKitchenInventoryTables(): void
+    {
+        if (!$this->tableExists('kitchen_inventory')) {
+            $this->database->pdo()->exec(
+                'CREATE TABLE IF NOT EXISTS kitchen_inventory (
+                    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+                    restaurant_id BIGINT UNSIGNED NOT NULL,
+                    stock_item_id BIGINT UNSIGNED NOT NULL,
+                    quantity_available DECIMAL(12,3) NOT NULL DEFAULT 0.000,
+                    created_at DATETIME NOT NULL,
+                    updated_at DATETIME NOT NULL,
+                    UNIQUE KEY uniq_kitchen_inventory_restaurant_item (restaurant_id, stock_item_id),
+                    INDEX idx_kitchen_inventory_restaurant (restaurant_id),
+                    INDEX idx_kitchen_inventory_stock_item (stock_item_id)
+                )'
+            );
+        }
+
+        if (!$this->tableExists('kitchen_production_materials')) {
+            $this->database->pdo()->exec(
+                'CREATE TABLE IF NOT EXISTS kitchen_production_materials (
+                    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+                    kitchen_production_id BIGINT UNSIGNED NOT NULL,
+                    restaurant_id BIGINT UNSIGNED NOT NULL,
+                    stock_item_id BIGINT UNSIGNED NOT NULL,
+                    quantity_used DECIMAL(12,3) NOT NULL DEFAULT 0.000,
+                    note TEXT NULL,
+                    created_at DATETIME NOT NULL,
+                    INDEX idx_kitchen_production_materials_production (kitchen_production_id),
+                    INDEX idx_kitchen_production_materials_restaurant (restaurant_id),
+                    INDEX idx_kitchen_production_materials_stock_item (stock_item_id)
+                )'
+            );
+        }
     }
 
     private function stockItemOptionalColumns(): array

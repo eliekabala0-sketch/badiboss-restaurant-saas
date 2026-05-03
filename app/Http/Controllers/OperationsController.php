@@ -264,6 +264,7 @@ final class OperationsController
             'kitchen_stock_requests' => $kitchenStockBlocks['requests'],
             'kitchen_stock_request_items_by_request' => $kitchenStockBlocks['items_by_request'],
             'stock_items' => Container::getInstance()->get('stockService')->listItems($restaurantId),
+            'kitchen_inventory' => Container::getInstance()->get('stockService')->listKitchenInventory($restaurantId),
             'menu_categories' => Container::getInstance()->get('menuAdmin')->listCategories($restaurantId),
             'menu_items' => Container::getInstance()->get('menuAdmin')->listItems($restaurantId),
             'sale_items' => Container::getInstance()->get('salesService')->listSaleItemsForKitchen($restaurantId),
@@ -297,6 +298,7 @@ final class OperationsController
             'menu_price' => $request->input('menu_price', 0),
             'menu_description' => $request->input('menu_description', ''),
             'note' => $request->input('note'),
+            'materials' => $request->input('materials', []),
         ], current_user());
 
         flash('success', 'Production cuisine enregistree.');
@@ -420,6 +422,33 @@ final class OperationsController
         audit_access('sales', $restaurantId, 'screens', 'sales', 'Consultation module ventes');
     }
 
+    public function cash(Request $request): void
+    {
+        $restaurantId = $this->resolveRestaurantId($request);
+        authorize_access('cash.view');
+
+        $filters = [
+            'date_from' => (string) ($request->query['date_from'] ?? ''),
+            'date_to' => (string) ($request->query['date_to'] ?? ''),
+            'status' => (string) ($request->query['status'] ?? ''),
+            'movement_type' => (string) ($request->query['movement_type'] ?? ''),
+            'user_id' => (int) ($request->query['user_id'] ?? 0),
+        ];
+
+        view('operations/cash', [
+            'title' => 'Caisse',
+            'restaurant' => Container::getInstance()->get('restaurantAdmin')->findRestaurant($restaurantId),
+            'cash' => Container::getInstance()->get('cashService')->dashboard($restaurantId, $filters),
+            'sales' => Container::getInstance()->get('salesService')->listSales($restaurantId),
+            'users' => Container::getInstance()->get('roleAdmin')->listUsersForRestaurant($restaurantId),
+            'filters' => $filters,
+            'flash_success' => flash('success'),
+            'flash_error' => flash('error'),
+        ]);
+
+        audit_access('cash', $restaurantId, 'screens', 'cash', 'Consultation module caisse');
+    }
+
     public function createSale(Request $request): void
     {
         $restaurantId = $this->resolveRestaurantId($request);
@@ -446,6 +475,18 @@ final class OperationsController
 
         flash('success', 'Vente enregistree.');
         redirect($this->moduleUrl('/ventes', $restaurantId));
+    }
+
+    public function printSaleReceipt(Request $request): void
+    {
+        $restaurantId = $this->resolveRestaurantId($request);
+        authorize_access('sales.view');
+
+        view('operations/receipt', [
+            'title' => 'Facture',
+            'restaurant' => Container::getInstance()->get('restaurantAdmin')->findRestaurant($restaurantId),
+            'receipt' => Container::getInstance()->get('cashService')->printableReceipt($restaurantId, (int) $request->route('id')),
+        ]);
     }
 
     public function createServerRequest(Request $request): void
@@ -569,6 +610,120 @@ final class OperationsController
 
         flash('success', 'Perte d argent enregistree.');
         redirect($this->moduleUrl('/ventes', $restaurantId));
+    }
+
+    public function remitServerCash(Request $request): void
+    {
+        $restaurantId = $this->resolveRestaurantId($request);
+        authorize_access('cash.remit.server');
+
+        Container::getInstance()->get('cashService')->remitServerCash($restaurantId, [
+            'sale_id' => $request->input('sale_id'),
+            'to_user_id' => $request->input('to_user_id'),
+            'amount' => $request->input('amount'),
+            'note' => $request->input('note'),
+        ], current_user());
+
+        flash('success', 'Remise serveur enregistree.');
+        redirect($this->moduleUrl('/caisse', $restaurantId));
+    }
+
+    public function receiveCashAtCashier(Request $request): void
+    {
+        $restaurantId = $this->resolveRestaurantId($request);
+        authorize_access('cash.receive.cashier');
+
+        Container::getInstance()->get('cashService')->receiveByCashier(
+            $restaurantId,
+            (int) $request->route('id'),
+            [
+                'amount_received' => $request->input('amount_received'),
+                'discrepancy_note' => $request->input('discrepancy_note'),
+            ],
+            current_user()
+        );
+
+        flash('success', 'Reception caisse confirmee.');
+        redirect($this->moduleUrl('/caisse', $restaurantId));
+    }
+
+    public function createCashMovement(Request $request): void
+    {
+        $restaurantId = $this->resolveRestaurantId($request);
+        authorize_access('cash.expense.manage');
+
+        Container::getInstance()->get('cashService')->createMovement($restaurantId, [
+            'movement_type' => $request->input('movement_type', 'ENTREE'),
+            'amount' => $request->input('amount'),
+            'note' => $request->input('note'),
+            'source_type' => $request->input('source_type', 'manual'),
+            'source_id' => $request->input('source_id', 0),
+        ], current_user());
+
+        flash('success', 'Mouvement de caisse enregistre.');
+        redirect($this->moduleUrl('/caisse', $restaurantId));
+    }
+
+    public function transferCashToManager(Request $request): void
+    {
+        $restaurantId = $this->resolveRestaurantId($request);
+        authorize_access('cash.transfer.manager');
+
+        Container::getInstance()->get('cashService')->transferToManager($restaurantId, [
+            'to_user_id' => $request->input('to_user_id'),
+            'amount' => $request->input('amount'),
+            'note' => $request->input('note'),
+        ], current_user());
+
+        flash('success', 'Fonds remis au gerant.');
+        redirect($this->moduleUrl('/caisse', $restaurantId));
+    }
+
+    public function receiveCashAtManager(Request $request): void
+    {
+        $restaurantId = $this->resolveRestaurantId($request);
+        authorize_access('cash.receive.manager');
+
+        Container::getInstance()->get('cashService')->receiveByManager(
+            $restaurantId,
+            (int) $request->route('id'),
+            ['amount_received' => $request->input('amount_received')],
+            current_user()
+        );
+
+        flash('success', 'Reception gerant confirmee.');
+        redirect($this->moduleUrl('/caisse', $restaurantId));
+    }
+
+    public function transferCashToOwner(Request $request): void
+    {
+        $restaurantId = $this->resolveRestaurantId($request);
+        authorize_access('cash.transfer.owner');
+
+        Container::getInstance()->get('cashService')->transferToOwner($restaurantId, [
+            'to_user_id' => $request->input('to_user_id'),
+            'amount' => $request->input('amount'),
+            'note' => $request->input('note'),
+        ], current_user());
+
+        flash('success', 'Fonds remis au proprietaire.');
+        redirect($this->moduleUrl('/caisse', $restaurantId));
+    }
+
+    public function receiveCashAtOwner(Request $request): void
+    {
+        $restaurantId = $this->resolveRestaurantId($request);
+        authorize_access('cash.receive.owner');
+
+        Container::getInstance()->get('cashService')->receiveByOwner(
+            $restaurantId,
+            (int) $request->route('id'),
+            ['amount_received' => $request->input('amount_received')],
+            current_user()
+        );
+
+        flash('success', 'Reception proprietaire confirmee.');
+        redirect($this->moduleUrl('/caisse', $restaurantId));
     }
 
     public function report(Request $request): void

@@ -189,6 +189,8 @@ foreach ($historyEntries as $entry) {
 
 <section class="split">
     <article class="card" style="padding:22px;">
+        <details class="compact-card" data-autoclose-details>
+            <summary><strong>Passer commande / Demander a la cuisine</strong></summary>
         <h2 style="margin-top:0;">Nouvelle demande de service</h2>
         <p class="muted" style="margin-top:0;">Demande serveur depuis le menu avec attente fourni cuisine pour garder une lecture claire du flux.</p>
         <?php if (can_access('sales.request.create')): ?>
@@ -212,7 +214,7 @@ foreach ($historyEntries as $entry) {
                             </div>
                             <div>
                                 <label>Quantité</label>
-                                <input type="number" min="1" step="1" value="1" data-line-quantity name="items[0][requested_quantity]" required>
+                                <div class="quantity-stepper" data-quantity-stepper><button type="button" data-stepper-minus>-</button><input type="number" min="1" step="1" value="1" data-line-quantity name="items[0][requested_quantity]" required><button type="button" data-stepper-plus>+</button></div>
                             </div>
                             <div>
                                 <label>Prix unitaire auto</label>
@@ -246,9 +248,12 @@ foreach ($historyEntries as $entry) {
         <?php else: ?>
             <p class="muted">Création réservée au service.</p>
         <?php endif; ?>
+        </details>
     </article>
 
     <article class="card" style="padding:22px;">
+        <details class="compact-card" data-autoclose-details>
+            <summary><strong>Remise caisse / Perte d argent</strong></summary>
         <h2 style="margin-top:0;">Perte d’argent</h2>
         <?php if (can_access('cash_loss.declare')): ?>
             <form method="post" action="/ventes/pertes-argent">
@@ -268,8 +273,34 @@ foreach ($historyEntries as $entry) {
         <?php else: ?>
             <p class="muted">Déclaration réservée à la supervision.</p>
         <?php endif; ?>
+        <?php if (can_access('cash.remit.server')): ?>
+            <p style="margin-top:14px;"><a href="/caisse" class="button-muted">Ouvrir la remise caisse</a></p>
+        <?php endif; ?>
+        </details>
     </article>
 </section>
+
+<?php if ($sales !== []): ?>
+    <section class="card" style="padding:22px; margin-top:24px;">
+        <h2 style="margin-top:0;">Factures recentes</h2>
+        <div class="table-wrap">
+            <table>
+                <thead><tr><th>Vente</th><th>Serveur</th><th>Total</th><th>Statut</th><th>Action</th></tr></thead>
+                <tbody>
+                <?php foreach (array_slice($sales, 0, 12) as $sale): ?>
+                    <tr>
+                        <td>#<?= e((string) $sale['id']) ?></td>
+                        <td><?= e(named_actor_label($sale['server_name'] ?? null, 'cashier_server')) ?></td>
+                        <td><?= e(format_money($sale['total_amount'] ?? 0, $restaurantCurrency)) ?></td>
+                        <td><?= e(validation_status_label($sale['status'] ?? null)) ?></td>
+                        <td><a href="/ventes/factures/<?= e((string) $sale['id']) ?>" class="button-muted" target="_blank" rel="noopener noreferrer">Imprimer</a></td>
+                    </tr>
+                <?php endforeach; ?>
+                </tbody>
+            </table>
+        </div>
+    </section>
+<?php endif; ?>
 
 <section class="card" style="padding:22px; margin-top:24px;">
     <h2 style="margin-top:0;">Actif maintenant</h2>

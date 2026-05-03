@@ -329,6 +329,30 @@ declare(strict_types=1);
             background: linear-gradient(135deg, #3a3a3a 0%, #252525 100%);
             border-color: rgba(255, 255, 255, 0.08);
         }
+        details.compact-card {
+            border: 1px solid var(--line);
+            border-radius: 16px;
+            background: rgba(255,255,255,0.03);
+            padding: 14px 16px;
+        }
+        details.compact-card > summary {
+            cursor: pointer;
+            list-style: none;
+        }
+        .quantity-stepper {
+            display: inline-grid;
+            grid-template-columns: 42px minmax(70px, 1fr) 42px;
+            gap: 6px;
+            align-items: center;
+        }
+        .quantity-stepper button {
+            padding: 10px 0;
+            text-align: center;
+        }
+        .quantity-stepper input {
+            text-align: center;
+            margin: 0;
+        }
         .split {
             display: grid;
             grid-template-columns: 1fr 1fr;
@@ -695,6 +719,7 @@ declare(strict_types=1);
                     <?php if (can_access('stock.view')): ?><a href="/stock">Stock</a><?php endif; ?>
                     <?php if (can_access('kitchen.view')): ?><a href="/cuisine">Cuisine</a><?php endif; ?>
                     <?php if (can_access('sales.view')): ?><a href="/ventes">Ventes</a><?php endif; ?>
+                    <?php if (can_access('cash.view')): ?><a href="/caisse">Caisse</a><?php endif; ?>
                     <?php if (can_access('reports.view')): ?><a href="/rapport">Rapports</a><?php endif; ?>
                 <?php endif; ?>
                 <a href="/logout">Déconnexion</a>
@@ -816,6 +841,40 @@ document.addEventListener('click', function (event) {
     }
 
     item.remove();
+});
+
+document.querySelectorAll('[data-quantity-stepper]').forEach(function (stepper) {
+    var input = stepper.querySelector('input');
+    var minus = stepper.querySelector('[data-stepper-minus]');
+    var plus = stepper.querySelector('[data-stepper-plus]');
+    if (!input || !minus || !plus) {
+        return;
+    }
+
+    var min = function () {
+        var raw = input.getAttribute('min');
+        return raw === null || raw === '' ? 0 : Number(raw);
+    };
+    var step = function () {
+        var raw = input.getAttribute('step');
+        return raw === null || raw === '' ? 1 : Number(raw);
+    };
+
+    minus.addEventListener('click', function () {
+        var current = input.value === '' ? min() : Number(input.value);
+        input.value = String(Math.max(min(), current - step()));
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+
+    plus.addEventListener('click', function () {
+        var current = input.value === '' ? 0 : Number(input.value);
+        input.value = String(current + step());
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+});
+
+document.querySelectorAll('[data-autoclose-details]').forEach(function (details) {
+    details.open = false;
 });
 </script>
 </body>

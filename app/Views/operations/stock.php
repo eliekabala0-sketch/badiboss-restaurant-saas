@@ -210,6 +210,8 @@ $priorityBadgeClass = static function (?string $priority): string {
 
 <?php if (can_access('stock.create')): ?>
     <section class="card" style="padding:22px; margin-bottom:24px;">
+        <details class="compact-card" data-autoclose-details>
+            <summary><strong>Ajouter article stock</strong></summary>
         <h2 style="margin-top:0;">Creer un article de stock</h2>
         <form method="post" action="/stock/items" class="split">
             <div><label>Nom</label><input name="name" required></div>
@@ -221,6 +223,7 @@ $priorityBadgeClass = static function (?string $priority): string {
             <div style="grid-column:1 / -1;"><label>Note</label><textarea name="item_note" placeholder="Informations internes sur le produit"></textarea></div>
             <div style="align-self:end;"><button type="submit">Creer l article</button></div>
         </form>
+        </details>
     </section>
 <?php endif; ?>
 
@@ -250,6 +253,8 @@ $priorityBadgeClass = static function (?string $priority): string {
 <section class="split">
     <?php if (can_access('stock.entry.create')): ?>
         <article class="card" style="padding:22px;">
+            <details class="compact-card" data-autoclose-details>
+                <summary><strong>Entree stock</strong></summary>
             <h2 style="margin-top:0;">Entree de stock</h2>
             <form method="post" action="/stock/entries">
                 <label>Article</label>
@@ -259,18 +264,21 @@ $priorityBadgeClass = static function (?string $priority): string {
                     <?php endforeach; ?>
                 </select>
                 <label>Quantite</label>
-                <input name="quantity" value="1">
+                <div class="quantity-stepper" data-quantity-stepper><button type="button" data-stepper-minus>-</button><input name="quantity" value="1" min="0" step="0.5"><button type="button" data-stepper-plus>+</button></div>
                 <label>Cout unitaire</label>
                 <input name="unit_cost" value="0">
                 <label>Note</label>
                 <textarea name="note"></textarea>
                 <button type="submit">Enregistrer l entree</button>
             </form>
+            </details>
         </article>
     <?php endif; ?>
 
     <?php if (can_access('stock.loss.declare')): ?>
         <article class="card" style="padding:22px;">
+            <details class="compact-card" data-autoclose-details>
+                <summary><strong>Perte / correction stock</strong></summary>
             <h2 style="margin-top:0;">Perte matiere</h2>
             <form method="post" action="/stock/pertes">
                 <label>Article</label>
@@ -280,13 +288,14 @@ $priorityBadgeClass = static function (?string $priority): string {
                     <?php endforeach; ?>
                 </select>
                 <label>Quantite perdue</label>
-                <input name="quantity" value="1">
+                <div class="quantity-stepper" data-quantity-stepper><button type="button" data-stepper-minus>-</button><input name="quantity" value="1" min="0" step="0.5"><button type="button" data-stepper-plus>+</button></div>
                 <label>Montant estime</label>
                 <input name="amount" value="1.00">
                 <label>Description</label>
                 <textarea name="description">Produit abime ou inutilisable.</textarea>
                 <button type="submit">Declarer la perte</button>
             </form>
+            </details>
         </article>
     <?php endif; ?>
 </section>
@@ -393,7 +402,7 @@ $priorityBadgeClass = static function (?string $priority): string {
                                                 ?>
                                                 <tr>
                                                     <td><?= e($item['stock_item_name'] ?? '-') ?></td>
-                                                    <td><input name="items[<?= e((string) $item['id']) ?>][quantity_supplied]" value="<?= e((string) $currentSupplied) ?>"></td>
+                                                    <td><div class="quantity-stepper" data-quantity-stepper><button type="button" data-stepper-minus>-</button><input name="items[<?= e((string) $item['id']) ?>][quantity_supplied]" value="<?= e((string) $currentSupplied) ?>" min="0" step="0.5"><button type="button" data-stepper-plus>+</button></div></td>
                                                     <td><input value="<?= e((string) $currentUnavailable) ?>" readonly></td>
                                                     <td>
                                                         <select name="items[<?= e((string) $item['id']) ?>][planning_status]">

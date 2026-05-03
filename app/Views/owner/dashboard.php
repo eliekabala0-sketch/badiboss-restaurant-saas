@@ -134,6 +134,7 @@ $restaurantRegisterUrl = restaurant_generated_registration_url($restaurant);
         <p><strong>Stock :</strong> <?= $can_access_stock ? 'Oui' : 'Non' ?></p>
         <p><strong>Cuisine :</strong> <?= $can_access_kitchen ? 'Oui' : 'Non' ?></p>
         <p><strong>Ventes :</strong> <?= $can_access_sales ? 'Oui' : 'Non' ?></p>
+        <p><strong>Caisse :</strong> <?= $can_access_cash ? 'Oui' : 'Non' ?></p>
         <p><strong>Rapports :</strong> <?= $can_access_reports ? 'Oui' : 'Non' ?></p>
         <p class="muted">Les écritures et les rapports avancés restent verrouillés tant que l’abonnement n’est pas opérationnel.</p>
     </article>
@@ -222,6 +223,7 @@ $restaurantRegisterUrl = restaurant_generated_registration_url($restaurant);
         <?php if (!restaurant_status_blocks_operations($restaurant['status'] ?? null) && $can_access_kitchen): ?><a href="/cuisine">Ouvrir Cuisine</a><?php endif; ?>
         <?php if (!restaurant_status_blocks_operations($restaurant['status'] ?? null) && $can_access_sales): ?><a href="/ventes">Ouvrir Ventes</a><?php endif; ?>
         <?php if (!restaurant_status_blocks_operations($restaurant['status'] ?? null) && $can_access_reports): ?><a href="/rapport">Voir les rapports</a><?php endif; ?>
+        <?php if (!restaurant_status_blocks_operations($restaurant['status'] ?? null) && $can_access_cash): ?><a href="/caisse">Ouvrir Caisse</a><?php endif; ?>
         <?php if (!restaurant_status_blocks_operations($restaurant['status'] ?? null)): ?><a href="/owner/menu">Voir le menu</a><?php endif; ?>
         <?php if (can_access('tenant.access.manage')): ?><a href="/owner/access">Rôles et accès</a><?php endif; ?>
     </div>
