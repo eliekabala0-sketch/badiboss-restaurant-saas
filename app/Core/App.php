@@ -119,11 +119,12 @@ final class App
         try {
             $this->router->dispatch($request);
         } catch (\RuntimeException $exception) {
-            $this->handleApplicationError($request, $exception->getMessage(), 422);
+            $this->handleApplicationError($request, ui_safe_message($exception->getMessage()), 422);
         } catch (\Throwable $exception) {
+            error_log((string) $exception);
             $message = (bool) ($this->config['app']['debug'] ?? false)
-                ? $exception->getMessage()
-                : 'Une erreur interne est survenue.';
+                ? ui_safe_message($exception->getMessage())
+                : 'Action impossible pour le moment. Veuillez reessayer ou contacter l administrateur.';
 
             $this->handleApplicationError($request, $message, 500);
         }

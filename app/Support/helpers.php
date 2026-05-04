@@ -593,6 +593,40 @@ function format_money(mixed $amount, array|int|string|null $currency = null): st
     return '$' . number_format($numericAmount, 2, '.', ',');
 }
 
+function ui_safe_message(?string $message, string $fallback = 'Action impossible pour le moment. Veuillez reessayer ou contacter l administrateur.'): string
+{
+    $clean = trim((string) $message);
+    if ($clean === '') {
+        return $fallback;
+    }
+
+    $technicalMarkers = [
+        'sqlstate',
+        'stack trace',
+        'fatal error',
+        'warning:',
+        'notice:',
+        'undefined',
+        'pdoexception',
+        'exception',
+        ' in ',
+        ' on line ',
+        'call to',
+        'argument ',
+        'profil',
+        'db error',
+    ];
+
+    $normalized = strtolower($clean);
+    foreach ($technicalMarkers as $marker) {
+        if (str_contains($normalized, $marker)) {
+            return $fallback;
+        }
+    }
+
+    return $clean;
+}
+
 function named_actor_label(?string $name, ?string $roleCode = null): string
 {
     $cleanName = trim((string) $name);
@@ -611,6 +645,20 @@ function named_actor_label(?string $name, ?string $roleCode = null): string
     }
 
     return $roleLabel . ' ' . $cleanName;
+}
+
+function cash_transfer_status_label(?string $status): string
+{
+    return match ((string) $status) {
+        'REMIS_A_CAISSE' => 'Remis par le serveur',
+        'RECU_CAISSE' => 'Recu par la caisse',
+        'ECART_SIGNALE' => 'Ecart signale',
+        'REMIS_A_GERANT' => 'Remis au gerant',
+        'RECU_GERANT' => 'Recu par le gerant',
+        'REMIS_A_PROPRIETAIRE' => 'Remis au proprietaire',
+        'RECU_PROPRIETAIRE' => 'Recu par le proprietaire',
+        default => validation_status_label($status),
+    };
 }
 
 function signed_actor_line(

@@ -48,6 +48,34 @@ $printQuery = http_build_query(array_filter([
                 </table>
             </div>
         <?php endif; ?>
+        <?php if (($report['financial_report']['sale_remittance_details'] ?? []) !== []): ?>
+            <div class="table-wrap" style="margin-top:14px;">
+                <table>
+                    <thead><tr><th>Vente cloturee</th><th>Serveur</th><th>Remise serveur</th><th>Reception caisse</th><th>Ecart</th></tr></thead>
+                    <tbody>
+                    <?php foreach ($report['financial_report']['sale_remittance_details'] as $row): ?>
+                        <tr>
+                            <td>
+                                <?php if (!empty($row['sale_id'])): ?>
+                                    <strong>#<?= e((string) $row['sale_id']) ?></strong>
+                                    <br><span class="muted"><?= e(format_money($row['sale_total_amount'] ?? 0, $restaurantCurrency)) ?></span>
+                                    <?php if (!empty($row['server_request_id'])): ?>
+                                        <br><span class="muted">Demande #<?= e((string) $row['server_request_id']) ?> - <?= e((string) ($row['service_reference'] ?? '-')) ?></span>
+                                    <?php endif; ?>
+                                <?php else: ?>
+                                    <span class="muted">Aucune</span>
+                                <?php endif; ?>
+                            </td>
+                            <td><?= e(named_actor_label($row['sale_server_name'] ?? $row['from_user_name'] ?? null, 'cashier_server')) ?></td>
+                            <td><?= e(format_date_fr($row['requested_at'] ?? $row['created_at'] ?? null, $reportTimezone)) ?><br><span class="muted"><?= e(format_money($row['amount'] ?? 0, $restaurantCurrency)) ?></span></td>
+                            <td><?= e(($row['status'] ?? '') === 'REMIS_A_CAISSE' ? 'En attente de caisse' : cash_transfer_status_label($row['status'] ?? null)) ?><?php if (!empty($row['received_at'])): ?><br><span class="muted"><?= e(format_date_fr($row['received_at'], $reportTimezone)) ?></span><?php endif; ?></td>
+                            <td><?= e(format_money($row['discrepancy_amount'] ?? 0, $restaurantCurrency)) ?><?php if (!empty($row['discrepancy_note'])): ?><br><span class="muted"><?= e((string) $row['discrepancy_note']) ?></span><?php endif; ?></td>
+                        </tr>
+                    <?php endforeach; ?>
+                    </tbody>
+                </table>
+            </div>
+        <?php endif; ?>
     </section>
 <?php endif; ?>
 <section class="card" style="padding:18px; margin-bottom:24px;">

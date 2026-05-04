@@ -102,7 +102,8 @@ final class RestaurantAdminController
             $payload['favicon_url'] = isset($_FILES['favicon']) ? $upload->storeRestaurantImage($_FILES['favicon'], $normalizedCode, 'favicon') : null;
             Container::getInstance()->get('tenantProvisioning')->createRestaurant($payload, $_SESSION['user']);
         } catch (\Throwable $exception) {
-            flash('error', $exception->getMessage());
+            error_log((string) $exception);
+            flash('error', ui_safe_message($exception->getMessage()));
             redirect('/super-admin/restaurants');
         }
 

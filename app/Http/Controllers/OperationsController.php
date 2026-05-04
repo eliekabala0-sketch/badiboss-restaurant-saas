@@ -411,6 +411,9 @@ final class OperationsController
             'sale_items' => Container::getInstance()->get('salesService')->listSaleItemsForRestaurant($restaurantId, $this->salesActorIdFilter()),
             'server_requests' => Container::getInstance()->get('salesService')->listServerRequests($restaurantId, $this->salesActorIdFilter()),
             'server_request_items' => Container::getInstance()->get('salesService')->listServerRequestItems($restaurantId, $this->salesActorIdFilter()),
+            'server_cashiers' => Container::getInstance()->get('cashService')->dashboard($restaurantId)['cashiers'] ?? [],
+            'sale_remittance_tracking' => Container::getInstance()->get('cashService')->listSaleRemittanceTracking($restaurantId, $this->salesActorIdFilter()),
+            'pending_cash_remittances' => Container::getInstance()->get('cashService')->listServerRemittanceCandidates($restaurantId, $this->salesActorIdFilter()),
             'menu_items' => Container::getInstance()->get('menuAdmin')->listPublicItems($restaurantId),
             'productions' => Container::getInstance()->get('kitchenService')->listProductions($restaurantId),
             'sales_overview' => Container::getInstance()->get('salesService')->serverSalesOverview($restaurantId, $this->salesActorIdFilter()),
@@ -514,12 +517,8 @@ final class OperationsController
         $requestId = (int) $request->route('id');
         Container::getInstance()->get('salesService')->closeServerRequestAsSale($restaurantId, $requestId, [
             'sale_type' => $request->input('sale_type', 'SUR_PLACE'),
-            'sold_quantities' => [
-                (string) $request->input('request_item_id') => $request->input('sold_quantity', 0),
-            ],
-            'returned_quantities' => [
-                (string) $request->input('request_item_id') => $request->input('returned_quantity', 0),
-            ],
+            'sold_quantities' => (array) $request->input('sold_quantities', []),
+            'returned_quantities' => (array) $request->input('returned_quantities', []),
         ], current_user());
 
         flash('success', 'Demande serveur cloturee avec vente reelle.');
@@ -620,12 +619,16 @@ final class OperationsController
         Container::getInstance()->get('cashService')->remitServerCash($restaurantId, [
             'sale_id' => $request->input('sale_id'),
             'to_user_id' => $request->input('to_user_id'),
-            'amount' => $request->input('amount'),
             'note' => $request->input('note'),
         ], current_user());
 
         flash('success', 'Remise serveur enregistree.');
-        redirect($this->moduleUrl('/caisse', $restaurantId));
+        $redirectTo = (string) ($request->server['HTTP_REFERER'] ?? '');
+        if (str_contains($redirectTo, '/caisse')) {
+            redirect($this->moduleUrl('/caisse', $restaurantId));
+        }
+
+        redirect($this->moduleUrl('/ventes', $restaurantId));
     }
 
     public function receiveCashAtCashier(Request $request): void

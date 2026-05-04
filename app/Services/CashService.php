@@ -26,6 +26,7 @@ final class CashService
             'servers' => $this->listUsersByRoleCodes($restaurantId, ['cashier_server']),
             'managers' => $this->listUsersByRoleCodes($restaurantId, ['manager']),
             'owners' => $this->listUsersByRoleCodes($restaurantId, ['owner']),
+            'pending_server_sales' => $this->listServerRemittanceCandidates($restaurantId),
         ];
     }
 
@@ -33,9 +34,15 @@ final class CashService
     {
         $this->ensureSchema();
         $sale = $this->findSaleInRestaurant((int) ($payload['sale_id'] ?? 0), $restaurantId);
-        $toUserId = $this->assertRestaurantUser((int) ($payload['to_user_id'] ?? 0), $restaurantId);
-        $amount = $this->normalizeAmount($payload['amount'] ?? ($sale['total_amount'] ?? 0));
+        $this->assertRemittableSale($sale, $actor);
+        $this->assertSaleNotAlreadyRemitted((int) $sale['id'], $restaurantId);
+
+        $toUserId = $this->resolveCashierRecipient($restaurantId, (int) ($payload['to_user_id'] ?? 0));
+        $amount = $this->normalizeAmount($sale['total_amount'] ?? 0);
         $currency = restaurant_currency($restaurantId);
+        $serverRequestId = ((string) ($sale['origin_type'] ?? '') === 'server_request' && (int) ($sale['origin_id'] ?? 0) > 0)
+            ? (int) $sale['origin_id']
+            : null;
 
         $statement = $this->database->pdo()->prepare(
             'INSERT INTO cash_transfers
@@ -50,19 +57,91 @@ final class CashService
             'amount' => $amount,
             'currency' => $currency,
             'source_id' => (int) $sale['id'],
-            'note' => trim((string) ($payload['note'] ?? 'Remise serveur vers caisse.')) ?: null,
+            'note' => trim((string) ($payload['note'] ?? 'Remise serveur liee a la vente.')) ?: null,
             'created_by' => $actor['id'],
         ]);
 
         $transferId = (int) $this->database->pdo()->lastInsertId();
         $this->audit($restaurantId, $actor, 'cash_server_remitted', 'cash_transfers', $transferId, [
             'sale_id' => (int) $sale['id'],
+            'server_request_id' => $serverRequestId,
             'to_user_id' => $toUserId,
             'amount' => $amount,
             'currency' => $currency,
         ], 'Remise d argent du serveur a la caisse');
 
         return $transferId;
+    }
+
+    public function listServerRemittanceCandidates(int $restaurantId, ?int $serverId = null): array
+    {
+        return array_values(array_filter(
+            $this->listSaleRemittanceTracking($restaurantId, $serverId),
+            static function (array $row): bool {
+                $saleStatus = (string) ($row['sale_status'] ?? '');
+                $transferId = (int) ($row['transfer_id'] ?? 0);
+                $amount = (float) ($row['sale_total_amount'] ?? 0);
+
+                return in_array($saleStatus, ['VALIDE', 'CLOTURE', 'VENDU_TOTAL', 'VENDU_PARTIEL'], true)
+                    && $transferId <= 0
+                    && $amount > 0;
+            }
+        ));
+    }
+
+    public function listSaleRemittanceTracking(int $restaurantId, ?int $serverId = null): array
+    {
+        $sql = 'SELECT s.id AS sale_id,
+                       s.server_id,
+                       s.total_amount AS sale_total_amount,
+                       s.status AS sale_status,
+                       s.origin_type,
+                       s.origin_id,
+                       s.note AS sale_note,
+                       s.validated_at,
+                       s.created_at AS sale_created_at,
+                       su.full_name AS server_name,
+                       sr.id AS server_request_id,
+                       sr.status AS server_request_status,
+                       sr.service_reference,
+                       sr.received_at AS server_request_received_at,
+                       ct.id AS transfer_id,
+                       ct.status AS transfer_status,
+                       ct.amount AS transfer_amount,
+                       ct.amount_received,
+                       ct.discrepancy_amount,
+                       ct.discrepancy_note,
+                       ct.requested_at AS remitted_at,
+                       ct.received_at AS cash_received_at,
+                       tu.full_name AS cashier_name,
+                       ru.full_name AS cash_received_by_name
+                FROM sales s
+                LEFT JOIN users su ON su.id = s.server_id
+                LEFT JOIN server_requests sr ON s.origin_type = "server_request" AND sr.id = s.origin_id
+                LEFT JOIN cash_transfers ct ON ct.id = (
+                    SELECT latest.id
+                    FROM cash_transfers latest
+                    WHERE latest.restaurant_id = s.restaurant_id
+                      AND latest.source_type = "sale"
+                      AND latest.source_id = s.id
+                    ORDER BY latest.id DESC
+                    LIMIT 1
+                )
+                LEFT JOIN users tu ON tu.id = ct.to_user_id
+                LEFT JOIN users ru ON ru.id = ct.received_by
+                WHERE s.restaurant_id = :restaurant_id';
+        $params = ['restaurant_id' => $restaurantId];
+
+        if ($serverId !== null) {
+            $sql .= ' AND s.server_id = :server_id';
+            $params['server_id'] = $serverId;
+        }
+
+        $sql .= ' ORDER BY COALESCE(s.validated_at, s.created_at) DESC, s.id DESC';
+        $statement = $this->database->pdo()->prepare($sql);
+        $statement->execute($params);
+
+        return $statement->fetchAll(PDO::FETCH_ASSOC);
     }
 
     public function receiveByCashier(int $restaurantId, int $transferId, array $payload, array $actor): void
@@ -185,13 +264,25 @@ final class CashService
                        fu.full_name AS from_user_name,
                        tu.full_name AS to_user_name,
                        ru.full_name AS received_by_name,
-                       vu.full_name AS validated_by_name
-                FROM cash_transfers ct
-                LEFT JOIN users fu ON fu.id = ct.from_user_id
-                LEFT JOIN users tu ON tu.id = ct.to_user_id
-                LEFT JOIN users ru ON ru.id = ct.received_by
-                LEFT JOIN users vu ON vu.id = ct.validated_by
-                WHERE ct.restaurant_id = :restaurant_id';
+                       vu.full_name AS validated_by_name,
+                       s.id AS sale_id,
+                       s.total_amount AS sale_total_amount,
+                       s.status AS sale_status,
+                       s.origin_type AS sale_origin_type,
+                       s.origin_id AS sale_origin_id,
+                       sr.id AS server_request_id,
+                       sr.service_reference,
+                       sr.status AS server_request_status,
+                       su.full_name AS sale_server_name
+                 FROM cash_transfers ct
+                 LEFT JOIN users fu ON fu.id = ct.from_user_id
+                 LEFT JOIN users tu ON tu.id = ct.to_user_id
+                 LEFT JOIN users ru ON ru.id = ct.received_by
+                 LEFT JOIN users vu ON vu.id = ct.validated_by
+                 LEFT JOIN sales s ON ct.source_type = "sale" AND s.id = ct.source_id
+                 LEFT JOIN server_requests sr ON s.origin_type = "server_request" AND sr.id = s.origin_id
+                 LEFT JOIN users su ON su.id = s.server_id
+                 WHERE ct.restaurant_id = :restaurant_id';
         $params = ['restaurant_id' => $restaurantId];
 
         if (!empty($filters['status'])) {
@@ -404,6 +495,63 @@ final class CashService
         }
 
         return $sale;
+    }
+
+    private function assertRemittableSale(array $sale, array $actor): void
+    {
+        if (!in_array((string) ($sale['status'] ?? ''), ['VALIDE', 'CLOTURE', 'VENDU_TOTAL', 'VENDU_PARTIEL'], true)) {
+            throw new \RuntimeException('Cloturez d abord cette vente avant remise caisse.');
+        }
+
+        if ((float) ($sale['total_amount'] ?? 0) <= 0) {
+            throw new \RuntimeException('Cette vente ne contient aucun montant a remettre.');
+        }
+
+        $isManager = ($actor['role_code'] ?? null) === 'manager';
+        if (!$isManager && (int) ($sale['server_id'] ?? 0) !== (int) ($actor['id'] ?? 0)) {
+            throw new \RuntimeException('Vous ne pouvez remettre que vos propres ventes cloturees.');
+        }
+    }
+
+    private function assertSaleNotAlreadyRemitted(int $saleId, int $restaurantId): void
+    {
+        $statement = $this->database->pdo()->prepare(
+            'SELECT id
+             FROM cash_transfers
+             WHERE restaurant_id = :restaurant_id
+               AND source_type = "sale"
+               AND source_id = :sale_id
+             LIMIT 1'
+        );
+        $statement->execute([
+            'restaurant_id' => $restaurantId,
+            'sale_id' => $saleId,
+        ]);
+
+        if ($statement->fetchColumn() !== false) {
+            throw new \RuntimeException('Cette vente a deja ete remise a la caisse.');
+        }
+    }
+
+    private function resolveCashierRecipient(int $restaurantId, int $toUserId): int
+    {
+        $cashiers = $this->listUsersByRoleCodes($restaurantId, ['cashier_accountant', 'stock_manager']);
+
+        if ($toUserId > 0) {
+            foreach ($cashiers as $cashier) {
+                if ((int) $cashier['id'] === $toUserId) {
+                    return $toUserId;
+                }
+            }
+
+            throw new \RuntimeException('Choisissez une caisse valide pour cette remise.');
+        }
+
+        if (count($cashiers) === 1) {
+            return (int) $cashiers[0]['id'];
+        }
+
+        throw new \RuntimeException('Choisissez la caisse qui doit recevoir cette remise.');
     }
 
     private function findTransferInRestaurant(int $transferId, int $restaurantId): array

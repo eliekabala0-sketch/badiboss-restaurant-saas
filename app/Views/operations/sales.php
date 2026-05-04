@@ -18,6 +18,10 @@ $salesOverview = $sales_overview ?? [
     'active_requests_count' => 0,
     'remitted_requests_count' => 0,
 ];
+$serverCashiers = $server_cashiers ?? [];
+$pendingCashRemittances = $pending_cash_remittances ?? [];
+$saleRemittanceTracking = $sale_remittance_tracking ?? [];
+
 $serviceBadgeClass = static function (?string $status): string {
     return match ((string) $status) {
         'DEMANDE' => 'badge-waiting',
@@ -27,6 +31,16 @@ $serviceBadgeClass = static function (?string $status): string {
         default => 'badge-neutral',
     };
 };
+
+$saleTrackingBySaleId = [];
+foreach ($saleRemittanceTracking as $trackingRow) {
+    $saleTrackingBySaleId[(int) ($trackingRow['sale_id'] ?? 0)] = $trackingRow;
+}
+
+$requestItemsByRequest = [];
+foreach ($server_request_items as $item) {
+    $requestItemsByRequest[(int) $item['request_id']][] = $item;
+}
 
 $activeRequests = array_values(array_filter(
     $server_requests,
@@ -41,20 +55,15 @@ $closedRequests = array_values(array_filter(
     static fn (array $request): bool => in_array((string) $request['status'], $closedStatuses, true)
 ));
 
-$requestItemsByRequest = [];
-foreach ($server_request_items as $item) {
-    $requestItemsByRequest[(int) $item['request_id']][] = $item;
-}
-
 $historyEntries = [];
 foreach ($closedRequests as $request) {
     $eventDate = (string) ($request['closed_at'] ?: $request['updated_at'] ?: $request['created_at']);
     $historyEntries[] = [
         'type' => 'Demande service',
-        'reference' => '#' . (string) $request['id'] . ' · ' . (string) ($request['service_reference'] ?: '-'),
+        'reference' => '#' . (string) $request['id'] . ' - ' . (string) ($request['service_reference'] ?: '-'),
         'status' => service_flow_status_label($request['status']),
         'date' => $eventDate,
-        'details' => format_money($request['total_sold_amount'], $restaurantCurrency) . ' vendu',
+        'details' => format_money($request['total_sold_amount'] ?? 0, $restaurantCurrency) . ' vendu',
         'amount' => (float) ($request['total_sold_amount'] ?? 0),
     ];
 }
@@ -62,10 +71,10 @@ foreach ($sales as $sale) {
     $eventDate = (string) ($sale['validated_at'] ?: $sale['created_at']);
     $historyEntries[] = [
         'type' => 'Vente',
-        'reference' => '#' . (string) $sale['id'] . ' · ' . (string) ($sale['server_name'] ?? 'Vente automatique'),
-        'status' => validation_status_label($sale['status']),
+        'reference' => '#' . (string) $sale['id'] . ' - ' . (string) ($sale['server_name'] ?? 'Vente automatique'),
+        'status' => validation_status_label($sale['status'] ?? null),
         'date' => $eventDate,
-        'details' => format_money($sale['total_amount'], $restaurantCurrency),
+        'details' => format_money($sale['total_amount'] ?? 0, $restaurantCurrency),
         'amount' => (float) ($sale['total_amount'] ?? 0),
     ];
 }
@@ -81,13 +90,8 @@ foreach ($historyEntries as $entry) {
     $groupKey = $entryDate->format('Y-m-d');
 
     if (!isset($historyGroups[$groupKey])) {
-        $label = $groupKey === $todayDate
-            ? 'Aujourd’hui'
-            : ($groupKey === $yesterdayDate ? 'Hier' : $entryDate->format('d/m/Y'));
-
         $historyGroups[$groupKey] = [
-            'label' => $label,
-            'date_text' => $entryDate->format('d/m/Y'),
+            'label' => $groupKey === $todayDate ? 'Aujourd hui' : ($groupKey === $yesterdayDate ? 'Hier' : $entryDate->format('d/m/Y')),
             'is_current' => $groupKey === $todayDate,
             'dom_id' => 'history_' . str_replace('-', '_', $groupKey),
             'entries' => [],
@@ -105,27 +109,27 @@ foreach ($historyEntries as $entry) {
     .card { box-shadow:none !important; border:1px solid #d6d6d6; }
 }
 .server-order-lines {
-    display: grid;
-    gap: 12px;
-    margin-top: 14px;
+    display:grid;
+    gap:10px;
+    margin-top:14px;
 }
 .server-order-line {
-    border: 1px solid var(--line);
-    border-radius: 16px;
-    padding: 14px;
-    display: grid;
-    gap: 12px;
-    background: rgba(255,255,255,0.04);
+    border:1px solid var(--line);
+    border-radius:14px;
+    padding:12px;
+    display:grid;
+    gap:10px;
+    background:rgba(255,255,255,0.03);
 }
 .server-order-line-grid {
-    display: grid;
-    gap: 12px;
-    grid-template-columns: minmax(180px, 2fr) minmax(90px, 110px) minmax(140px, 1fr) minmax(140px, 1fr) auto;
-    align-items: end;
+    display:grid;
+    gap:10px;
+    grid-template-columns:minmax(180px, 2fr) minmax(110px, 130px) minmax(140px, 1fr) minmax(140px, 1fr) auto;
+    align-items:end;
 }
 .server-order-line-note {
-    display: grid;
-    gap: 8px;
+    display:grid;
+    gap:8px;
 }
 .server-order-summary {
     display:flex;
@@ -136,9 +140,42 @@ foreach ($historyEntries as $entry) {
     padding-top:16px;
     border-top:1px solid var(--line);
 }
+.remittance-grid {
+    display:grid;
+    gap:16px;
+}
+.remittance-card {
+    border:1px solid var(--line);
+    border-radius:16px;
+    padding:16px;
+    background:rgba(255,255,255,0.03);
+}
+.remittance-actions {
+    display:grid;
+    gap:12px;
+    grid-template-columns:minmax(200px, 240px) auto;
+    align-items:end;
+    margin-top:14px;
+}
+.compact-qty-grid {
+    display:grid;
+    gap:10px;
+    grid-template-columns:repeat(auto-fit, minmax(180px, 1fr));
+    margin-top:14px;
+}
+.compact-qty-card {
+    padding:12px;
+    border-radius:14px;
+    border:1px solid var(--line);
+    background:rgba(255,255,255,0.03);
+}
+.compact-qty-card .quantity-stepper {
+    width:100%;
+}
 @media (max-width: 900px) {
-    .server-order-line-grid {
-        grid-template-columns: 1fr;
+    .server-order-line-grid,
+    .remittance-actions {
+        grid-template-columns:1fr;
     }
 }
 </style>
@@ -146,21 +183,23 @@ foreach ($historyEntries as $entry) {
 <section class="topbar">
     <div class="brand">
         <h1>Service et ventes</h1>
-        <p>Suivez les demandes envoyées à la cuisine, confirmez les remises reçues, clôturez rapidement le service et gardez un historique aéré par journée.</p>
+        <p>Suivez les demandes envoyees a la cuisine, cloturez les ventes servies, puis remettez seulement les montants reels a la caisse.</p>
     </div>
 </section>
 
 <?php if (!empty($flash_success)): ?><div class="flash-ok"><?= e($flash_success) ?></div><?php endif; ?>
 <?php if (!empty($flash_error)): ?><div class="flash-bad"><?= e($flash_error) ?></div><?php endif; ?>
+
 <section class="card" style="padding:18px; margin-bottom:24px;">
     <div class="menu-thumb">
         <img src="<?= e($restaurantLogo) ?>" alt="Logo restaurant">
         <div>
             <strong><?= e($restaurant['public_name'] ?? $restaurant['name'] ?? 'Restaurant') ?></strong><br>
-            <span class="muted">Logo visible dans le module ventes. Les photos des plats remontent aussi dans les demandes et les ventes du service.</span>
+            <span class="muted">Vue compacte pour le service, sur telephone comme sur ordinateur.</span>
         </div>
     </div>
 </section>
+
 <section class="card no-print" style="padding:18px; margin-bottom:24px;">
     <div class="toolbar-actions">
         <button type="button" onclick="window.print()">Imprimer</button>
@@ -170,11 +209,11 @@ foreach ($historyEntries as $entry) {
 
 <section class="grid stats">
     <article class="card stat">
-        <span>Total vendu aujourd’hui</span>
+        <span>Total vendu aujourd hui</span>
         <strong><?= e(format_money($salesOverview['today_total_sold'] ?? 0, $restaurantCurrency)) ?></strong>
     </article>
     <article class="card stat">
-        <span>Ventes validées du jour</span>
+        <span>Ventes validees du jour</span>
         <strong><?= e((string) ($salesOverview['today_sales_count'] ?? 0)) ?></strong>
     </article>
     <article class="card stat">
@@ -182,7 +221,7 @@ foreach ($historyEntries as $entry) {
         <strong><?= e((string) ($salesOverview['active_requests_count'] ?? 0)) ?></strong>
     </article>
     <article class="card stat">
-        <span>À clôturer vite</span>
+        <span>A cloturer vite</span>
         <strong><?= e((string) ($salesOverview['remitted_requests_count'] ?? 0)) ?></strong>
     </article>
 </section>
@@ -191,264 +230,119 @@ foreach ($historyEntries as $entry) {
     <article class="card" style="padding:22px;">
         <details class="compact-card" data-autoclose-details>
             <summary><strong>Passer commande / Demander a la cuisine</strong></summary>
-        <h2 style="margin-top:0;">Nouvelle demande de service</h2>
-        <p class="muted" style="margin-top:0;">Demande serveur depuis le menu avec attente fourni cuisine pour garder une lecture claire du flux.</p>
-        <?php if (can_access('sales.request.create')): ?>
-            <form method="post" action="/ventes/demandes">
-                <label>Table ou référence de service</label>
-                <input name="service_reference" placeholder="Table 12, Terrasse B, Ticket 48">
-                <label>Note de service</label>
-                <textarea name="note">Demande transmise à la cuisine pour le service en cours.</textarea>
-                <div class="server-order-lines" data-server-order-lines data-currency="<?= e($restaurantCurrency) ?>">
-                    <div class="server-order-line" data-server-order-line>
-                        <div class="server-order-line-grid">
-                            <div>
-                                <label>Article</label>
-                                <select data-line-menu-item>
-                                    <?php foreach ($menu_items as $item): ?>
-                                        <option value="<?= e((string) $item['id']) ?>" data-price="<?= e(number_format((float) ($item['price'] ?? 0), 2, '.', '')) ?>"><?= e($item['name']) ?></option>
-                                    <?php endforeach; ?>
-                                </select>
-                                <input type="hidden" data-line-menu-item-input name="items[0][menu_item_id]" value="">
-                                <input type="hidden" data-line-unit-price-input name="items[0][unit_price]" value="">
+            <h2 style="margin-top:14px;">Nouvelle demande de service</h2>
+            <p class="muted" style="margin-top:0;">Une commande reste un seul formulaire, meme avec plusieurs articles.</p>
+            <?php if (can_access('sales.request.create')): ?>
+                <form method="post" action="/ventes/demandes">
+                    <label>Table ou reference de service</label>
+                    <input name="service_reference" placeholder="Table 12, Terrasse B, Ticket 48">
+                    <label>Note de service</label>
+                    <textarea name="note">Demande transmise a la cuisine pour le service en cours.</textarea>
+
+                    <div class="server-order-lines" data-server-order-lines data-currency="<?= e($restaurantCurrency) ?>">
+                        <div class="server-order-line" data-server-order-line>
+                            <div class="server-order-line-grid">
+                                <div>
+                                    <label>Article</label>
+                                    <select data-line-menu-item>
+                                        <?php foreach ($menu_items as $item): ?>
+                                            <option value="<?= e((string) $item['id']) ?>" data-price="<?= e(number_format((float) ($item['price'] ?? 0), 2, '.', '')) ?>"><?= e($item['name']) ?></option>
+                                        <?php endforeach; ?>
+                                    </select>
+                                    <input type="hidden" data-line-menu-item-input name="items[0][menu_item_id]" value="">
+                                    <input type="hidden" data-line-unit-price-input name="items[0][unit_price]" value="">
+                                </div>
+                                <div>
+                                    <label>Quantite</label>
+                                    <div class="quantity-stepper" data-quantity-stepper>
+                                        <button type="button" data-stepper-minus>-</button>
+                                        <input type="number" min="1" step="1" value="1" data-line-quantity name="items[0][requested_quantity]" required>
+                                        <button type="button" data-stepper-plus>+</button>
+                                    </div>
+                                </div>
+                                <div>
+                                    <label>Prix unitaire</label>
+                                    <input type="text" value="" data-line-unit-price-display readonly>
+                                </div>
+                                <div>
+                                    <label>Total ligne</label>
+                                    <input type="text" value="" data-line-total-display readonly>
+                                </div>
+                                <div style="align-self:end;">
+                                    <button type="button" class="button-muted" data-line-remove>Retirer</button>
+                                </div>
                             </div>
-                            <div>
-                                <label>Quantité</label>
-                                <div class="quantity-stepper" data-quantity-stepper><button type="button" data-stepper-minus>-</button><input type="number" min="1" step="1" value="1" data-line-quantity name="items[0][requested_quantity]" required><button type="button" data-stepper-plus>+</button></div>
-                            </div>
-                            <div>
-                                <label>Prix unitaire auto</label>
-                                <input type="text" value="" data-line-unit-price-display readonly>
-                            </div>
-                            <div>
-                                <label>Total ligne</label>
-                                <input type="text" value="" data-line-total-display readonly>
-                            </div>
-                            <div style="align-self:end;">
-                                <button type="button" class="button-muted" data-line-remove>Retirer</button>
-                            </div>
-                        </div>
-                        <div class="server-order-line-note">
-                            <div>
-                                <label>Note éventuelle</label>
-                                <textarea data-line-note name="items[0][note]" placeholder="Cuisson, accompagnement, remarque de table..."></textarea>
+                            <div class="server-order-line-note">
+                                <div>
+                                    <label>Note eventuelle</label>
+                                    <textarea data-line-note name="items[0][note]" placeholder="Cuisson, accompagnement, remarque de table..."></textarea>
+                                </div>
                             </div>
                         </div>
                     </div>
-                </div>
-                <div class="toolbar-actions" style="margin-top:14px;">
-                    <button type="button" class="button-muted" data-server-order-add>Ligne supplémentaire</button>
-                </div>
-                <div class="server-order-summary">
-                    <strong>Total commande</strong>
-                    <strong data-server-order-grand-total><?= e(format_money(0, $restaurantCurrency)) ?></strong>
-                </div>
-                <button type="submit">Envoyer à la cuisine</button>
-            </form>
-        <?php else: ?>
-            <p class="muted">Création réservée au service.</p>
-        <?php endif; ?>
+
+                    <div class="toolbar-actions" style="margin-top:14px;">
+                        <button type="button" class="button-muted" data-server-order-add>Ajouter un article</button>
+                    </div>
+                    <div class="server-order-summary">
+                        <strong>Total commande</strong>
+                        <strong data-server-order-grand-total><?= e(format_money(0, $restaurantCurrency)) ?></strong>
+                    </div>
+                    <button type="submit">Envoyer a la cuisine</button>
+                </form>
+            <?php else: ?>
+                <p class="muted">Creation reservee au service.</p>
+            <?php endif; ?>
         </details>
     </article>
 
     <article class="card" style="padding:22px;">
         <details class="compact-card" data-autoclose-details>
-            <summary><strong>Remise caisse / Perte d argent</strong></summary>
-        <h2 style="margin-top:0;">Perte d’argent</h2>
-        <?php if (can_access('cash_loss.declare')): ?>
-            <form method="post" action="/ventes/pertes-argent">
-                <label>Référence de vente</label>
-                <select name="reference_id">
-                    <option value="">Aucune</option>
-                    <?php foreach ($sales as $sale): ?>
-                        <option value="<?= e((string) $sale['id']) ?>"><?= e((string) $sale['id']) ?> - <?= e($sale['server_name'] ?? 'Vente automatique') ?></option>
-                    <?php endforeach; ?>
-                </select>
-                <label>Montant</label>
-                <input name="amount" value="1.00">
-                <label>Description</label>
-                <textarea name="description">Écart de caisse ou remise non justifiée.</textarea>
-                <button type="submit">Déclarer la perte</button>
-            </form>
-        <?php else: ?>
-            <p class="muted">Déclaration réservée à la supervision.</p>
-        <?php endif; ?>
-        <?php if (can_access('cash.remit.server')): ?>
-            <p style="margin-top:14px;"><a href="/caisse" class="button-muted">Ouvrir la remise caisse</a></p>
-        <?php endif; ?>
+            <summary><strong>Perte d argent / Cas sensible</strong></summary>
+            <h2 style="margin-top:14px;">Perte d argent</h2>
+            <?php if (can_access('cash_loss.declare')): ?>
+                <form method="post" action="/ventes/pertes-argent">
+                    <label>Reference de vente</label>
+                    <select name="reference_id">
+                        <option value="">Aucune</option>
+                        <?php foreach ($sales as $sale): ?>
+                            <option value="<?= e((string) $sale['id']) ?>">#<?= e((string) $sale['id']) ?> - <?= e($sale['server_name'] ?? 'Vente automatique') ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                    <label>Montant</label>
+                    <input name="amount" value="1.00">
+                    <label>Description</label>
+                    <textarea name="description">Ecart de caisse ou remise non justifiee.</textarea>
+                    <button type="submit">Declarer la perte</button>
+                </form>
+            <?php else: ?>
+                <p class="muted">Declaration reservee a la supervision.</p>
+            <?php endif; ?>
         </details>
     </article>
 </section>
 
-<?php if ($sales !== []): ?>
-    <section class="card" style="padding:22px; margin-top:24px;">
-        <h2 style="margin-top:0;">Factures recentes</h2>
-        <div class="table-wrap">
-            <table>
-                <thead><tr><th>Vente</th><th>Serveur</th><th>Total</th><th>Statut</th><th>Action</th></tr></thead>
-                <tbody>
-                <?php foreach (array_slice($sales, 0, 12) as $sale): ?>
-                    <tr>
-                        <td>#<?= e((string) $sale['id']) ?></td>
-                        <td><?= e(named_actor_label($sale['server_name'] ?? null, 'cashier_server')) ?></td>
-                        <td><?= e(format_money($sale['total_amount'] ?? 0, $restaurantCurrency)) ?></td>
-                        <td><?= e(validation_status_label($sale['status'] ?? null)) ?></td>
-                        <td><a href="/ventes/factures/<?= e((string) $sale['id']) ?>" class="button-muted" target="_blank" rel="noopener noreferrer">Imprimer</a></td>
-                    </tr>
-                <?php endforeach; ?>
-                </tbody>
-            </table>
-        </div>
-    </section>
-<?php endif; ?>
-
 <section class="card" style="padding:22px; margin-top:24px;">
-    <h2 style="margin-top:0;">Actif maintenant</h2>
-    <p class="muted">Les demandes actives restent visibles jusqu’à la remise au serveur. Une fois réception confirmée, elles quittent la file principale.</p>
-    <?php if ($activeRequests === []): ?>
-        <p class="muted">Aucune demande active pour le moment.</p>
+    <h2 style="margin-top:0;">Remise caisse pratique</h2>
+    <p class="muted">Le service ne saisit jamais un montant libre. Chaque remise vient d une vente deja cloturee et chaque vente ne peut etre remise qu une seule fois.</p>
+
+    <?php if ($pendingCashRemittances === [] && $remittedRequests === []): ?>
+        <p class="muted">Aucune vente a remettre pour le moment.</p>
     <?php else: ?>
-        <div class="grid">
-            <?php foreach ($activeRequests as $index => $request): ?>
+        <div class="remittance-grid">
+            <?php foreach ($remittedRequests as $request): ?>
                 <?php $items = $requestItemsByRequest[(int) $request['id']] ?? []; ?>
-                <article class="card <?= $index >= $activePreviewLimit ? 'history-extra' : '' ?>" data-history-group="sales_active_requests" <?= $index >= $activePreviewLimit ? 'style="padding:18px; border-radius:16px; display:none;"' : 'style="padding:18px; border-radius:16px;"' ?>>
+                <article class="remittance-card">
                     <div class="topbar" style="margin-bottom:12px;">
                         <div>
                             <strong>Demande #<?= e((string) $request['id']) ?></strong>
-                            <div class="muted">
-                                <?= e($request['server_name']) ?>
-                                · <?= e(format_date_fr($request['created_at'])) ?>
-                                · Référence <?= e((string) ($request['service_reference'] ?: '-')) ?>
-                            </div>
+                            <div class="muted">Reference <?= e((string) ($request['service_reference'] ?: '-')) ?> - Recu le <?= e(format_date_fr($request['received_at'] ?? null, $historyTimezone)) ?></div>
                         </div>
-                        <span class="pill <?= e($serviceBadgeClass($request['status'])) ?>"><?= e(service_flow_status_label($request['status'])) ?></span>
+                        <span class="pill badge-progress">Cloture requise</span>
                     </div>
-                    <div class="muted" style="margin-bottom:12px;">
-                        <?= e(signed_actor_line('Pret', $request['ready_by_name'] ?? null, 'kitchen', $request['ready_at'] ?? null, $restaurant, $historyTimezone)) ?>
-                        <br>
-                        <?= e(signed_actor_line('Recu', $request['received_by_name'] ?? null, 'cashier_server', $request['received_at'] ?? null, $restaurant, $historyTimezone)) ?>
-                    </div>
-
-                    <div class="table-wrap">
-                        <table>
-                            <thead>
-                            <tr>
-                                <th>Produit</th>
-                                <th>Demandé</th>
-                                <th>Prix unitaire</th>
-                                <th>Total ligne</th>
-                                <th>Accepté / préparé</th>
-                                <th>Non disponible</th>
-                                <th>Étape</th>
-                            </tr>
-                            </thead>
-                            <tbody>
-                            <?php foreach ($items as $item): ?>
-                                <tr>
-                                    <td>
-                                        <div class="menu-thumb">
-                                            <img src="<?= e(menu_item_media_url_or_default($item['menu_item_image_url'] ?? null)) ?>" alt="<?= e($item['menu_item_name']) ?>">
-                                            <div><strong><?= e($item['menu_item_name']) ?></strong></div>
-                                        </div>
-                                    </td>
-                                    <td><?= e((string) $item['requested_quantity']) ?></td>
-                                    <td><?= e(format_money($item['unit_price'] ?? 0, $restaurantCurrency)) ?></td>
-                                    <td><?= e(format_money($item['requested_total'] ?? 0, $restaurantCurrency)) ?></td>
-                                    <td><?= e((string) $item['supplied_quantity']) ?></td>
-                                    <td><?= e((string) $item['unavailable_quantity']) ?></td>
-                                    <td><?= e(service_flow_status_label($item['status'] ?: $item['supply_status'])) ?></td>
-                                </tr>
-                            <?php endforeach; ?>
-                            </tbody>
-                        </table>
-                    </div>
-
-                    <?php if (in_array((string) $request['status'], ['PRET_A_SERVIR', 'FOURNI_PARTIEL', 'FOURNI_TOTAL'], true) && can_access('sales.request.close')): ?>
-                        <form method="post" action="/ventes/demandes/<?= e((string) $request['id']) ?>/reception" style="margin-top:14px;">
-                            <button type="submit">Confirmer la réception côté service</button>
-                        </form>
-                    <?php endif; ?>
-                </article>
-            <?php endforeach; ?>
-        </div>
-        <?php if (count($activeRequests) > $activePreviewLimit): ?>
-            <div style="padding-top:12px;">
-                <button type="button" data-history-toggle="sales_active_requests">Voir plus</button>
-            </div>
-        <?php endif; ?>
-    <?php endif; ?>
-</section>
-
-<section class="card" style="padding:22px; margin-top:24px;">
-    <h2 style="margin-top:0;">Remis au serveur</h2>
-    <p class="muted">Ces demandes sont dans une courte phase d’attente de clôture. Elles se clôturent automatiquement après <?= e((string) $autoCloseMinutes) ?> minutes maximum ou dès le passage au jour suivant si elles restent ouvertes.</p>
-    <?php if ($remittedRequests === []): ?>
-        <p class="muted">Aucune remise confirmée à clôturer.</p>
-    <?php else: ?>
-        <div class="grid">
-            <?php foreach ($remittedRequests as $index => $request): ?>
-                <?php
-                $items = $requestItemsByRequest[(int) $request['id']] ?? [];
-                $firstItem = $items[0] ?? null;
-                $autoCloseAt = null;
-                if (!empty($request['received_at'])) {
-                    $autoCloseAt = (new DateTimeImmutable((string) $request['received_at'], $historyTimezone))
-                        ->modify('+' . $autoCloseMinutes . ' minutes');
-                }
-                ?>
-                <article class="card <?= $index >= $activePreviewLimit ? 'history-extra' : '' ?>" data-history-group="sales_remitted_requests" <?= $index >= $activePreviewLimit ? 'style="padding:18px; border-radius:16px; display:none;"' : 'style="padding:18px; border-radius:16px;"' ?>>
-                    <div class="topbar" style="margin-bottom:12px;">
-                        <div>
-                            <strong>Demande #<?= e((string) $request['id']) ?></strong>
-                            <div class="muted">
-                                <?= e($request['server_name']) ?>
-                                · Reçue le <?= e(format_date_fr($request['received_at'])) ?>
-                                · Référence <?= e((string) ($request['service_reference'] ?: '-')) ?>
-                            </div>
-                        </div>
-                        <span class="pill <?= e($serviceBadgeClass($request['status'])) ?>"><?= e(service_flow_status_label($request['status'])) ?></span>
-                    </div>
-                    <div class="muted" style="margin-bottom:12px;">
-                        <?= e(signed_actor_line('Recu', $request['received_by_name'] ?? ($request['server_name'] ?? null), 'cashier_server', $request['received_at'] ?? null, $restaurant, $historyTimezone)) ?>
-                    </div>
-
-                    <?php if ($autoCloseAt instanceof DateTimeImmutable): ?>
-                        <p class="muted" style="margin-top:0;">Clôture automatique prévue vers <?= e($autoCloseAt->format('d/m/Y H:i')) ?> si aucune clôture manuelle n’est faite avant.</p>
-                    <?php endif; ?>
-
-                    <div class="table-wrap">
-                        <table>
-                            <thead>
-                            <tr>
-                                <th>Produit</th>
-                                <th>Préparé</th>
-                                <th>Prix snapshot</th>
-                                <th>Total demandé</th>
-                                <th>Non disponible</th>
-                            </tr>
-                            </thead>
-                            <tbody>
-                            <?php foreach ($items as $item): ?>
-                                <tr>
-                                    <td>
-                                        <div class="menu-thumb">
-                                            <img src="<?= e(menu_item_media_url_or_default($item['menu_item_image_url'] ?? null)) ?>" alt="<?= e($item['menu_item_name']) ?>">
-                                            <div><strong><?= e($item['menu_item_name']) ?></strong></div>
-                                        </div>
-                                    </td>
-                                    <td><?= e((string) $item['supplied_quantity']) ?></td>
-                                    <td><?= e(format_money($item['unit_price'] ?? 0, $restaurantCurrency)) ?></td>
-                                    <td><?= e(format_money($item['requested_total'] ?? 0, $restaurantCurrency)) ?></td>
-                                    <td><?= e((string) $item['unavailable_quantity']) ?></td>
-                                </tr>
-                            <?php endforeach; ?>
-                            </tbody>
-                        </table>
-                    </div>
-
-                    <?php if ($firstItem !== null && can_access('sales.request.close')): ?>
-                        <form method="post" action="/ventes/demandes/<?= e((string) $request['id']) ?>/cloture" class="split" style="margin-top:14px;">
-                            <input type="hidden" name="request_item_id" value="<?= e((string) $firstItem['id']) ?>">
+                    <p style="margin:0 0 10px;">Cloturez d abord cette vente avant remise caisse.</p>
+                    <?php if (can_access('sales.request.close')): ?>
+                        <form method="post" action="/ventes/demandes/<?= e((string) $request['id']) ?>/cloture">
                             <div>
                                 <label>Type</label>
                                 <select name="sale_type">
@@ -456,16 +350,157 @@ foreach ($historyEntries as $entry) {
                                     <option value="LIVRAISON">Livraison</option>
                                 </select>
                             </div>
-                            <div>
-                                <label>Quantité vendue</label>
-                                <input name="sold_quantity" value="<?= e((string) $firstItem['supplied_quantity']) ?>">
+                            <div class="compact-qty-grid">
+                                <?php foreach ($items as $item): ?>
+                                    <div class="compact-qty-card">
+                                        <strong><?= e($item['menu_item_name'] ?? 'Article') ?></strong>
+                                        <div class="muted" style="margin:6px 0 10px;">Prepare <?= e((string) ($item['supplied_quantity'] ?? 0)) ?> - Prix <?= e(format_money($item['unit_price'] ?? 0, $restaurantCurrency)) ?></div>
+                                        <label>Vendu</label>
+                                        <div class="quantity-stepper" data-quantity-stepper>
+                                            <button type="button" data-stepper-minus>-</button>
+                                            <input type="number" min="0" step="1" name="sold_quantities[<?= e((string) $item['id']) ?>]" value="<?= e((string) (int) ($item['supplied_quantity'] ?? 0)) ?>">
+                                            <button type="button" data-stepper-plus>+</button>
+                                        </div>
+                                        <label style="margin-top:10px;">Retourne</label>
+                                        <div class="quantity-stepper" data-quantity-stepper>
+                                            <button type="button" data-stepper-minus>-</button>
+                                            <input type="number" min="0" step="1" name="returned_quantities[<?= e((string) $item['id']) ?>]" value="0">
+                                            <button type="button" data-stepper-plus>+</button>
+                                        </div>
+                                    </div>
+                                <?php endforeach; ?>
                             </div>
-                            <div>
-                                <label>Quantité retournée</label>
-                                <input name="returned_quantity" value="0">
+                            <div style="margin-top:14px;">
+                                <button type="submit">Cloturer maintenant</button>
                             </div>
-                            <div style="align-self:end;">
-                                <button type="submit">Clôturer le service</button>
+                        </form>
+                    <?php else: ?>
+                        <p class="muted">Cloture reservee au profil autorise.</p>
+                    <?php endif; ?>
+                </article>
+            <?php endforeach; ?>
+
+            <?php foreach ($pendingCashRemittances as $sale): ?>
+                <article class="remittance-card">
+                    <div class="topbar" style="margin-bottom:12px;">
+                        <div>
+                            <strong>Vente #<?= e((string) $sale['sale_id']) ?></strong>
+                            <div class="muted">
+                                <?= e(named_actor_label($sale['server_name'] ?? null, 'cashier_server')) ?> - <?= e(format_money($sale['sale_total_amount'] ?? 0, $restaurantCurrency)) ?> - Validee le <?= e(format_date_fr($sale['validated_at'] ?? $sale['sale_created_at'] ?? null, $historyTimezone)) ?>
+                            </div>
+                            <?php if (!empty($sale['server_request_id'])): ?>
+                                <div class="muted">Demande serveur liee #<?= e((string) $sale['server_request_id']) ?> - Reference <?= e((string) ($sale['service_reference'] ?? '-')) ?></div>
+                            <?php endif; ?>
+                        </div>
+                        <span class="pill badge-ready">Pret pour caisse</span>
+                    </div>
+
+                    <?php if (can_access('cash.remit.server')): ?>
+                        <form method="post" action="/caisse/remises-serveur">
+                            <input type="hidden" name="sale_id" value="<?= e((string) $sale['sale_id']) ?>">
+                            <div class="remittance-actions">
+                                <div>
+                                    <label>Caisse destinataire</label>
+                                    <select name="to_user_id" <?= $serverCashiers === [] ? 'disabled' : '' ?>>
+                                        <?php if ($serverCashiers === []): ?>
+                                            <option value="">Aucune caisse disponible</option>
+                                        <?php else: ?>
+                                            <?php foreach ($serverCashiers as $cashier): ?>
+                                                <option value="<?= e((string) $cashier['id']) ?>"><?= e(named_actor_label($cashier['full_name'] ?? null, $cashier['role_code'] ?? null)) ?></option>
+                                            <?php endforeach; ?>
+                                        <?php endif; ?>
+                                    </select>
+                                </div>
+                                <div>
+                                    <div class="muted" style="margin-bottom:8px;">Montant automatique: <strong><?= e(format_money($sale['sale_total_amount'] ?? 0, $restaurantCurrency)) ?></strong></div>
+                                    <button type="submit" <?= $serverCashiers === [] ? 'disabled' : '' ?>>Remettre a la caisse</button>
+                                </div>
+                            </div>
+                        </form>
+                    <?php else: ?>
+                        <p class="muted">Remise reservee au profil autorise.</p>
+                    <?php endif; ?>
+                </article>
+            <?php endforeach; ?>
+        </div>
+    <?php endif; ?>
+</section>
+
+<section class="card" style="padding:22px; margin-top:24px;">
+    <h2 style="margin-top:0;">Remis au serveur</h2>
+    <p class="muted">Ces demandes doivent etre cloturees avant toute remise caisse. Une cloture automatique reste possible apres <?= e((string) $autoCloseMinutes) ?> minutes.</p>
+    <?php if ($remittedRequests === []): ?>
+        <p class="muted">Aucune demande en attente de cloture.</p>
+    <?php else: ?>
+        <div class="grid">
+            <?php foreach ($remittedRequests as $index => $request): ?>
+                <?php $items = $requestItemsByRequest[(int) $request['id']] ?? []; ?>
+                <article class="card <?= $index >= $activePreviewLimit ? 'history-extra' : '' ?>" data-history-group="sales_remitted_requests" <?= $index >= $activePreviewLimit ? 'style="padding:18px; border-radius:16px; display:none;"' : 'style="padding:18px; border-radius:16px;"' ?>>
+                    <div class="topbar" style="margin-bottom:12px;">
+                        <div>
+                            <strong>Demande #<?= e((string) $request['id']) ?></strong>
+                            <div class="muted"><?= e($request['server_name'] ?? '-') ?> - Recu le <?= e(format_date_fr($request['received_at'] ?? null, $historyTimezone)) ?> - Reference <?= e((string) ($request['service_reference'] ?: '-')) ?></div>
+                        </div>
+                        <span class="pill <?= e($serviceBadgeClass($request['status'] ?? null)) ?>"><?= e(service_flow_status_label($request['status'] ?? null)) ?></span>
+                    </div>
+
+                    <div class="table-wrap">
+                        <table>
+                            <thead>
+                            <tr>
+                                <th>Produit</th>
+                                <th>Prepare</th>
+                                <th>Prix</th>
+                                <th>Total demande</th>
+                                <th>Non disponible</th>
+                            </tr>
+                            </thead>
+                            <tbody>
+                            <?php foreach ($items as $item): ?>
+                                <tr>
+                                    <td><div class="menu-thumb"><img src="<?= e(menu_item_media_url_or_default($item['menu_item_image_url'] ?? null)) ?>" alt="<?= e($item['menu_item_name'] ?? 'Article') ?>"><div><strong><?= e($item['menu_item_name'] ?? 'Article') ?></strong></div></div></td>
+                                    <td><?= e((string) ($item['supplied_quantity'] ?? 0)) ?></td>
+                                    <td><?= e(format_money($item['unit_price'] ?? 0, $restaurantCurrency)) ?></td>
+                                    <td><?= e(format_money($item['requested_total'] ?? 0, $restaurantCurrency)) ?></td>
+                                    <td><?= e((string) ($item['unavailable_quantity'] ?? 0)) ?></td>
+                                </tr>
+                            <?php endforeach; ?>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <?php if (can_access('sales.request.close')): ?>
+                        <p class="muted" style="margin:14px 0 10px;">Cloturez d abord cette vente avant remise caisse.</p>
+                        <form method="post" action="/ventes/demandes/<?= e((string) $request['id']) ?>/cloture">
+                            <div>
+                                <label>Type</label>
+                                <select name="sale_type">
+                                    <option value="SUR_PLACE">Sur place</option>
+                                    <option value="LIVRAISON">Livraison</option>
+                                </select>
+                            </div>
+                            <div class="compact-qty-grid">
+                                <?php foreach ($items as $item): ?>
+                                    <div class="compact-qty-card">
+                                        <strong><?= e($item['menu_item_name'] ?? 'Article') ?></strong>
+                                        <div class="muted" style="margin:6px 0 10px;">Prepare <?= e((string) ($item['supplied_quantity'] ?? 0)) ?></div>
+                                        <label>Vendu</label>
+                                        <div class="quantity-stepper" data-quantity-stepper>
+                                            <button type="button" data-stepper-minus>-</button>
+                                            <input type="number" min="0" step="1" name="sold_quantities[<?= e((string) $item['id']) ?>]" value="<?= e((string) (int) ($item['supplied_quantity'] ?? 0)) ?>">
+                                            <button type="button" data-stepper-plus>+</button>
+                                        </div>
+                                        <label style="margin-top:10px;">Retourne</label>
+                                        <div class="quantity-stepper" data-quantity-stepper>
+                                            <button type="button" data-stepper-minus>-</button>
+                                            <input type="number" min="0" step="1" name="returned_quantities[<?= e((string) $item['id']) ?>]" value="0">
+                                            <button type="button" data-stepper-plus>+</button>
+                                        </div>
+                                    </div>
+                                <?php endforeach; ?>
+                            </div>
+                            <div style="margin-top:14px;">
+                                <button type="submit">Cloturer maintenant</button>
                             </div>
                         </form>
                     <?php endif; ?>
@@ -494,11 +529,15 @@ foreach ($historyEntries as $entry) {
                 <input type="hidden" data-line-unit-price-input value="">
             </div>
             <div>
-                <label>Quantité</label>
-                <input type="number" min="1" step="1" value="1" data-line-quantity required>
+                <label>Quantite</label>
+                <div class="quantity-stepper" data-quantity-stepper>
+                    <button type="button" data-stepper-minus>-</button>
+                    <input type="number" min="1" step="1" value="1" data-line-quantity required>
+                    <button type="button" data-stepper-plus>+</button>
+                </div>
             </div>
             <div>
-                <label>Prix unitaire auto</label>
+                <label>Prix unitaire</label>
                 <input type="text" value="" data-line-unit-price-display readonly>
             </div>
             <div>
@@ -511,7 +550,7 @@ foreach ($historyEntries as $entry) {
         </div>
         <div class="server-order-line-note">
             <div>
-                <label>Note éventuelle</label>
+                <label>Note eventuelle</label>
                 <textarea data-line-note placeholder="Cuisson, accompagnement, remarque de table..."></textarea>
             </div>
         </div>
@@ -530,7 +569,6 @@ foreach ($historyEntries as $entry) {
     const grandTotalNode = document.querySelector('[data-server-order-grand-total]');
     const currency = formRoot.getAttribute('data-currency') || 'USD';
     const currencySymbol = currency === 'CDF' ? 'FC' : '$';
-
     const formatMoney = (value) => currencySymbol + Number(value || 0).toFixed(2);
 
     const renumberLines = () => {
@@ -586,8 +624,9 @@ foreach ($historyEntries as $entry) {
             grandTotalNode.textContent = formatMoney(grandTotal);
         }
 
+        const lines = formRoot.querySelectorAll('[data-server-order-line]');
         formRoot.querySelectorAll('[data-line-remove]').forEach((button) => {
-            button.disabled = formRoot.querySelectorAll('[data-server-order-line]').length === 1;
+            button.disabled = lines.length === 1;
         });
     };
 
@@ -621,8 +660,7 @@ foreach ($historyEntries as $entry) {
 
     if (addButton && template) {
         addButton.addEventListener('click', () => {
-            const fragment = template.content.cloneNode(true);
-            formRoot.appendChild(fragment);
+            formRoot.appendChild(template.content.cloneNode(true));
             renumberLines();
             syncAllLines();
         });
@@ -635,41 +673,41 @@ foreach ($historyEntries as $entry) {
 
 <section class="card" style="padding:22px; margin-top:24px;">
     <h2 style="margin-top:0;">Signaler un retour ou une casse</h2>
-    <p class="muted">Le service déclare le cas ici. Toute décision manager reste centralisée dans la file traçable du tableau de bord <a href="/owner">/owner</a>.</p>
+    <p class="muted">Le service declare le cas ici. Toute decision manager reste centralisee dans le tableau de bord /owner.</p>
     <?php if (can_access('sales.incident.signal')): ?>
         <form method="post" action="/ventes/incidents">
             <label>Article vendu</label>
             <select name="sale_item_id">
                 <?php foreach ($sale_items as $item): ?>
-                    <option value="<?= e((string) $item['id']) ?>"><?= e($item['menu_item_name']) ?> - <?= e($item['server_name'] ?? 'Vente automatique') ?></option>
+                    <option value="<?= e((string) $item['id']) ?>"><?= e($item['menu_item_name'] ?? 'Article') ?> - <?= e($item['server_name'] ?? 'Vente automatique') ?></option>
                 <?php endforeach; ?>
             </select>
-            <label>Quantité impactée</label>
+            <label>Quantite impactee</label>
             <input name="quantity_affected" value="1" required>
-            <label>Catégorie</label>
+            <label>Categorie</label>
             <select name="reported_category">
                 <?php foreach ($incident_types as $incidentType): ?>
                     <option value="<?= e($incidentType) ?>"><?= e($incidentType) ?></option>
                 <?php endforeach; ?>
             </select>
             <label>Signalement</label>
-            <textarea name="signal_notes">Retour, casse ou incident constaté pendant le service.</textarea>
-            <button type="submit">Signaler au gérant</button>
+            <textarea name="signal_notes">Retour, casse ou incident constate pendant le service.</textarea>
+            <button type="submit">Signaler au gerant</button>
         </form>
     <?php else: ?>
-        <p class="muted">Signalement réservé au service terrain.</p>
+        <p class="muted">Signalement reserve au service terrain.</p>
     <?php endif; ?>
 </section>
 
 <section class="card" style="margin-top:24px;">
     <div style="padding:22px 22px 10px;">
         <h2 style="margin:0;">Historique du service</h2>
-        <p class="muted" style="margin:6px 0 0;">Le jour courant reste ouvert au chargement. Les journées passées sont repliées par défaut pour éviter l’encombrement.</p>
+        <p class="muted" style="margin:6px 0 0;">Le jour courant reste ouvert. Les jours precedents restent replies pour eviter l encombrement.</p>
     </div>
 
     <?php if ($historyGroups === []): ?>
         <div style="padding:0 22px 22px;">
-            <p class="muted">Aucun historique à afficher pour le moment.</p>
+            <p class="muted">Aucun historique a afficher pour le moment.</p>
         </div>
     <?php else: ?>
         <?php foreach ($historyGroups as $group): ?>
@@ -678,7 +716,7 @@ foreach ($historyEntries as $entry) {
                 <summary style="cursor:pointer; list-style:none; padding:14px 0; border-top:1px solid var(--line); display:flex; justify-content:space-between; gap:12px; align-items:center;">
                     <span>
                         <strong><?= e($group['label']) ?></strong>
-                        <span class="muted"> · <?= e((string) count($entries)) ?> élément(s)</span>
+                        <span class="muted"> - <?= e((string) count($entries)) ?> element(s)</span>
                     </span>
                     <span class="muted"><?= e(format_money($group['total_amount'], $restaurantCurrency)) ?></span>
                 </summary>
@@ -688,10 +726,10 @@ foreach ($historyEntries as $entry) {
                         <thead>
                         <tr>
                             <th>Type</th>
-                            <th>Référence</th>
+                            <th>Reference</th>
                             <th>Statut</th>
                             <th>Date</th>
-                            <th>Détails</th>
+                            <th>Details</th>
                         </tr>
                         </thead>
                         <tbody>
@@ -715,5 +753,101 @@ foreach ($historyEntries as $entry) {
                 <?php endif; ?>
             </details>
         <?php endforeach; ?>
+    <?php endif; ?>
+</section>
+
+<?php if ($sales !== []): ?>
+    <section class="card" style="padding:22px; margin-top:24px;">
+        <h2 style="margin-top:0;">Factures recentes</h2>
+        <div class="table-wrap">
+            <table>
+                <thead>
+                <tr>
+                    <th>Vente</th>
+                    <th>Serveur</th>
+                    <th>Total</th>
+                    <th>Statut vente</th>
+                    <th>Remise caisse</th>
+                    <th>Action</th>
+                </tr>
+                </thead>
+                <tbody>
+                <?php foreach (array_slice($sales, 0, 12) as $sale): ?>
+                    <?php $tracking = $saleTrackingBySaleId[(int) $sale['id']] ?? null; ?>
+                    <tr>
+                        <td>#<?= e((string) $sale['id']) ?></td>
+                        <td><?= e(named_actor_label($sale['server_name'] ?? null, 'cashier_server')) ?></td>
+                        <td><?= e(format_money($sale['total_amount'] ?? 0, $restaurantCurrency)) ?></td>
+                        <td><?= e(validation_status_label($sale['status'] ?? null)) ?></td>
+                        <td><?= e($tracking !== null && !empty($tracking['transfer_id']) ? cash_transfer_status_label($tracking['transfer_status'] ?? null) : 'En attente') ?></td>
+                        <td><a href="/ventes/factures/<?= e((string) $sale['id']) ?>" class="button-muted" target="_blank" rel="noopener noreferrer">Imprimer</a></td>
+                    </tr>
+                <?php endforeach; ?>
+                </tbody>
+            </table>
+        </div>
+    </section>
+<?php endif; ?>
+
+<section class="card" style="padding:22px; margin-top:24px;">
+    <h2 style="margin-top:0;">Actif maintenant</h2>
+    <p class="muted">Les demandes actives restent visibles jusqu a la remise au serveur. Une fois la cuisine remise, elles passent dans la file de cloture.</p>
+    <?php if ($activeRequests === []): ?>
+        <p class="muted">Aucune demande active pour le moment.</p>
+    <?php else: ?>
+        <div class="grid">
+            <?php foreach ($activeRequests as $index => $request): ?>
+                <?php $items = $requestItemsByRequest[(int) $request['id']] ?? []; ?>
+                <article class="card <?= $index >= $activePreviewLimit ? 'history-extra' : '' ?>" data-history-group="sales_active_requests" <?= $index >= $activePreviewLimit ? 'style="padding:18px; border-radius:16px; display:none;"' : 'style="padding:18px; border-radius:16px;"' ?>>
+                    <div class="topbar" style="margin-bottom:12px;">
+                        <div>
+                            <strong>Demande #<?= e((string) $request['id']) ?></strong>
+                            <div class="muted"><?= e($request['server_name'] ?? '-') ?> - <?= e(format_date_fr($request['created_at'] ?? null, $historyTimezone)) ?> - Reference <?= e((string) ($request['service_reference'] ?: '-')) ?></div>
+                        </div>
+                        <span class="pill <?= e($serviceBadgeClass($request['status'] ?? null)) ?>"><?= e(service_flow_status_label($request['status'] ?? null)) ?></span>
+                    </div>
+
+                    <div class="table-wrap">
+                        <table>
+                            <thead>
+                            <tr>
+                                <th>Produit</th>
+                                <th>Demande</th>
+                                <th>Prix</th>
+                                <th>Total</th>
+                                <th>Prepare</th>
+                                <th>Non disponible</th>
+                                <th>Etape</th>
+                            </tr>
+                            </thead>
+                            <tbody>
+                            <?php foreach ($items as $item): ?>
+                                <tr>
+                                    <td><div class="menu-thumb"><img src="<?= e(menu_item_media_url_or_default($item['menu_item_image_url'] ?? null)) ?>" alt="<?= e($item['menu_item_name'] ?? 'Article') ?>"><div><strong><?= e($item['menu_item_name'] ?? 'Article') ?></strong></div></div></td>
+                                    <td><?= e((string) ($item['requested_quantity'] ?? 0)) ?></td>
+                                    <td><?= e(format_money($item['unit_price'] ?? 0, $restaurantCurrency)) ?></td>
+                                    <td><?= e(format_money($item['requested_total'] ?? 0, $restaurantCurrency)) ?></td>
+                                    <td><?= e((string) ($item['supplied_quantity'] ?? 0)) ?></td>
+                                    <td><?= e((string) ($item['unavailable_quantity'] ?? 0)) ?></td>
+                                    <td><?= e(service_flow_status_label(($item['status'] ?? '') !== '' ? $item['status'] : ($item['supply_status'] ?? null))) ?></td>
+                                </tr>
+                            <?php endforeach; ?>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <?php if (in_array((string) $request['status'], ['PRET_A_SERVIR', 'FOURNI_PARTIEL', 'FOURNI_TOTAL'], true) && can_access('sales.request.close')): ?>
+                        <form method="post" action="/ventes/demandes/<?= e((string) $request['id']) ?>/reception" style="margin-top:14px;">
+                            <button type="submit">Confirmer la reception cote service</button>
+                        </form>
+                    <?php endif; ?>
+                </article>
+            <?php endforeach; ?>
+        </div>
+        <?php if (count($activeRequests) > $activePreviewLimit): ?>
+            <div style="padding-top:12px;">
+                <button type="button" data-history-toggle="sales_active_requests">Voir plus</button>
+            </div>
+        <?php endif; ?>
     <?php endif; ?>
 </section>

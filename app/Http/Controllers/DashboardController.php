@@ -57,7 +57,7 @@ final class DashboardController
             view('super-admin/dashboard', $this->superAdminDashboardPayload($preview, null));
             return;
         } catch (\RuntimeException $exception) {
-            view('super-admin/dashboard', $this->superAdminDashboardPayload(null, null, $exception->getMessage()));
+            view('super-admin/dashboard', $this->superAdminDashboardPayload(null, null, ui_safe_message($exception->getMessage())));
         }
     }
 
@@ -84,7 +84,7 @@ final class DashboardController
             view('super-admin/dashboard', $this->superAdminDashboardPayload($result['preview'], $result));
             return;
         } catch (\RuntimeException $exception) {
-            view('super-admin/dashboard', $this->superAdminDashboardPayload(null, null, $exception->getMessage()));
+            view('super-admin/dashboard', $this->superAdminDashboardPayload(null, null, ui_safe_message($exception->getMessage())));
         }
     }
 

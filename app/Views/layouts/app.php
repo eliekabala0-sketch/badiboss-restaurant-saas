@@ -662,6 +662,11 @@ declare(strict_types=1);
             .shell { padding: 20px 12px 32px; }
             th, td { padding: 14px 12px; }
             .brand-visual-body { flex-direction: column; align-items: flex-start; }
+            .card { border-radius: 18px; }
+            details.compact-card { padding: 12px; }
+            .toolbar-actions, .nav, .context-meta { width: 100%; }
+            .actions a, button, .nav a { width: 100%; text-align: center; }
+            .quantity-stepper { width: 100%; grid-template-columns: 40px minmax(64px, 1fr) 40px; }
         }
     </style>
 </head>
@@ -843,11 +848,15 @@ document.addEventListener('click', function (event) {
     item.remove();
 });
 
-document.querySelectorAll('[data-quantity-stepper]').forEach(function (stepper) {
-    var input = stepper.querySelector('input');
-    var minus = stepper.querySelector('[data-stepper-minus]');
-    var plus = stepper.querySelector('[data-stepper-plus]');
-    if (!input || !minus || !plus) {
+document.addEventListener('click', function (event) {
+    var stepButton = event.target.closest('[data-stepper-minus], [data-stepper-plus]');
+    if (!stepButton) {
+        return;
+    }
+
+    var stepper = stepButton.closest('[data-quantity-stepper]');
+    var input = stepper ? stepper.querySelector('input') : null;
+    if (!stepper || !input) {
         return;
     }
 
@@ -860,21 +869,33 @@ document.querySelectorAll('[data-quantity-stepper]').forEach(function (stepper) 
         return raw === null || raw === '' ? 1 : Number(raw);
     };
 
-    minus.addEventListener('click', function () {
+    if (stepButton.matches('[data-stepper-minus]')) {
         var current = input.value === '' ? min() : Number(input.value);
         input.value = String(Math.max(min(), current - step()));
         input.dispatchEvent(new Event('input', { bubbles: true }));
-    });
+        return;
+    }
 
-    plus.addEventListener('click', function () {
+    if (stepButton.matches('[data-stepper-plus]')) {
         var current = input.value === '' ? 0 : Number(input.value);
         input.value = String(current + step());
         input.dispatchEvent(new Event('input', { bubbles: true }));
-    });
+    }
 });
 
 document.querySelectorAll('[data-autoclose-details]').forEach(function (details) {
     details.open = false;
+    details.addEventListener('toggle', function () {
+        if (!details.open) {
+            return;
+        }
+
+        document.querySelectorAll('[data-autoclose-details]').forEach(function (other) {
+            if (other !== details) {
+                other.open = false;
+            }
+        });
+    });
 });
 </script>
 </body>

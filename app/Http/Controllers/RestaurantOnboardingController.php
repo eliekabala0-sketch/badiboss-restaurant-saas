@@ -74,7 +74,8 @@ final class RestaurantOnboardingController
             $payload['cover_image_url'] = isset($_FILES['photo']) ? $upload->storeRestaurantImage($_FILES['photo'], $normalizedCode, 'photo') : null;
             $restaurantId = Container::getInstance()->get('tenantProvisioning')->createSelfServiceRestaurant($payload);
         } catch (\Throwable $exception) {
-            flash('error', $exception->getMessage());
+            error_log((string) $exception);
+            flash('error', ui_safe_message($exception->getMessage()));
             redirect('/creer-mon-restaurant');
         }
 

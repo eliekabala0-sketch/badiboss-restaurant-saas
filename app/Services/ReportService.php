@@ -107,6 +107,10 @@ final class ReportService
         return [
             'summary' => $transfers['summary'] ?? [],
             'remittances_by_server' => $byServer->fetchAll(PDO::FETCH_ASSOC),
+            'sale_remittance_details' => array_values(array_filter(
+                $transfers['transfers'] ?? [],
+                static fn (array $transfer): bool => (string) ($transfer['source_type'] ?? '') === 'sale'
+            )),
         ];
     }
     private function productMargins(int $restaurantId, DateTimeImmutable $startAt, DateTimeImmutable $endAt): array

@@ -5,6 +5,8 @@ $restaurantCurrency = restaurant_currency($restaurant);
 $summary = $cash['summary'] ?? [];
 $transfers = $cash['transfers'] ?? [];
 $movements = $cash['movements'] ?? [];
+$pendingServerSales = $cash['pending_server_sales'] ?? [];
+$cashiers = $cash['cashiers'] ?? [];
 ?>
 
 <section class="topbar">
@@ -51,25 +53,42 @@ $movements = $cash['movements'] ?? [];
     <article class="card" style="padding:22px;">
         <details class="compact-card" data-autoclose-details>
             <summary><strong>Serveur vers caisse</strong></summary>
-            <form method="post" action="/caisse/remises-serveur" style="margin-top:14px;">
-                <label>Vente cloturee</label>
-                <select name="sale_id">
-                    <?php foreach ($sales as $sale): ?>
-                        <option value="<?= e((string) $sale['id']) ?>">#<?= e((string) $sale['id']) ?> - <?= e($sale['server_name'] ?? 'Serveur') ?> - <?= e(format_money($sale['total_amount'] ?? 0, $restaurantCurrency)) ?></option>
-                    <?php endforeach; ?>
-                </select>
-                <label>Caissier / comptable</label>
-                <select name="to_user_id">
-                    <?php foreach (($cash['cashiers'] ?? []) as $cashier): ?>
-                        <option value="<?= e((string) $cashier['id']) ?>"><?= e(named_actor_label($cashier['full_name'] ?? null, $cashier['role_code'] ?? null)) ?></option>
-                    <?php endforeach; ?>
-                </select>
-                <label>Montant</label>
-                <input name="amount" value="0">
-                <label>Note</label>
-                <textarea name="note">Remise serveur vers caisse.</textarea>
-                <button type="submit">Enregistrer la remise</button>
-            </form>
+            <p class="muted" style="margin-top:14px;">La remise part d une vente cloturee. Le montant vient toujours de la vente et ne se saisit pas librement.</p>
+            <?php if ($pendingServerSales === []): ?>
+                <p class="muted">Aucune vente cloturee en attente de remise.</p>
+            <?php else: ?>
+                <div class="table-wrap">
+                    <table>
+                        <thead><tr><th>Vente</th><th>Serveur</th><th>Montant</th><th>Trace</th><th>Action</th></tr></thead>
+                        <tbody>
+                        <?php foreach ($pendingServerSales as $sale): ?>
+                            <tr>
+                                <td>#<?= e((string) $sale['sale_id']) ?></td>
+                                <td><?= e(named_actor_label($sale['server_name'] ?? null, 'cashier_server')) ?></td>
+                                <td><?= e(format_money($sale['sale_total_amount'] ?? 0, $restaurantCurrency)) ?></td>
+                                <td>
+                                    Vente liee
+                                    <?php if (!empty($sale['server_request_id'])): ?>
+                                        <br><span class="muted">Demande #<?= e((string) $sale['server_request_id']) ?> - <?= e((string) ($sale['service_reference'] ?? '-')) ?></span>
+                                    <?php endif; ?>
+                                </td>
+                                <td>
+                                    <form method="post" action="/caisse/remises-serveur">
+                                        <input type="hidden" name="sale_id" value="<?= e((string) $sale['sale_id']) ?>">
+                                        <select name="to_user_id" style="margin-bottom:10px;">
+                                            <?php foreach ($cashiers as $cashier): ?>
+                                                <option value="<?= e((string) $cashier['id']) ?>"><?= e(named_actor_label($cashier['full_name'] ?? null, $cashier['role_code'] ?? null)) ?></option>
+                                            <?php endforeach; ?>
+                                        </select>
+                                        <button type="submit" <?= $cashiers === [] ? 'disabled' : '' ?>>Enregistrer la remise</button>
+                                    </form>
+                                </td>
+                            </tr>
+                        <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                </div>
+            <?php endif; ?>
         </details>
     </article>
 
@@ -141,6 +160,7 @@ $movements = $cash['movements'] ?? [];
             <thead>
             <tr>
                 <th>Flux</th>
+                <th>Vente liee</th>
                 <th>Montant</th>
                 <th>Statut</th>
                 <th>Heure</th>
@@ -151,8 +171,23 @@ $movements = $cash['movements'] ?? [];
             <?php foreach ($transfers as $transfer): ?>
                 <tr>
                     <td><?= e(named_actor_label($transfer['from_user_name'] ?? null)) ?> -> <?= e(named_actor_label($transfer['to_user_name'] ?? null)) ?></td>
+                    <td>
+                        <?php if (!empty($transfer['sale_id'])): ?>
+                            <strong>#<?= e((string) $transfer['sale_id']) ?></strong>
+                            <?php if (!empty($transfer['server_request_id'])): ?>
+                                <br><span class="muted">Demande #<?= e((string) $transfer['server_request_id']) ?> - <?= e((string) ($transfer['service_reference'] ?? '-')) ?></span>
+                            <?php endif; ?>
+                        <?php else: ?>
+                            <span class="muted">Sans vente liee</span>
+                        <?php endif; ?>
+                    </td>
                     <td><?= e(format_money($transfer['amount'] ?? 0, $restaurantCurrency)) ?></td>
-                    <td><?= e((string) ($transfer['status'] ?? '-')) ?></td>
+                    <td>
+                        <?= e(cash_transfer_status_label($transfer['status'] ?? null)) ?>
+                        <?php if ((float) ($transfer['discrepancy_amount'] ?? 0) != 0.0): ?>
+                            <br><span class="muted">Ecart <?= e(format_money($transfer['discrepancy_amount'] ?? 0, $restaurantCurrency)) ?></span>
+                        <?php endif; ?>
+                    </td>
                     <td><?= e(format_date_fr($transfer['received_at'] ?? $transfer['requested_at'] ?? $transfer['created_at'] ?? null)) ?></td>
                     <td>
                         <?php if (($transfer['status'] ?? '') === 'REMIS_A_CAISSE'): ?>
