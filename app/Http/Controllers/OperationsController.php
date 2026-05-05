@@ -465,6 +465,11 @@ final class OperationsController
             'user_id' => (int) ($request->query['user_id'] ?? 0),
         ];
 
+        $today = Container::getInstance()->get('reportService')->todayForRestaurant($restaurantId);
+        $clarityFrom = $filters['date_from'] !== '' ? $filters['date_from'] : $today;
+        $clarityTo = $filters['date_to'] !== '' ? $filters['date_to'] : $today;
+        $cashClarity = Container::getInstance()->get('cashService')->periodCashClarity($restaurantId, $clarityFrom, $clarityTo);
+
         view('operations/cash', [
             'title' => 'Caisse',
             'restaurant' => Container::getInstance()->get('restaurantAdmin')->findRestaurant($restaurantId),
@@ -472,6 +477,7 @@ final class OperationsController
             'sales' => Container::getInstance()->get('salesService')->listSales($restaurantId),
             'users' => Container::getInstance()->get('roleAdmin')->listUsersForRestaurant($restaurantId),
             'filters' => $filters,
+            'cash_clarity_period' => $cashClarity,
             'flash_success' => flash('success'),
             'flash_error' => flash('error'),
         ]);
@@ -768,6 +774,29 @@ final class OperationsController
             $period = 'daily';
         }
 
+        $actionScope = (string) ($request->query['action_scope'] ?? 'all');
+        if (!in_array($actionScope, ['all', 'sales', 'cash', 'stock', 'kitchen'], true)) {
+            $actionScope = 'all';
+        }
+
+        $viewFilters = [
+            'user_id' => (int) ($request->query['user_id'] ?? 0),
+            'role_code' => trim((string) ($request->query['role_code'] ?? '')),
+            'action_scope' => $actionScope,
+            'action_name' => trim((string) ($request->query['action_name'] ?? '')),
+            'closed_sales_only' => isset($request->query['closed_sales_only']) && (string) $request->query['closed_sales_only'] === '1',
+        ];
+
+        $reportUsers = Container::getInstance()->get('roleAdmin')->listUsersForRestaurant($restaurantId);
+        $reportRoleCodes = [];
+        foreach ($reportUsers as $ru) {
+            $rc = (string) ($ru['role_code'] ?? '');
+            if ($rc !== '') {
+                $reportRoleCodes[$rc] = true;
+            }
+        }
+        ksort($reportRoleCodes);
+
         $title = match ($period) {
             'weekly' => 'Rapport hebdomadaire',
             'monthly' => 'Rapport mensuel',
@@ -779,7 +808,10 @@ final class OperationsController
             'restaurant' => Container::getInstance()->get('restaurantAdmin')->findRestaurant($restaurantId),
             'date' => $date,
             'period' => $period,
-            'report' => Container::getInstance()->get('reportService')->dailyReport($restaurantId, $date, $period),
+            'view_filters' => $viewFilters,
+            'report_users' => $reportUsers,
+            'report_role_codes' => array_keys($reportRoleCodes),
+            'report' => Container::getInstance()->get('reportService')->dailyReport($restaurantId, $date, $period, $viewFilters),
         ]);
 
         audit_access('reports', $restaurantId, 'screens', 'daily-report', 'Consultation rapport journalier');

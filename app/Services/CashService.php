@@ -30,6 +30,56 @@ final class CashService
         ];
     }
 
+    /**
+     * Synthèse des flux caisse sur une plage de dates (inclus) : remises vente, réceptions, chaîne gérant/propriétaire, écarts.
+     * Les montants suivent les enregistrements réels (entrées +, sorties - au niveau métier dans l’affichage).
+     */
+    public function periodCashClarity(int $restaurantId, string $dateFromYmd, string $dateToYmd): array
+    {
+        $this->ensureSchema();
+        $statement = $this->database->pdo()->prepare(
+            'SELECT
+                COALESCE(SUM(CASE WHEN ct.source_type = "sale" THEN ct.amount ELSE 0 END), 0) AS server_remittance_total,
+                COALESCE(SUM(CASE WHEN ct.source_type = "sale" AND ct.status IN ("RECU_CAISSE", "ECART_SIGNALE") THEN COALESCE(ct.amount_received, ct.amount) ELSE 0 END), 0) AS cashier_received_sales,
+                COALESCE(SUM(CASE WHEN ct.source_type = "REMISE_GERANT" THEN ct.amount ELSE 0 END), 0) AS declared_to_manager,
+                COALESCE(SUM(CASE WHEN ct.status = "RECU_GERANT" THEN COALESCE(ct.amount_received, ct.amount) ELSE 0 END), 0) AS manager_received,
+                COALESCE(SUM(CASE WHEN ct.source_type = "REMISE_PROPRIETAIRE" THEN ct.amount ELSE 0 END), 0) AS declared_to_owner,
+                COALESCE(SUM(CASE WHEN ct.status = "RECU_PROPRIETAIRE" THEN COALESCE(ct.amount_received, ct.amount) ELSE 0 END), 0) AS owner_received,
+                COALESCE(SUM(ABS(ct.discrepancy_amount)), 0) AS discrepancy_total
+             FROM cash_transfers ct
+             WHERE ct.restaurant_id = :restaurant_id
+               AND COALESCE(ct.received_at, ct.requested_at, ct.created_at) >= :start_at
+               AND COALESCE(ct.received_at, ct.requested_at, ct.created_at) <= :end_at'
+                );
+        $statement->execute([
+            'restaurant_id' => $restaurantId,
+            'start_at' => $dateFromYmd . ' 00:00:00',
+            'end_at' => $dateToYmd . ' 23:59:59',
+        ]);
+        $row = $statement->fetch(PDO::FETCH_ASSOC) ?: [];
+        $filters = ['date_from' => $dateFromYmd, 'date_to' => $dateToYmd];
+        $summary = $this->summary($restaurantId, $filters);
+        $managerNet = (float) ($row['manager_received'] ?? 0) - (float) ($row['declared_to_owner'] ?? 0);
+
+        return [
+            'period_from' => $dateFromYmd,
+            'period_to' => $dateToYmd,
+            'server_remittance_total' => (float) ($row['server_remittance_total'] ?? 0),
+            'cashier_received_sales' => (float) ($row['cashier_received_sales'] ?? 0),
+            'declared_to_manager' => (float) ($row['declared_to_manager'] ?? 0),
+            'manager_received' => (float) ($row['manager_received'] ?? 0),
+            'declared_to_owner' => (float) ($row['declared_to_owner'] ?? 0),
+            'owner_received' => (float) ($row['owner_received'] ?? 0),
+            'discrepancy_total' => (float) ($row['discrepancy_total'] ?? 0),
+            'cash_balance' => (float) ($summary['cash_balance'] ?? 0),
+            'cash_entries' => (float) ($summary['cash_entries'] ?? 0),
+            'cash_expenses' => (float) ($summary['cash_expenses'] ?? 0),
+            'cash_outputs' => (float) ($summary['cash_outputs'] ?? 0),
+            'manager_net_period' => round($managerNet, 2),
+            'currency' => (string) ($summary['currency'] ?? restaurant_currency($restaurantId)),
+        ];
+    }
+
     public function remitServerCash(int $restaurantId, array $payload, array $actor): int
     {
         $this->ensureSchema();

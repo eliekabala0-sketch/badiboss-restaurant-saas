@@ -11,16 +11,22 @@ use PDO;
 final class ReportService
 {
     public function __construct(private readonly Database $database) {}
-    public function dailyReport(int $restaurantId, string $date, string $period = 'daily'): array { return $this->reportForPeriod($restaurantId, $date, $period); }
+    public function dailyReport(int $restaurantId, string $date, string $period = 'daily', array $viewFilters = []): array
+    {
+        return $this->reportForPeriod($restaurantId, $date, $period, $viewFilters);
+    }
     public function todayForRestaurant(int $restaurantId): string { return (new DateTimeImmutable('now', $this->reportTimezone($restaurantId)))->format('Y-m-d'); }
-    public function reportForPeriod(int $restaurantId, string $date, string $period): array
+    public function reportForPeriod(int $restaurantId, string $date, string $period, array $viewFilters = []): array
     {
         $timezone = $this->reportTimezone($restaurantId);
         $selectedDate = $this->normalizeDate($date, $timezone);
         [$startAt, $endAt, $label] = $this->periodBounds($selectedDate, $period, $timezone);
         $displayEndAt = $endAt->sub(new DateInterval('PT1S'));
         $currentStock = (float) $this->scalar('SELECT COALESCE(SUM(quantity_in_stock), 0) FROM stock_items WHERE restaurant_id = :restaurant_id', ['restaurant_id' => $restaurantId]);
-        $summary = ['period' => $period, 'period_label' => $label, 'selected_date' => $selectedDate->format('Y-m-d'), 'timezone' => $timezone->getName(), 'range_start' => $startAt->format('Y-m-d H:i:s'), 'range_end' => $displayEndAt->format('Y-m-d H:i:s'), 'opening_stock_total' => $this->openingStock($restaurantId, $startAt, $currentStock), 'current_stock_total' => $currentStock, 'kitchen_outputs' => $this->sumMovement($restaurantId, $startAt, $endAt, 'SORTIE_CUISINE'), 'stock_returns' => $this->sumMovement($restaurantId, $startAt, $endAt, 'RETOUR_STOCK'), 'kitchen_production' => $this->sumProduction($restaurantId, $startAt, $endAt), 'stock_report' => $this->stockReport($restaurantId, $startAt, $endAt), 'kitchen_report' => $this->kitchenReport($restaurantId, $startAt, $endAt), 'server_report' => $this->serverReport($restaurantId, $startAt, $endAt), 'financial_report' => $this->financialReport($restaurantId, $startAt, $endAt), 'product_margins' => $this->productMargins($restaurantId, $startAt, $endAt), 'sales_by_server' => $this->salesByServer($restaurantId, $startAt, $endAt), 'sales_by_type' => $this->salesByType($restaurantId, $startAt, $endAt), 'material_losses' => $this->sumLosses($restaurantId, $startAt, $endAt, 'MATIERE_PREMIERE'), 'financial_losses' => $this->sumLosses($restaurantId, $startAt, $endAt, 'ARGENT'), 'dish_yields' => $this->dishYields($restaurantId, $startAt, $endAt), 'product_issues' => $this->productIssues($restaurantId, $startAt, $endAt), 'incident_statuses' => $this->incidentsByField($restaurantId, $startAt, $endAt, 'status'), 'incident_qualifications' => $this->incidentsByField($restaurantId, $startAt, $endAt, 'final_qualification'), 'incident_responsibilities' => $this->incidentsByField($restaurantId, $startAt, $endAt, 'responsibility_scope'), 'incident_cases' => $this->incidentCases($restaurantId, $startAt, $endAt), 'fraud_alerts' => $this->fraudAlerts($restaurantId, $startAt, $endAt)];
+        $closedOnly = (bool) ($viewFilters['closed_sales_only'] ?? false);
+        $userId = (int) ($viewFilters['user_id'] ?? 0);
+        $salesByServer = $this->salesByServer($restaurantId, $startAt, $endAt, $closedOnly, $userId);
+        $summary = ['period' => $period, 'period_label' => $label, 'selected_date' => $selectedDate->format('Y-m-d'), 'timezone' => $timezone->getName(), 'range_start' => $startAt->format('Y-m-d H:i:s'), 'range_end' => $displayEndAt->format('Y-m-d H:i:s'), 'opening_stock_total' => $this->openingStock($restaurantId, $startAt, $currentStock), 'current_stock_total' => $currentStock, 'kitchen_outputs' => $this->sumMovement($restaurantId, $startAt, $endAt, 'SORTIE_CUISINE'), 'stock_returns' => $this->sumMovement($restaurantId, $startAt, $endAt, 'RETOUR_STOCK'), 'kitchen_production' => $this->sumProduction($restaurantId, $startAt, $endAt), 'stock_report' => $this->stockReport($restaurantId, $startAt, $endAt), 'kitchen_report' => $this->kitchenReport($restaurantId, $startAt, $endAt), 'server_report' => $this->serverReport($restaurantId, $startAt, $endAt), 'financial_report' => $this->financialReport($restaurantId, $startAt, $endAt, $displayEndAt), 'product_margins' => $this->productMargins($restaurantId, $startAt, $endAt), 'sales_by_server' => $salesByServer, 'sales_by_type' => $this->salesByType($restaurantId, $startAt, $endAt), 'material_losses' => $this->sumLosses($restaurantId, $startAt, $endAt, 'MATIERE_PREMIERE'), 'financial_losses' => $this->sumLosses($restaurantId, $startAt, $endAt, 'ARGENT'), 'dish_yields' => $this->dishYields($restaurantId, $startAt, $endAt), 'product_issues' => $this->productIssues($restaurantId, $startAt, $endAt), 'incident_statuses' => $this->incidentsByField($restaurantId, $startAt, $endAt, 'status'), 'incident_qualifications' => $this->incidentsByField($restaurantId, $startAt, $endAt, 'final_qualification'), 'incident_responsibilities' => $this->incidentsByField($restaurantId, $startAt, $endAt, 'responsibility_scope'), 'incident_cases' => $this->incidentCases($restaurantId, $startAt, $endAt), 'fraud_alerts' => $this->fraudAlerts($restaurantId, $startAt, $endAt), 'view_filters' => $viewFilters, 'people_overview' => $this->peopleOverview($restaurantId, $startAt, $endAt, $userId, $salesByServer, $viewFilters), 'activity_index' => $this->activityIndex($restaurantId, $startAt, $endAt, $viewFilters), 'nominative_timeline' => $this->nominativeTimeline($restaurantId, $startAt, $endAt, $viewFilters)];
         $salesTotal = 0.0; foreach ($summary['sales_by_type'] as $row) { $salesTotal += (float) $row['total_amount']; }
         $summary['general_report'] = ['total_product_value' => (float) $summary['kitchen_report']['value_produced'], 'total_sold_value' => $salesTotal, 'real_material_cost_value' => (float) $summary['kitchen_report']['real_material_cost_of_sales'], 'total_losses_value' => (float) $summary['stock_report']['stock_losses_value'] + (float) $summary['kitchen_report']['kitchen_losses_value'] + (float) $summary['server_report']['server_loss_value'] + (float) $summary['financial_losses'], 'stock_loss_value' => (float) $summary['stock_report']['stock_losses_value'], 'kitchen_loss_value' => (float) $summary['kitchen_report']['kitchen_losses_value'], 'server_loss_value' => (float) $summary['server_report']['server_loss_value']];
         $summary['estimated_profit'] = $salesTotal - (float) $summary['kitchen_report']['real_material_cost_of_sales'] - (float) $summary['stock_report']['stock_losses_value'] - (float) $summary['kitchen_report']['kitchen_losses_value'] - (float) $summary['server_report']['server_loss_value'] - (float) $summary['financial_losses'];
@@ -78,12 +84,18 @@ final class ReportService
         $incidents->execute(['restaurant_id' => $restaurantId, 'start_at' => $startAt->format('Y-m-d H:i:s'), 'end_at' => $endAt->format('Y-m-d H:i:s')]);
         return ['total_requested' => (float) ($totals['total_requested'] ?? 0), 'total_supplied' => (float) ($totals['total_supplied'] ?? 0), 'total_sold' => (float) ($totals['total_sold'] ?? 0), 'total_returned' => (float) ($totals['total_returned'] ?? 0), 'server_loss_value' => (float) ($totals['total_server_loss'] ?? 0), 'incidents_by_server' => $incidents->fetchAll(PDO::FETCH_ASSOC)];
     }
-    private function financialReport(int $restaurantId, DateTimeImmutable $startAt, DateTimeImmutable $endAt): array
+    private function financialReport(int $restaurantId, DateTimeImmutable $startAt, DateTimeImmutable $endAt, DateTimeImmutable $displayEndAt): array
     {
+        $dateTo = $displayEndAt->format('Y-m-d');
         $transfers = Container::getInstance()->get('cashService')->dashboard($restaurantId, [
             'date_from' => $startAt->format('Y-m-d'),
-            'date_to' => $endAt->sub(new DateInterval('PT1S'))->format('Y-m-d'),
+            'date_to' => $dateTo,
         ]);
+        $cashClarity = Container::getInstance()->get('cashService')->periodCashClarity(
+            $restaurantId,
+            $startAt->format('Y-m-d'),
+            $dateTo
+        );
 
         $byServer = $this->database->pdo()->prepare(
             'SELECT COALESCE(u.full_name, "Utilisateur non identifie") AS server_name,
@@ -106,6 +118,7 @@ final class ReportService
 
         return [
             'summary' => $transfers['summary'] ?? [],
+            'cash_clarity' => $cashClarity,
             'remittances_by_server' => $byServer->fetchAll(PDO::FETCH_ASSOC),
             'sale_remittance_details' => array_values(array_filter(
                 $transfers['transfers'] ?? [],
@@ -120,9 +133,16 @@ final class ReportService
         foreach ($rows as &$row) { $row['unit_margin'] = (float) $row['average_sale_price'] - (float) $row['unit_real_cost']; $row['total_margin'] = (float) $row['total_sales_value'] - (float) $row['total_real_cost']; } unset($row);
         return $rows;
     }
-    private function salesByServer(int $restaurantId, DateTimeImmutable $startAt, DateTimeImmutable $endAt): array
+    private function salesByServer(int $restaurantId, DateTimeImmutable $startAt, DateTimeImmutable $endAt, bool $closedOnly = false, int $userId = 0): array
     {
-        $statement = $this->database->pdo()->prepare('SELECT COALESCE(u.full_name, "Vente automatique") AS server_name, COUNT(s.id) AS sales_count, COALESCE(SUM(s.total_amount), 0) AS total_amount FROM sales s LEFT JOIN users u ON u.id = s.server_id WHERE s.restaurant_id = :restaurant_id AND COALESCE(s.validated_at, s.created_at) >= :start_at AND COALESCE(s.validated_at, s.created_at) < :end_at GROUP BY COALESCE(u.full_name, "Vente automatique") ORDER BY total_amount DESC');
+        $extra = '';
+        if ($closedOnly) {
+            $extra .= ' AND s.status IN ("VALIDE","CLOTURE","VENDU_TOTAL","VENDU_PARTIEL")';
+        }
+        if ($userId > 0) {
+            $extra .= ' AND s.server_id = ' . $userId;
+        }
+        $statement = $this->database->pdo()->prepare('SELECT COALESCE(u.full_name, "Vente automatique") AS server_name, COUNT(s.id) AS sales_count, COALESCE(SUM(s.total_amount), 0) AS total_amount FROM sales s LEFT JOIN users u ON u.id = s.server_id WHERE s.restaurant_id = :restaurant_id AND COALESCE(s.validated_at, s.created_at) >= :start_at AND COALESCE(s.validated_at, s.created_at) < :end_at' . $extra . ' GROUP BY COALESCE(u.full_name, "Vente automatique") ORDER BY total_amount DESC');
         $statement->execute(['restaurant_id' => $restaurantId, 'start_at' => $startAt->format('Y-m-d H:i:s'), 'end_at' => $endAt->format('Y-m-d H:i:s')]); return $statement->fetchAll(PDO::FETCH_ASSOC);
     }
     private function salesByType(int $restaurantId, DateTimeImmutable $startAt, DateTimeImmutable $endAt): array
@@ -183,6 +203,479 @@ final class ReportService
         $statement = $this->database->pdo()->prepare('SELECT SUM(CASE WHEN planning_status = "urgence" THEN 1 ELSE 0 END) AS urgent_requests, SUM(CASE WHEN planning_status = "a_prevoir" THEN 1 ELSE 0 END) AS planned_requests, SUM(CASE WHEN status = "INDISPONIBLE" THEN 1 ELSE 0 END) AS ruptures FROM kitchen_stock_requests WHERE restaurant_id = :restaurant_id AND created_at >= :start_at AND created_at < :end_at');
         $statement->execute(['restaurant_id' => $restaurantId, 'start_at' => $startAt->format('Y-m-d H:i:s'), 'end_at' => $endAt->format('Y-m-d H:i:s')]); return $statement->fetch(PDO::FETCH_ASSOC) ?: ['urgent_requests' => 0, 'planned_requests' => 0, 'ruptures' => 0];
     }
+
+    /**
+     * @param list<array<string, mixed>> $salesByServer
+     * @return array<string, mixed>
+     */
+    private function peopleOverview(int $restaurantId, DateTimeImmutable $startAt, DateTimeImmutable $endAt, int $userId, array $salesByServer, array $viewFilters): array
+    {
+        $roleCode = trim((string) ($viewFilters['role_code'] ?? ''));
+        $kitchen = $this->kitchenByCook($restaurantId, $startAt, $endAt, $userId, $roleCode);
+        $stock = $this->stockMovementsByUser($restaurantId, $startAt, $endAt, $userId, $roleCode);
+        $cashPersons = $this->cashActivityByPerson($restaurantId, $startAt, $endAt, $userId, $roleCode);
+        $totSalesCount = 0;
+        $totSalesAmount = 0.0;
+        foreach ($salesByServer as $row) {
+            $totSalesCount += (int) ($row['sales_count'] ?? 0);
+            $totSalesAmount += (float) ($row['total_amount'] ?? 0);
+        }
+        $totPlates = 0.0;
+        foreach ($kitchen as $row) {
+            $totPlates += (float) ($row['plates_prepared'] ?? 0);
+        }
+        $totStockOut = 0;
+        $totLosses = 0;
+        foreach ($stock as $row) {
+            $totStockOut += (int) ($row['sorties_count'] ?? 0);
+            $totLosses += (int) ($row['pertes_count'] ?? 0);
+        }
+
+        return [
+            'sales_by_server_rows' => $salesByServer,
+            'kitchen_by_cook' => $kitchen,
+            'stock_by_staff' => $stock,
+            'cash_touchpoints' => $cashPersons,
+            'grand_totals' => [
+                'sales_count' => $totSalesCount,
+                'sales_amount' => $totSalesAmount,
+                'plates_prepared' => $totPlates,
+                'kitchen_productions' => array_sum(array_map(static fn (array $r): int => (int) ($r['productions_count'] ?? 0), $kitchen)),
+                'stock_sorties' => $totStockOut,
+                'stock_pertes' => $totLosses,
+            ],
+        ];
+    }
+
+    /**
+     * @return list<array<string, mixed>>
+     */
+    private function kitchenByCook(int $restaurantId, DateTimeImmutable $startAt, DateTimeImmutable $endAt, int $userId, string $roleCode): array
+    {
+        $extra = '';
+        if ($userId > 0) {
+            $extra .= ' AND kp.created_by = ' . $userId;
+        }
+        if ($roleCode !== '') {
+            $extra .= ' AND r.code = ' . $this->database->pdo()->quote($roleCode);
+        }
+        $statement = $this->database->pdo()->prepare(
+            'SELECT u.id AS user_id, u.full_name AS full_name, r.code AS role_code,
+                    COUNT(kp.id) AS productions_count,
+                    COALESCE(SUM(kp.quantity_produced), 0) AS plates_prepared
+             FROM kitchen_production kp
+             INNER JOIN users u ON u.id = kp.created_by
+             LEFT JOIN roles r ON r.id = u.role_id
+             WHERE kp.restaurant_id = :restaurant_id AND kp.created_at >= :start_at AND kp.created_at < :end_at' . $extra . '
+             GROUP BY u.id, u.full_name, r.code
+             ORDER BY plates_prepared DESC'
+        );
+        $statement->execute([
+            'restaurant_id' => $restaurantId,
+            'start_at' => $startAt->format('Y-m-d H:i:s'),
+            'end_at' => $endAt->format('Y-m-d H:i:s'),
+        ]);
+
+        return $statement->fetchAll(PDO::FETCH_ASSOC);
+    }
+
+    /**
+     * @return list<array<string, mixed>>
+     */
+    private function stockMovementsByUser(int $restaurantId, DateTimeImmutable $startAt, DateTimeImmutable $endAt, int $userId, string $roleCode): array
+    {
+        $extra = '';
+        if ($userId > 0) {
+            $extra .= ' AND sm.user_id = ' . $userId;
+        }
+        if ($roleCode !== '') {
+            $extra .= ' AND r.code = ' . $this->database->pdo()->quote($roleCode);
+        }
+        $statement = $this->database->pdo()->prepare(
+            'SELECT u.id AS user_id, u.full_name AS full_name, r.code AS role_code,
+                    SUM(CASE WHEN sm.movement_type IN ("SORTIE_CUISINE","SORTIE") THEN 1 ELSE 0 END) AS sorties_count,
+                    SUM(CASE WHEN sm.movement_type = "PERTE" THEN 1 ELSE 0 END) AS pertes_count,
+                    COUNT(sm.id) AS movements_total
+             FROM stock_movements sm
+             INNER JOIN users u ON u.id = sm.user_id
+             LEFT JOIN roles r ON r.id = u.role_id
+             WHERE sm.restaurant_id = :restaurant_id
+               AND sm.created_at >= :start_at AND sm.created_at < :end_at
+               AND sm.status = "VALIDE"' . $extra . '
+             GROUP BY u.id, u.full_name, r.code
+             ORDER BY movements_total DESC'
+        );
+        $statement->execute([
+            'restaurant_id' => $restaurantId,
+            'start_at' => $startAt->format('Y-m-d H:i:s'),
+            'end_at' => $endAt->format('Y-m-d H:i:s'),
+        ]);
+
+        return $statement->fetchAll(PDO::FETCH_ASSOC);
+    }
+
+    /**
+     * @return list<array<string, mixed>>
+     */
+    private function cashActivityByPerson(int $restaurantId, DateTimeImmutable $startAt, DateTimeImmutable $endAt, int $userId, string $roleCode): array
+    {
+        $s = $startAt->format('Y-m-d H:i:s');
+        $e = $endAt->format('Y-m-d H:i:s');
+        $extraUser = $userId > 0 ? ' AND u.id = ' . $userId : '';
+        $extraRole = $roleCode !== '' ? ' AND r.code = ' . $this->database->pdo()->quote($roleCode) : '';
+        $statement = $this->database->pdo()->prepare(
+            'SELECT u.id AS user_id,
+                    u.full_name AS full_name,
+                    r.code AS role_code,
+                    COALESCE(rs.remis, 0) AS remis_ventes,
+                    COALESCE(rc.recu, 0) AS recu_caisse_ventes,
+                    COALESCE(rg.rem, 0) AS remis_comme_caisse_gerant
+             FROM users u
+             LEFT JOIN roles r ON r.id = u.role_id
+             LEFT JOIN (
+                 SELECT from_user_id, SUM(amount) AS remis FROM cash_transfers
+                 WHERE restaurant_id = :rid1 AND source_type = "sale"
+                   AND COALESCE(received_at, requested_at, created_at) >= :s1
+                   AND COALESCE(received_at, requested_at, created_at) < :e1
+                 GROUP BY from_user_id
+             ) rs ON rs.from_user_id = u.id
+             LEFT JOIN (
+                 SELECT received_by, SUM(COALESCE(amount_received, amount)) AS recu FROM cash_transfers
+                 WHERE restaurant_id = :rid2 AND source_type = "sale"
+                   AND status IN ("RECU_CAISSE","ECART_SIGNALE")
+                   AND COALESCE(received_at, requested_at, created_at) >= :s2
+                   AND COALESCE(received_at, requested_at, created_at) < :e2
+                 GROUP BY received_by
+             ) rc ON rc.received_by = u.id
+             LEFT JOIN (
+                 SELECT from_user_id, SUM(amount) AS rem FROM cash_transfers
+                 WHERE restaurant_id = :rid3 AND source_type = "REMISE_GERANT"
+                   AND COALESCE(received_at, requested_at, created_at) >= :s3
+                   AND COALESCE(received_at, requested_at, created_at) < :e3
+                 GROUP BY from_user_id
+             ) rg ON rg.from_user_id = u.id
+             WHERE u.restaurant_id = :ridu
+               AND (COALESCE(rs.remis, 0) + COALESCE(rc.recu, 0) + COALESCE(rg.rem, 0)) > 0.0001'
+                . $extraUser . $extraRole
+        );
+        $statement->execute([
+            'rid1' => $restaurantId, 's1' => $s, 'e1' => $e,
+            'rid2' => $restaurantId, 's2' => $s, 'e2' => $e,
+            'rid3' => $restaurantId, 's3' => $s, 'e3' => $e,
+            'ridu' => $restaurantId,
+        ]);
+
+        return $statement->fetchAll(PDO::FETCH_ASSOC);
+    }
+
+    /**
+     * @return array{global_percent: int, agents: list<array<string, mixed>>}
+     */
+    private function activityIndex(int $restaurantId, DateTimeImmutable $startAt, DateTimeImmutable $endAt, array $viewFilters): array
+    {
+        $s = $startAt->format('Y-m-d H:i:s');
+        $e = $endAt->format('Y-m-d H:i:s');
+        $closedStatuses = ['VALIDE', 'CLOTURE', 'VENDU_TOTAL', 'VENDU_PARTIEL'];
+        $roleFilter = trim((string) ($viewFilters['role_code'] ?? ''));
+        $userFilter = (int) ($viewFilters['user_id'] ?? 0);
+        $scores = [];
+        $merge = static function (array &$bucket, int $uid, string $name, string $role, float $add): void {
+            if ($uid <= 0 || $add <= 0) {
+                return;
+            }
+            if (!isset($bucket[$uid])) {
+                $bucket[$uid] = ['user_id' => $uid, 'full_name' => $name, 'role_code' => $role, 'score' => 0.0];
+            }
+            $bucket[$uid]['score'] += $add;
+        };
+        $inStatus = implode(',', array_map(static fn (string $st): string => '"' . $st . '"', $closedStatuses));
+
+        $sql = 'SELECT s.server_id AS uid, u.full_name AS fn, COALESCE(r.code, "") AS rc, COUNT(*) AS c
+                FROM sales s
+                INNER JOIN users u ON u.id = s.server_id
+                LEFT JOIN roles r ON r.id = u.role_id
+                WHERE s.restaurant_id = :rid AND s.status IN (' . $inStatus . ')
+                  AND COALESCE(s.validated_at, s.created_at) >= :st AND COALESCE(s.validated_at, s.created_at) < :en';
+        $params = ['rid' => $restaurantId, 'st' => $s, 'en' => $e];
+        if ($userFilter > 0) {
+            $sql .= ' AND s.server_id = :uidfil';
+            $params['uidfil'] = $userFilter;
+        }
+        if ($roleFilter !== '') {
+            $sql .= ' AND r.code = :rolec';
+            $params['rolec'] = $roleFilter;
+        }
+        $sql .= ' GROUP BY s.server_id, u.full_name, r.code';
+        $st = $this->database->pdo()->prepare($sql);
+        $st->execute($params);
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            $merge($scores, (int) $row['uid'], (string) $row['fn'], (string) $row['rc'], (float) $row['c']);
+        }
+
+        $sql = 'SELECT kp.created_by AS uid, u.full_name AS fn, COALESCE(r.code, "") AS rc, COUNT(*) * 2 AS c
+                FROM kitchen_production kp
+                INNER JOIN users u ON u.id = kp.created_by
+                LEFT JOIN roles r ON r.id = u.role_id
+                WHERE kp.restaurant_id = :rid AND kp.created_at >= :st AND kp.created_at < :en';
+        $params = ['rid' => $restaurantId, 'st' => $s, 'en' => $e];
+        if ($userFilter > 0) {
+            $sql .= ' AND kp.created_by = :uidfil';
+            $params['uidfil'] = $userFilter;
+        }
+        if ($roleFilter !== '') {
+            $sql .= ' AND r.code = :rolec';
+            $params['rolec'] = $roleFilter;
+        }
+        $sql .= ' GROUP BY kp.created_by, u.full_name, r.code';
+        $st = $this->database->pdo()->prepare($sql);
+        $st->execute($params);
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            $merge($scores, (int) $row['uid'], (string) $row['fn'], (string) $row['rc'], (float) $row['c']);
+        }
+
+        $sql = 'SELECT sm.user_id AS uid, u.full_name AS fn, COALESCE(r.code, "") AS rc, COUNT(*) AS c
+                FROM stock_movements sm
+                INNER JOIN users u ON u.id = sm.user_id
+                LEFT JOIN roles r ON r.id = u.role_id
+                WHERE sm.restaurant_id = :rid AND sm.status = "VALIDE"
+                  AND sm.created_at >= :st AND sm.created_at < :en';
+        $params = ['rid' => $restaurantId, 'st' => $s, 'en' => $e];
+        if ($userFilter > 0) {
+            $sql .= ' AND sm.user_id = :uidfil';
+            $params['uidfil'] = $userFilter;
+        }
+        if ($roleFilter !== '') {
+            $sql .= ' AND r.code = :rolec';
+            $params['rolec'] = $roleFilter;
+        }
+        $sql .= ' GROUP BY sm.user_id, u.full_name, r.code';
+        $st = $this->database->pdo()->prepare($sql);
+        $st->execute($params);
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            $merge($scores, (int) $row['uid'], (string) $row['fn'], (string) $row['rc'], (float) $row['c']);
+        }
+
+        $sql = 'SELECT ct.from_user_id AS uid, u.full_name AS fn, COALESCE(r.code, "") AS rc, COUNT(*) AS c
+                FROM cash_transfers ct
+                INNER JOIN users u ON u.id = ct.from_user_id
+                LEFT JOIN roles r ON r.id = u.role_id
+                WHERE ct.restaurant_id = :rid AND ct.source_type = "sale"
+                  AND COALESCE(ct.received_at, ct.requested_at, ct.created_at) >= :st
+                  AND COALESCE(ct.received_at, ct.requested_at, ct.created_at) < :en';
+        $params = ['rid' => $restaurantId, 'st' => $s, 'en' => $e];
+        if ($userFilter > 0) {
+            $sql .= ' AND ct.from_user_id = :uidfil';
+            $params['uidfil'] = $userFilter;
+        }
+        if ($roleFilter !== '') {
+            $sql .= ' AND r.code = :rolec';
+            $params['rolec'] = $roleFilter;
+        }
+        $sql .= ' GROUP BY ct.from_user_id, u.full_name, r.code';
+        $st = $this->database->pdo()->prepare($sql);
+        $st->execute($params);
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            $merge($scores, (int) $row['uid'], (string) $row['fn'], (string) $row['rc'], (float) $row['c']);
+        }
+
+        $sql = 'SELECT ksr.responded_by AS uid, u.full_name AS fn, COALESCE(r.code, "") AS rc, COUNT(*) AS c
+                FROM kitchen_stock_requests ksr
+                INNER JOIN users u ON u.id = ksr.responded_by
+                LEFT JOIN roles r ON r.id = u.role_id
+                WHERE ksr.restaurant_id = :rid AND ksr.responded_at IS NOT NULL
+                  AND ksr.responded_at >= :st AND ksr.responded_at < :en';
+        $params = ['rid' => $restaurantId, 'st' => $s, 'en' => $e];
+        if ($userFilter > 0) {
+            $sql .= ' AND ksr.responded_by = :uidfil';
+            $params['uidfil'] = $userFilter;
+        }
+        if ($roleFilter !== '') {
+            $sql .= ' AND r.code = :rolec';
+            $params['rolec'] = $roleFilter;
+        }
+        $sql .= ' GROUP BY ksr.responded_by, u.full_name, r.code';
+        $st = $this->database->pdo()->prepare($sql);
+        $st->execute($params);
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            $merge($scores, (int) $row['uid'], (string) $row['fn'], (string) $row['rc'], (float) $row['c']);
+        }
+
+        $rows = array_values($scores);
+        $maxScore = 0.0;
+        foreach ($rows as $row) {
+            $maxScore = max($maxScore, (float) ($row['score'] ?? 0));
+        }
+        $maxScore = $maxScore > 0 ? $maxScore : 1.0;
+        $agents = [];
+        $sumPct = 0;
+        foreach ($rows as $row) {
+            $pct = (int) round(100.0 * (float) ($row['score'] ?? 0) / $maxScore);
+            $sumPct += $pct;
+            $agents[] = [
+                'user_id' => (int) ($row['user_id'] ?? 0),
+                'full_name' => (string) ($row['full_name'] ?? ''),
+                'role_code' => (string) ($row['role_code'] ?? ''),
+                'raw_score' => (float) ($row['score'] ?? 0),
+                'activity_percent' => min(100, $pct),
+            ];
+        }
+        usort($agents, static fn (array $a, array $b): int => ($b['activity_percent'] ?? 0) <=> ($a['activity_percent'] ?? 0));
+        $globalPercent = count($agents) > 0 ? (int) round($sumPct / count($agents)) : 0;
+
+        return ['global_percent' => min(100, $globalPercent), 'agents' => $agents];
+    }
+
+    /**
+     * @return list<array<string, mixed>>
+     */
+    private function nominativeTimeline(int $restaurantId, DateTimeImmutable $startAt, DateTimeImmutable $endAt, array $viewFilters): array
+    {
+        $scope = (string) ($viewFilters['action_scope'] ?? 'all');
+        $moduleClause = match ($scope) {
+            'sales' => ' AND al.module_name = "sales"',
+            'cash' => ' AND al.module_name = "cash"',
+            'stock' => ' AND al.module_name = "stock"',
+            'kitchen' => ' AND al.module_name = "kitchen"',
+            default => '',
+        };
+        $actionFilter = trim((string) ($viewFilters['action_name'] ?? ''));
+        $params = [
+            'restaurant_id' => $restaurantId,
+            'start_at' => $startAt->format('Y-m-d H:i:s'),
+            'end_at' => $endAt->format('Y-m-d H:i:s'),
+        ];
+        $sql = 'SELECT al.id, al.created_at, al.actor_name, al.actor_role_code, al.module_name, al.action_name,
+                       al.entity_type, al.entity_id, al.new_values_json, al.justification, al.user_id
+                FROM audit_logs al
+                WHERE al.restaurant_id = :restaurant_id
+                  AND al.created_at >= :start_at AND al.created_at < :end_at';
+        $sql .= $moduleClause;
+        if ((int) ($viewFilters['user_id'] ?? 0) > 0) {
+            $sql .= ' AND al.user_id = :uid';
+            $params['uid'] = (int) $viewFilters['user_id'];
+        }
+        if (trim((string) ($viewFilters['role_code'] ?? '')) !== '') {
+            $sql .= ' AND al.actor_role_code = :rc';
+            $params['rc'] = (string) $viewFilters['role_code'];
+        }
+        if ($actionFilter !== '') {
+            $sql .= ' AND al.action_name = :an';
+            $params['an'] = $actionFilter;
+        }
+        if (!empty($viewFilters['closed_sales_only'])) {
+            $sql .= ' AND (al.module_name IS NULL OR al.module_name != "sales")';
+        }
+        $sql .= ' ORDER BY al.id DESC LIMIT 320';
+        $statement = $this->database->pdo()->prepare($sql);
+        $statement->execute($params);
+        $auditRows = $statement->fetchAll(PDO::FETCH_ASSOC);
+        foreach ($auditRows as &$r) {
+            $r['_source'] = 'audit';
+        }
+        unset($r);
+
+        $saleRows = $this->saleClosureTimelineRows($restaurantId, $startAt, $endAt, $viewFilters);
+        $merged = array_merge($saleRows, $auditRows);
+        usort($merged, static function (array $a, array $b): int {
+            return strcmp((string) ($b['created_at'] ?? ''), (string) ($a['created_at'] ?? ''));
+        });
+
+        return array_slice($merged, 0, 350);
+    }
+
+    /**
+     * @return list<array<string, mixed>>
+     */
+    private function saleClosureTimelineRows(int $restaurantId, DateTimeImmutable $startAt, DateTimeImmutable $endAt, array $viewFilters): array
+    {
+        if (in_array($viewFilters['action_scope'] ?? 'all', ['cash', 'stock', 'kitchen'], true)) {
+            return [];
+        }
+        if (trim((string) ($viewFilters['action_name'] ?? '')) !== '') {
+            $want = (string) $viewFilters['action_name'];
+            if ($want !== 'sale_closed') {
+                return [];
+            }
+        }
+        $extra = '';
+        if ((int) ($viewFilters['user_id'] ?? 0) > 0) {
+            $extra .= ' AND s.server_id = ' . (int) $viewFilters['user_id'];
+        }
+        if (trim((string) ($viewFilters['role_code'] ?? '')) !== '') {
+            $extra .= ' AND r.code = ' . $this->database->pdo()->quote((string) $viewFilters['role_code']);
+        }
+        $statement = $this->database->pdo()->prepare(
+            'SELECT s.id AS sale_id, s.validated_at AS created_at, s.total_amount,
+                    u.full_name AS actor_name, COALESCE(r.code, "cashier_server") AS actor_role_code, u.id AS user_id,
+                    mi.name AS menu_item_name, si.quantity AS item_quantity
+             FROM sales s
+             INNER JOIN users u ON u.id = s.server_id
+             LEFT JOIN roles r ON r.id = u.role_id
+             LEFT JOIN sale_items si ON si.sale_id = s.id
+             LEFT JOIN menu_items mi ON mi.id = si.menu_item_id
+             WHERE s.restaurant_id = :restaurant_id
+               AND s.validated_at IS NOT NULL
+               AND s.validated_at >= :start_at AND s.validated_at < :end_at
+               AND s.status IN ("VALIDE","CLOTURE","VENDU_TOTAL","VENDU_PARTIEL")' . $extra . '
+             ORDER BY s.validated_at DESC, s.id ASC, si.id ASC'
+        );
+        $statement->execute([
+            'restaurant_id' => $restaurantId,
+            'start_at' => $startAt->format('Y-m-d H:i:s'),
+            'end_at' => $endAt->format('Y-m-d H:i:s'),
+        ]);
+        $raw = $statement->fetchAll(PDO::FETCH_ASSOC);
+        $bySale = [];
+        foreach ($raw as $row) {
+            $sid = (int) $row['sale_id'];
+            if (!isset($bySale[$sid])) {
+                $bySale[$sid] = [
+                    'created_at' => $row['created_at'],
+                    'actor_name' => $row['actor_name'],
+                    'actor_role_code' => $row['actor_role_code'],
+                    'user_id' => $row['user_id'],
+                    'total_amount' => (float) ($row['total_amount'] ?? 0),
+                    'items' => [],
+                ];
+            }
+            $name = trim((string) ($row['menu_item_name'] ?? ''));
+            if ($name !== '') {
+                $bySale[$sid]['items'][] = [
+                    'name' => $name,
+                    'quantity' => (float) ($row['item_quantity'] ?? 0),
+                ];
+            }
+        }
+        $out = [];
+        foreach ($bySale as $sid => $bundle) {
+            $parts = [];
+            foreach ($bundle['items'] as $it) {
+                $q = $it['quantity'];
+                $qStr = abs($q - round($q)) < 0.001 ? (string) (int) round($q) : (string) $q;
+                $parts[] = $it['name'] . ' x' . $qStr;
+            }
+            $detail = $parts !== [] ? implode(', ', $parts) : ('Total ' . (string) $bundle['total_amount']);
+            $out[] = [
+                'id' => 'sale-' . (string) $sid,
+                'created_at' => $bundle['created_at'],
+                'actor_name' => $bundle['actor_name'],
+                'actor_role_code' => $bundle['actor_role_code'],
+                'module_name' => 'sales',
+                'action_name' => 'sale_closed',
+                'entity_type' => 'sale',
+                'entity_id' => (string) $sid,
+                'new_values_json' => null,
+                'justification' => null,
+                'user_id' => $bundle['user_id'],
+                'timeline_detail' => $detail,
+                'line_amount' => $bundle['total_amount'],
+                '_source' => 'sale_closure',
+            ];
+        }
+
+        return $out;
+    }
+
     private function alertRules(): array
     {
         $statement = $this->database->pdo()->prepare('SELECT setting_value FROM settings WHERE restaurant_id IS NULL AND setting_key = "global_alert_rules_json" LIMIT 1');

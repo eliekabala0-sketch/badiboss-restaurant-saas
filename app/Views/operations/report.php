@@ -2,12 +2,22 @@
 $reportTimezone = safe_timezone($report['timezone'] ?? ($restaurant['settings']['restaurant_reports_timezone'] ?? $restaurant['timezone'] ?? null));
 $restaurantCurrency = restaurant_currency($restaurant);
 $restaurantLogo = restaurant_media_url_or_default($restaurant['logo_url'] ?? null, 'logo');
+$viewFilters = $report['view_filters'] ?? ($view_filters ?? []);
 $printQuery = http_build_query(array_filter([
     'date' => $report['selected_date'] ?? $date,
     'period' => $period ?? 'daily',
     'restaurant_id' => (current_user()['scope'] ?? null) === 'super_admin' ? (string) $restaurant['id'] : null,
+    'user_id' => (int) ($viewFilters['user_id'] ?? 0) > 0 ? (string) (int) $viewFilters['user_id'] : null,
+    'role_code' => trim((string) ($viewFilters['role_code'] ?? '')) !== '' ? (string) $viewFilters['role_code'] : null,
+    'action_scope' => ($viewFilters['action_scope'] ?? 'all') !== 'all' ? (string) $viewFilters['action_scope'] : null,
+    'action_name' => trim((string) ($viewFilters['action_name'] ?? '')) !== '' ? (string) $viewFilters['action_name'] : null,
+    'closed_sales_only' => !empty($viewFilters['closed_sales_only']) ? '1' : null,
     'print' => '1',
 ], static fn ($value): bool => $value !== null && $value !== ''));
+$cashClarity = $report['financial_report']['cash_clarity'] ?? [];
+$people = $report['people_overview'] ?? [];
+$activity = $report['activity_index'] ?? ['global_percent' => 0, 'agents' => []];
+$timeline = $report['nominative_timeline'] ?? [];
 ?>
 <style>
 @media print {
@@ -24,7 +34,22 @@ $printQuery = http_build_query(array_filter([
 
 <?php if (!empty($report['financial_report']['summary'] ?? [])): ?>
     <section class="card" style="padding:22px; margin-top:24px;">
-        <h2 style="margin-top:0;">Rapport financier</h2>
+        <h2 style="margin-top:0;">Synthèse caisse (filtre période du rapport)</h2>
+        <?php if (!empty($cashClarity)): ?>
+            <p class="muted" style="margin-top:0;">Convention affichée : entrées +, sorties − (montants tels qu’enregistrés sur la période <?= e(($cashClarity['period_from'] ?? '') . ' → ' . ($cashClarity['period_to'] ?? '')) ?>).</p>
+            <ul style="margin:0; padding-left:20px; line-height:1.7;">
+                <li><strong>Versé par les serveurs</strong> (remises vente) : + <?= e(format_money($cashClarity['server_remittance_total'] ?? 0, $restaurantCurrency)) ?></li>
+                <li><strong>Total reçu par la caisse</strong> (ventes confirmées / écarts signalés) : + <?= e(format_money($cashClarity['cashier_received_sales'] ?? 0, $restaurantCurrency)) ?></li>
+                <li><strong>Total remis au gérant</strong> (remise caisse) : − <?= e(format_money($cashClarity['declared_to_manager'] ?? 0, $restaurantCurrency)) ?></li>
+                <li><strong>Total reçu par le gérant</strong> : + <?= e(format_money($cashClarity['manager_received'] ?? 0, $restaurantCurrency)) ?></li>
+                <li><strong>Total remis au propriétaire</strong> : − <?= e(format_money($cashClarity['declared_to_owner'] ?? 0, $restaurantCurrency)) ?></li>
+                <li><strong>Total reçu par le propriétaire</strong> : + <?= e(format_money($cashClarity['owner_received'] ?? 0, $restaurantCurrency)) ?></li>
+                <li><strong>Écarts signalés</strong> (somme des écarts) : <?= e(format_money($cashClarity['discrepancy_total'] ?? 0, $restaurantCurrency)) ?></li>
+                <li><strong>Solde caisse courant</strong> (après entrées / sorties enregistrées sur la plage filtre caisse du module résumé) : <?= e(format_money($cashClarity['cash_balance'] ?? 0, $restaurantCurrency)) ?></li>
+                <li><strong>Solde gérant sur la période</strong> (reçu − déclaré vers propriétaire) : <?= e(format_money($cashClarity['manager_net_period'] ?? 0, $restaurantCurrency)) ?></li>
+            </ul>
+        <?php endif; ?>
+        <p style="margin-top:16px; margin-bottom:0;"><strong>Rapport financier</strong> (résumé module)</p>
         <p><strong>Total remis a caisse</strong> : <?= e(format_money($report['financial_report']['summary']['total_remitted_to_cash'] ?? 0, $restaurantCurrency)) ?></p>
         <p><strong>Total recu caisse</strong> : <?= e(format_money($report['financial_report']['summary']['total_received_by_cash'] ?? 0, $restaurantCurrency)) ?></p>
         <p><strong>Depenses caisse</strong> : <?= e(format_money($report['financial_report']['summary']['cash_expenses'] ?? 0, $restaurantCurrency)) ?></p>
@@ -109,10 +134,159 @@ $printQuery = http_build_query(array_filter([
             <option value="weekly" <?= ($period ?? 'daily') === 'weekly' ? 'selected' : '' ?>>Hebdomadaire</option>
             <option value="monthly" <?= ($period ?? 'daily') === 'monthly' ? 'selected' : '' ?>>Mensuel</option>
         </select>
-        <button type="submit">Afficher</button>
+        <label>Utilisateur</label>
+        <select name="user_id">
+            <option value="0">Tous</option>
+            <?php foreach (($report_users ?? []) as $ru): ?>
+                <option value="<?= e((string) $ru['id']) ?>" <?= (int) ($viewFilters['user_id'] ?? 0) === (int) $ru['id'] ? 'selected' : '' ?>><?= e(named_actor_label($ru['full_name'] ?? null, $ru['role_code'] ?? null)) ?></option>
+            <?php endforeach; ?>
+        </select>
+        <label>Rôle</label>
+        <select name="role_code">
+            <option value="">Tous</option>
+            <?php foreach (($report_role_codes ?? []) as $rc): ?>
+                <option value="<?= e($rc) ?>" <?= (($viewFilters['role_code'] ?? '') === $rc) ? 'selected' : '' ?>><?= e(restaurant_role_label($rc)) ?></option>
+            <?php endforeach; ?>
+        </select>
+        <label>Périmètre</label>
+        <select name="action_scope">
+            <option value="all" <?= (($viewFilters['action_scope'] ?? 'all') === 'all') ? 'selected' : '' ?>>Tout</option>
+            <option value="sales" <?= (($viewFilters['action_scope'] ?? '') === 'sales') ? 'selected' : '' ?>>Ventes</option>
+            <option value="cash" <?= (($viewFilters['action_scope'] ?? '') === 'cash') ? 'selected' : '' ?>>Caisse</option>
+            <option value="stock" <?= (($viewFilters['action_scope'] ?? '') === 'stock') ? 'selected' : '' ?>>Stock</option>
+            <option value="kitchen" <?= (($viewFilters['action_scope'] ?? '') === 'kitchen') ? 'selected' : '' ?>>Cuisine</option>
+        </select>
+        <label>Type d’action (code audit)</label>
+        <input type="text" name="action_name" value="<?= e((string) ($viewFilters['action_name'] ?? '')) ?>" placeholder="sale_closed, cash_server_remitted…">
+        <label style="display:flex; align-items:center; gap:8px; margin-top:10px;">
+            <input type="checkbox" name="closed_sales_only" value="1" <?= !empty($viewFilters['closed_sales_only']) ? 'checked' : '' ?>>
+            Ventes clôturées uniquement (totaux ventes par serveur)
+        </label>
+        <div style="margin-top:14px;"><button type="submit">Afficher</button></div>
     </form>
     </details>
     <p class="muted" style="margin-bottom:0;"><?= e($report['period_label'] ?? '') ?> · du <?= e(format_date_fr($report['range_start'] ?? null, $reportTimezone)) ?> au <?= e(format_date_fr($report['range_end'] ?? null, $reportTimezone)) ?> · Fuseau <?= e($report['timezone'] ?? $reportTimezone->getName()) ?></p>
+</section>
+
+<section class="card" style="padding:22px; margin-bottom:24px;">
+    <h2 style="margin-top:0;">Par personne</h2>
+    <p class="muted">Répartition sur la période sélectionnée (les filtres utilisateur / rôle s’appliquent aux blocs cuisine, stock et caisse ; les ventes par serveur suivent aussi le filtre « ventes clôturées »).</p>
+    <div class="split" style="margin-top:12px;">
+        <article style="flex:1; min-width:220px;">
+            <h3 style="margin-top:0;">Ventes par serveur</h3>
+            <?php if (($people['sales_by_server_rows'] ?? []) === []): ?><p class="muted">Aucune vente dans le filtre.</p><?php else: ?>
+                <ul style="margin:0; padding-left:18px;">
+                    <?php foreach ($people['sales_by_server_rows'] as $row): ?>
+                        <li><?= e(named_actor_label($row['server_name'] ?? null, 'cashier_server')) ?> : <?= e((string) ($row['sales_count'] ?? 0)) ?> ventes — <?= e(format_money((float) ($row['total_amount'] ?? 0), $restaurantCurrency)) ?></li>
+                    <?php endforeach; ?>
+                </ul>
+            <?php endif; ?>
+        </article>
+        <article style="flex:1; min-width:220px;">
+            <h3 style="margin-top:0;">Cuisine par cuisinier</h3>
+            <?php if (($people['kitchen_by_cook'] ?? []) === []): ?><p class="muted">Aucune production.</p><?php else: ?>
+                <ul style="margin:0; padding-left:18px;">
+                    <?php foreach ($people['kitchen_by_cook'] as $row): ?>
+                        <li><?= e(named_actor_label($row['full_name'] ?? null, $row['role_code'] ?? 'kitchen')) ?> : <?= e((string) (int) round((float) ($row['plates_prepared'] ?? 0))) ?> plats préparés<?php if ((int) ($row['productions_count'] ?? 0) > 0): ?> (<?= e((string) $row['productions_count']) ?> productions)<?php endif; ?></li>
+                    <?php endforeach; ?>
+                </ul>
+            <?php endif; ?>
+        </article>
+    </div>
+    <div class="split" style="margin-top:18px;">
+        <article style="flex:1; min-width:220px;">
+            <h3 style="margin-top:0;">Stock par responsable</h3>
+            <?php if (($people['stock_by_staff'] ?? []) === []): ?><p class="muted">Aucun mouvement validé.</p><?php else: ?>
+                <ul style="margin:0; padding-left:18px;">
+                    <?php foreach ($people['stock_by_staff'] as $row): ?>
+                        <li><?= e(named_actor_label($row['full_name'] ?? null, $row['role_code'] ?? 'stock_manager')) ?> : <?= e((string) ($row['sorties_count'] ?? 0)) ?> sorties stock, <?= e((string) ($row['pertes_count'] ?? 0)) ?> pertes</li>
+                    <?php endforeach; ?>
+                </ul>
+            <?php endif; ?>
+        </article>
+        <article style="flex:1; min-width:220px;">
+            <h3 style="margin-top:0;">Caisse par personne</h3>
+            <?php if (($people['cash_touchpoints'] ?? []) === []): ?><p class="muted">Aucune remise ou réception sur la période.</p><?php else: ?>
+                <ul style="margin:0; padding-left:18px;">
+                    <?php foreach ($people['cash_touchpoints'] as $row): ?>
+                        <li><?= e(named_actor_label($row['full_name'] ?? null, $row['role_code'] ?? null)) ?> :
+                            <?php if ((float) ($row['remis_ventes'] ?? 0) > 0): ?> + <?= e(format_money((float) $row['remis_ventes'], $restaurantCurrency)) ?> versés (ventes)<?php endif; ?>
+                            <?php if ((float) ($row['recu_caisse_ventes'] ?? 0) > 0): ?><?= ((float) ($row['remis_ventes'] ?? 0) > 0) ? ' · ' : '' ?> + <?= e(format_money((float) $row['recu_caisse_ventes'], $restaurantCurrency)) ?> reçus caisse<?php endif; ?>
+                            <?php if ((float) ($row['remis_comme_caisse_gerant'] ?? 0) > 0): ?><?= ((float) ($row['remis_ventes'] ?? 0) + (float) ($row['recu_caisse_ventes'] ?? 0) > 0) ? ' · ' : '' ?> − <?= e(format_money((float) $row['remis_comme_caisse_gerant'], $restaurantCurrency)) ?> remis gérant<?php endif; ?>
+                        </li>
+                    <?php endforeach; ?>
+                </ul>
+            <?php endif; ?>
+        </article>
+    </div>
+    <?php
+    $gt = $people['grand_totals'] ?? [];
+    ?>
+    <div style="margin-top:18px; padding-top:14px; border-top:1px solid #e8e8e8;">
+        <h3 style="margin-top:0;">Total général</h3>
+        <p style="margin:0;"><strong>Ventes</strong> : <?= e((string) ($gt['sales_count'] ?? 0)) ?> · <?= e(format_money((float) ($gt['sales_amount'] ?? 0), $restaurantCurrency)) ?> &nbsp;|&nbsp;
+            <strong>Plats préparés</strong> : <?= e((string) (int) round((float) ($gt['plates_prepared'] ?? 0))) ?> &nbsp;|&nbsp;
+            <strong>Sorties stock</strong> : <?= e((string) ($gt['stock_sorties'] ?? 0)) ?> &nbsp;|&nbsp;
+            <strong>Pertes stock</strong> : <?= e((string) ($gt['stock_pertes'] ?? 0)) ?></p>
+    </div>
+</section>
+
+<section class="card" style="padding:22px; margin-bottom:24px;">
+    <h2 style="margin-top:0;">Activité (indicateur, pas salaire ni prime)</h2>
+    <p class="muted" style="margin-top:0;">Indice basé sur des actions réelles (ventes clôturées, production cuisine, mouvements stock validés, remises caisse, validations demandes stock). Le pourcentage compare chaque agent au plus actif sur la période (= 100&nbsp;%).</p>
+    <p><strong>Activité globale du jour / période</strong> (moyenne des agents actifs) : <strong><?= e((string) ($activity['global_percent'] ?? 0)) ?> %</strong></p>
+    <?php if (($activity['agents'] ?? []) === []): ?>
+        <p class="muted">Pas assez d’actions pour calculer un indice.</p>
+    <?php else: ?>
+        <ul style="margin:0; padding-left:18px;">
+            <?php foreach ($activity['agents'] as $ag): ?>
+                <li><?= e(named_actor_label($ag['full_name'] ?? null, $ag['role_code'] ?? null)) ?> : <?= e((string) ($ag['activity_percent'] ?? 0)) ?> %</li>
+            <?php endforeach; ?>
+        </ul>
+    <?php endif; ?>
+</section>
+
+<section class="card" style="padding:22px; margin-bottom:24px;">
+    <h2 style="margin-top:0;">Historique nominatif</h2>
+    <p class="muted" style="margin-top:0;">Lignes synthétiques (ventes clôturées) et entrées d’audit ; filtres périmètre et code d’action ci-dessus.</p>
+    <?php if ($timeline === []): ?>
+        <p class="muted">Aucun événement dans le filtre.</p>
+    <?php else: ?>
+        <div class="table-wrap">
+            <table>
+                <thead>
+                <tr>
+                    <th>Utilisateur</th>
+                    <th>Rôle</th>
+                    <th>Action</th>
+                    <th>Détail / montant</th>
+                    <th>Date et heure</th>
+                </tr>
+                </thead>
+                <tbody>
+                <?php foreach ($timeline as $trow): ?>
+                    <tr>
+                        <td><?= e((string) ($trow['actor_name'] ?? '')) ?></td>
+                        <td><?= e(restaurant_role_label((string) ($trow['actor_role_code'] ?? ''))) ?></td>
+                        <td><?= e(report_audit_action_label((string) ($trow['action_name'] ?? ''))) ?></td>
+                        <td>
+                            <?php if (!empty($trow['timeline_detail'])): ?><?= e((string) $trow['timeline_detail']) ?><?php endif; ?>
+                            <?php if (isset($trow['line_amount']) && (float) $trow['line_amount'] !== 0.0): ?>
+                                <?php if (!empty($trow['timeline_detail'])): ?><br><?php endif; ?>
+                                <span class="muted"><?= e(format_money((float) $trow['line_amount'], $restaurantCurrency)) ?></span>
+                            <?php endif; ?>
+                            <?php if (empty($trow['timeline_detail']) && (empty($trow['line_amount']) || (float) $trow['line_amount'] === 0.0) && !empty($trow['new_values_json'])): ?>
+                                <span class="muted"><?= e(mb_substr((string) $trow['new_values_json'], 0, 160, 'UTF-8')) ?><?= mb_strlen((string) $trow['new_values_json'], 'UTF-8') > 160 ? '…' : '' ?></span>
+                            <?php endif; ?>
+                        </td>
+                        <td><?= e(format_date_fr($trow['created_at'] ?? null, $reportTimezone)) ?></td>
+                    </tr>
+                <?php endforeach; ?>
+                </tbody>
+            </table>
+        </div>
+        <p class="muted" style="margin-bottom:0;">Format phrase (exemple) : <?= e(nominative_timeline_sentence($timeline[0] ?? [], $restaurantCurrency, $reportTimezone)) ?></p>
+    <?php endif; ?>
 </section>
 
 <section class="grid stats">

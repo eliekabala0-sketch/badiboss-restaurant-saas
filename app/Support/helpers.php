@@ -470,6 +470,59 @@ function role_label(?string $roleCode): string
     };
 }
 
+function report_audit_action_label(?string $actionName): string
+{
+    return match ((string) $actionName) {
+        'sale_closed' => 'Vente clôturée',
+        'sale_created' => 'Vente créée',
+        'server_request_created' => 'Demande serveur créée',
+        'server_request_received' => 'Demande serveur réceptionnée',
+        'server_request_closed_as_sale' => 'Commande clôturée en vente',
+        'server_request_auto_closed_as_sale' => 'Commande clôturée automatiquement',
+        'automatic_sale_after_24h' => 'Vente automatique (24h)',
+        'cash_server_remitted' => 'Remise serveur → caisse',
+        'cash_cashier_received' => 'Réception caisse',
+        'cash_movement_created' => 'Mouvement de caisse',
+        'cash_transfer_created' => 'Transfert enregistré',
+        default => ucfirst(str_replace('_', ' ', (string) $actionName)),
+    };
+}
+
+/**
+ * @param array<string, mixed> $row
+ */
+function nominative_timeline_sentence(array $row, string $currencyCode, DateTimeZone $tz): string
+{
+    $name = mb_strtoupper(trim((string) ($row['actor_name'] ?? '')), 'UTF-8');
+    $role = restaurant_role_label((string) ($row['actor_role_code'] ?? ''));
+    $action = report_audit_action_label((string) ($row['action_name'] ?? ''));
+    $when = format_date_fr($row['created_at'] ?? null, $tz);
+
+    $detail = trim((string) ($row['timeline_detail'] ?? ''));
+    if ($detail === '' && !empty($row['new_values_json'])) {
+        $decoded = json_decode((string) $row['new_values_json'], true);
+        if (is_array($decoded)) {
+            $chunks = [];
+            foreach ($decoded as $k => $v) {
+                $chunks[] = (string) $k . ' : ' . (is_scalar($v) ? (string) $v : json_encode($v, JSON_UNESCAPED_UNICODE));
+            }
+            $detail = implode(', ', $chunks);
+        }
+    }
+    if ($detail === '' && !empty($row['justification'])) {
+        $detail = trim((string) $row['justification']);
+    }
+
+    $amount = '';
+    if (isset($row['line_amount']) && (float) $row['line_amount'] !== 0.0) {
+        $amount = format_money((float) $row['line_amount'], $currencyCode);
+    }
+
+    $mid = array_filter([$detail !== '' ? $detail : null, $amount !== '' ? $amount : null], static fn ($v) => $v !== null);
+
+    return trim($name . ' — ' . $role . ' — ' . $action . ( $mid !== [] ? ' — ' . implode(' — ', $mid) : '' ) . ' — ' . $when);
+}
+
 function yes_no_label(mixed $value): string
 {
     return ((int) $value === 1 || $value === true || $value === '1') ? 'Oui' : 'Non';

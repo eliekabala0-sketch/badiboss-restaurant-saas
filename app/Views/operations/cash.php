@@ -28,6 +28,27 @@ $cashiers = $cash['cashiers'] ?? [];
     <article class="card stat"><span>Ecarts</span><strong><?= e(format_money($summary['discrepancies'] ?? 0, $restaurantCurrency)) ?></strong></article>
 </section>
 
+<?php $ccp = $cash_clarity_period ?? []; ?>
+<section class="card" style="padding:22px; margin-top:20px;">
+    <h2 style="margin-top:0;">Caisse claire (période des filtres)</h2>
+    <?php if ($ccp !== []): ?>
+        <p class="muted" style="margin-top:0;">Résumé du <?= e((string) ($ccp['period_from'] ?? '')) ?> au <?= e((string) ($ccp['period_to'] ?? '')) ?> · entrées +, sorties −.</p>
+        <ul style="margin:0; padding-left:20px; line-height:1.7;">
+            <li><strong>Argent versé par les serveurs</strong> : + <?= e(format_money((float) ($ccp['server_remittance_total'] ?? 0), $restaurantCurrency)) ?></li>
+            <li><strong>Total reçu par la caisse</strong> (ventes) : + <?= e(format_money((float) ($ccp['cashier_received_sales'] ?? 0), $restaurantCurrency)) ?></li>
+            <li><strong>Total remis au gérant</strong> : − <?= e(format_money((float) ($ccp['declared_to_manager'] ?? 0), $restaurantCurrency)) ?></li>
+            <li><strong>Total reçu par le gérant</strong> : + <?= e(format_money((float) ($ccp['manager_received'] ?? 0), $restaurantCurrency)) ?></li>
+            <li><strong>Total remis au propriétaire</strong> : − <?= e(format_money((float) ($ccp['declared_to_owner'] ?? 0), $restaurantCurrency)) ?></li>
+            <li><strong>Total reçu par le propriétaire</strong> : + <?= e(format_money((float) ($ccp['owner_received'] ?? 0), $restaurantCurrency)) ?></li>
+            <li><strong>Solde caisse</strong> (vue résumé sur la plage filtre) : <?= e(format_money((float) ($ccp['cash_balance'] ?? 0), $restaurantCurrency)) ?></li>
+            <li><strong>Solde gérant</strong> (reçu − déclaré vers propriétaire) : <?= e(format_money((float) ($ccp['manager_net_period'] ?? 0), $restaurantCurrency)) ?></li>
+            <li><strong>Écarts signalés</strong> : <?= e(format_money((float) ($ccp['discrepancy_total'] ?? 0), $restaurantCurrency)) ?></li>
+        </ul>
+    <?php else: ?>
+        <p class="muted">Chargez les données de caisse pour voir la synthèse.</p>
+    <?php endif; ?>
+</section>
+
 <section class="card" style="padding:22px; margin-top:24px;">
     <details class="compact-card" data-autoclose-details>
         <summary><strong>Afficher les filtres</strong></summary>
