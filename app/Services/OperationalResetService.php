@@ -14,14 +14,18 @@ final class OperationalResetService
 {
     private const DATASET_LABELS = [
         'commandes_serveur' => 'Commandes serveur',
-        'demandes_cuisine' => 'Demandes cuisine',
-        'demandes_stock' => 'Demandes stock',
+        'demandes_cuisine' => 'Demandes cuisine / productions',
+        'demandes_stock' => 'Demandes stock cuisine',
         'ventes' => 'Ventes',
         'pertes' => 'Pertes',
         'incidents' => 'Incidents',
         'retours' => 'Retours',
-        'rapports_operationnels' => 'Rapports operationnels',
+        'rapports_operationnels' => 'Corrections / demandes correction',
         'audit_operationnel' => 'Audit operationnel lie',
+        'stock_magasin' => 'Stock magasin (mouvements)',
+        'stock_cuisine' => 'Stock cuisine (lignes inventaire)',
+        'caisse_finance' => 'Caisse / finance (mouvements et transferts)',
+        'stock_articles_fiches' => 'Articles stock (fiches sans historique, periode)',
         'images_test' => 'Images de test',
     ];
 
@@ -69,6 +73,32 @@ final class OperationalResetService
             ? $this->idsByForeignKey('sale_items', 'sale_id', $saleIds)
             : [];
 
+        $kitchenProductionMaterialIds = [];
+        if ($kitchenProductionIds !== [] && $this->tableExists('kitchen_production_materials')) {
+            $kitchenProductionMaterialIds = $this->idsByForeignKey('kitchen_production_materials', 'kitchen_production_id', $kitchenProductionIds);
+        }
+
+        $stockMovementSplit = ['deletable' => [], 'blocked_count' => 0];
+        if (in_array('stock_magasin', $filters['data_types'], true)) {
+            $stockMovementSplit = $this->stockMovementResetSplit($filters);
+        }
+        $stockMovementIds = $stockMovementSplit['deletable'];
+
+        $kitchenInventoryIds = in_array('stock_cuisine', $filters['data_types'], true)
+            ? $this->idsKitchenInventoryReset($filters)
+            : [];
+
+        $cashTransferIds = [];
+        $cashMovementIds = [];
+        if (in_array('caisse_finance', $filters['data_types'], true)) {
+            $cashTransferIds = $this->idsCashTransfers($filters);
+            $cashMovementIds = $this->idsCashMovements($filters);
+        }
+
+        $orphanStockItemIds = in_array('stock_articles_fiches', $filters['data_types'], true)
+            ? $this->idsOrphanStockItemsInPeriod($filters)
+            : [];
+
         $amountTotal = 0.0;
         if ($saleIds !== []) {
             $amountTotal += $this->sumByIds('sales', $saleIds, 'total_amount');
@@ -94,6 +124,7 @@ final class OperationalResetService
                 'demandes_cuisine' => count($kitchenProductionIds),
                 'demandes_stock' => count($kitchenStockRequestIds),
                 'demandes_stock_lignes' => count($kitchenStockItemIds),
+                'kitchen_production_materials' => count($kitchenProductionMaterialIds),
                 'ventes' => count($saleIds),
                 'ventes_lignes' => count($saleItemIds),
                 'pertes' => count($lossIds),
@@ -101,12 +132,19 @@ final class OperationalResetService
                 'retours' => count($returnSaleItemIds),
                 'corrections' => count($correctionIds),
                 'audit_operationnel' => count($auditIds),
+                'stock_magasin' => count($stockMovementIds),
+                'stock_magasin_mouvements_exclus' => (int) ($stockMovementSplit['blocked_count'] ?? 0),
+                'stock_cuisine' => count($kitchenInventoryIds),
+                'caisse_transferts' => count($cashTransferIds),
+                'caisse_mouvements' => count($cashMovementIds),
+                'stock_articles_fiches' => count($orphanStockItemIds),
                 'images_test' => 0,
             ],
             'ids' => [
                 'server_requests' => $serverRequestIds,
                 'server_request_items' => $serverRequestItemIds,
                 'kitchen_production' => $kitchenProductionIds,
+                'kitchen_production_materials' => $kitchenProductionMaterialIds,
                 'kitchen_stock_requests' => $kitchenStockRequestIds,
                 'kitchen_stock_request_items' => $kitchenStockItemIds,
                 'sales' => $saleIds,
@@ -116,13 +154,27 @@ final class OperationalResetService
                 'correction_requests' => $correctionIds,
                 'return_sale_items' => $returnSaleItemIds,
                 'audit_logs' => $auditIds,
+                'stock_movements' => $stockMovementIds,
+                'kitchen_inventory' => $kitchenInventoryIds,
+                'cash_transfers' => $cashTransferIds,
+                'cash_movements' => $cashMovementIds,
+                'stock_items' => $orphanStockItemIds,
             ],
             'period' => [
                 'start_at' => $filters['start_at'],
                 'end_at' => $filters['end_at'],
                 'label' => $filters['period_label'],
             ],
-            'users_concerned' => $this->usersConcerned($filters, $serverRequestIds, $kitchenProductionIds, $kitchenStockRequestIds, $saleIds, $lossIds, $incidentIds),
+            'users_concerned' => $this->usersConcerned(
+                $filters,
+                $serverRequestIds,
+                $kitchenProductionIds,
+                $kitchenStockRequestIds,
+                $saleIds,
+                $lossIds,
+                $incidentIds,
+                $cashTransferIds
+            ),
             'amount_total' => $amountTotal,
             'dataset_labels' => self::DATASET_LABELS,
         ];
@@ -157,7 +209,13 @@ final class OperationalResetService
                 'kitchen_stock_requests' => 0,
                 'sale_items' => 0,
                 'sales' => 0,
+                'kitchen_production_materials' => 0,
                 'kitchen_production' => 0,
+                'stock_movements' => 0,
+                'kitchen_inventory' => 0,
+                'cash_movements' => 0,
+                'cash_transfers' => 0,
+                'stock_items' => 0,
                 'losses' => 0,
                 'operation_cases' => 0,
                 'correction_requests' => 0,
@@ -188,8 +246,26 @@ final class OperationalResetService
                 $deleted['sales'] = $this->deleteByIds('sales', $preview['ids']['sales']);
             }
 
+            if ($preview['ids']['kitchen_production_materials'] !== [] && $this->tableExists('kitchen_production_materials')) {
+                $deleted['kitchen_production_materials'] = $this->deleteByIds('kitchen_production_materials', $preview['ids']['kitchen_production_materials']);
+            }
             if ($preview['ids']['kitchen_production'] !== []) {
                 $deleted['kitchen_production'] = $this->deleteByIds('kitchen_production', $preview['ids']['kitchen_production']);
+            }
+            if ($preview['ids']['stock_movements'] !== []) {
+                $deleted['stock_movements'] = $this->deleteByIds('stock_movements', $preview['ids']['stock_movements']);
+            }
+            if ($preview['ids']['kitchen_inventory'] !== [] && $this->tableExists('kitchen_inventory')) {
+                $deleted['kitchen_inventory'] = $this->deleteByIds('kitchen_inventory', $preview['ids']['kitchen_inventory']);
+            }
+            if ($preview['ids']['cash_movements'] !== [] && $this->tableExists('cash_movements')) {
+                $deleted['cash_movements'] = $this->deleteByIds('cash_movements', $preview['ids']['cash_movements']);
+            }
+            if ($preview['ids']['cash_transfers'] !== [] && $this->tableExists('cash_transfers')) {
+                $deleted['cash_transfers'] = $this->deleteByIds('cash_transfers', $preview['ids']['cash_transfers']);
+            }
+            if ($preview['ids']['stock_items'] !== []) {
+                $deleted['stock_items'] = $this->deleteByIds('stock_items', $preview['ids']['stock_items']);
             }
             if ($preview['ids']['losses'] !== []) {
                 $deleted['losses'] = $this->deleteByIds('losses', $preview['ids']['losses']);
@@ -396,7 +472,7 @@ final class OperationalResetService
 
     private function auditIdsForScope(array $filters): array
     {
-        $modules = ['stock', 'sales', 'kitchen', 'reports', 'incidents', 'dashboard'];
+        $modules = ['stock', 'sales', 'kitchen', 'reports', 'incidents', 'dashboard', 'cash'];
         $placeholders = implode(',', array_fill(0, count($modules), '?'));
         $sql = 'SELECT id FROM audit_logs
                 WHERE restaurant_id = ?
@@ -413,8 +489,16 @@ final class OperationalResetService
         return array_map(static fn ($value): int => (int) $value, $statement->fetchAll(PDO::FETCH_COLUMN));
     }
 
-    private function usersConcerned(array $filters, array $serverRequestIds, array $kitchenProductionIds, array $kitchenStockRequestIds, array $saleIds, array $lossIds, array $incidentIds): array
-    {
+    private function usersConcerned(
+        array $filters,
+        array $serverRequestIds,
+        array $kitchenProductionIds,
+        array $kitchenStockRequestIds,
+        array $saleIds,
+        array $lossIds,
+        array $incidentIds,
+        array $cashTransferIds = [],
+    ): array {
         if ($filters['user_id'] > 0) {
             $user = $this->findUserInRestaurant($filters['user_id'], $filters['restaurant_id']);
             return [$user];
@@ -427,6 +511,12 @@ final class OperationalResetService
         $userIds = array_merge($userIds, $this->scalarIds('SELECT DISTINCT server_id FROM sales WHERE id IN (' . $this->idListOrZero($saleIds) . ')'));
         $userIds = array_merge($userIds, $this->scalarIds('SELECT DISTINCT created_by FROM losses WHERE id IN (' . $this->idListOrZero($lossIds) . ')'));
         $userIds = array_merge($userIds, $this->scalarIds('SELECT DISTINCT signaled_by FROM operation_cases WHERE id IN (' . $this->idListOrZero($incidentIds) . ')'));
+        if ($cashTransferIds !== [] && $this->tableExists('cash_transfers')) {
+            $list = $this->idListOrZero($cashTransferIds);
+            $userIds = array_merge($userIds, $this->scalarIds('SELECT DISTINCT from_user_id FROM cash_transfers WHERE id IN (' . $list . ') AND from_user_id IS NOT NULL'));
+            $userIds = array_merge($userIds, $this->scalarIds('SELECT DISTINCT received_by FROM cash_transfers WHERE id IN (' . $list . ') AND received_by IS NOT NULL'));
+            $userIds = array_merge($userIds, $this->scalarIds('SELECT DISTINCT to_user_id FROM cash_transfers WHERE id IN (' . $list . ') AND to_user_id IS NOT NULL'));
+        }
         $userIds = array_values(array_unique(array_filter($userIds, static fn (int $id): bool => $id > 0)));
 
         if ($userIds === []) {
@@ -491,6 +581,127 @@ final class OperationalResetService
             throw new \RuntimeException('Utilisateur hors perimetre du restaurant cible.');
         }
         return $user;
+    }
+
+    private function stockMovementResetSplit(array $filters): array
+    {
+        $params = [
+            'rid' => $filters['restaurant_id'],
+            's' => $filters['start_at'],
+            'e' => $filters['end_at'],
+        ];
+        $base = 'FROM stock_movements sm WHERE sm.restaurant_id = :rid
+               AND sm.created_at >= :s AND sm.created_at < :e';
+        if ($filters['user_id'] > 0) {
+            $base .= ' AND sm.user_id = :uid';
+            $params['uid'] = $filters['user_id'];
+        }
+        $allStmt = $this->database->pdo()->prepare('SELECT sm.id ' . $base);
+        $allStmt->execute($params);
+        $all = array_map(static fn ($value): int => (int) $value, $allStmt->fetchAll(PDO::FETCH_COLUMN));
+
+        $safeStmt = $this->database->pdo()->prepare(
+            'SELECT sm.id ' . $base . '
+               AND NOT EXISTS (
+                 SELECT 1 FROM kitchen_production kp
+                 WHERE kp.stock_movement_id = sm.id AND kp.restaurant_id = sm.restaurant_id
+               )'
+        );
+        $safeStmt->execute($params);
+        $safe = array_map(static fn ($value): int => (int) $value, $safeStmt->fetchAll(PDO::FETCH_COLUMN));
+
+        return [
+            'deletable' => $safe,
+            'blocked_count' => max(0, count($all) - count($safe)),
+        ];
+    }
+
+    private function idsKitchenInventoryReset(array $filters): array
+    {
+        if (!$this->tableExists('kitchen_inventory')) {
+            return [];
+        }
+        $statement = $this->database->pdo()->prepare(
+            'SELECT ki.id FROM kitchen_inventory ki
+             WHERE ki.restaurant_id = :rid
+               AND GREATEST(ki.created_at, ki.updated_at) >= :s
+               AND GREATEST(ki.created_at, ki.updated_at) < :e'
+        );
+        $statement->execute([
+            'rid' => $filters['restaurant_id'],
+            's' => $filters['start_at'],
+            'e' => $filters['end_at'],
+        ]);
+
+        return array_map(static fn ($value): int => (int) $value, $statement->fetchAll(PDO::FETCH_COLUMN));
+    }
+
+    private function idsCashTransfers(array $filters): array
+    {
+        if (!$this->tableExists('cash_transfers')) {
+            return [];
+        }
+        $sql = 'SELECT id FROM cash_transfers WHERE restaurant_id = :rid
+                AND COALESCE(received_at, requested_at, created_at) >= :s
+                AND COALESCE(received_at, requested_at, created_at) < :e';
+        $params = [
+            'rid' => $filters['restaurant_id'],
+            's' => $filters['start_at'],
+            'e' => $filters['end_at'],
+        ];
+        if ($filters['user_id'] > 0) {
+            $sql .= ' AND (from_user_id = :u OR received_by = :u OR to_user_id = :u)';
+            $params['u'] = $filters['user_id'];
+        }
+        $statement = $this->database->pdo()->prepare($sql);
+        $statement->execute($params);
+
+        return array_map(static fn ($value): int => (int) $value, $statement->fetchAll(PDO::FETCH_COLUMN));
+    }
+
+    private function idsCashMovements(array $filters): array
+    {
+        if (!$this->tableExists('cash_movements')) {
+            return [];
+        }
+        $sql = 'SELECT id FROM cash_movements WHERE restaurant_id = :rid
+                AND created_at >= :s AND created_at < :e';
+        $params = [
+            'rid' => $filters['restaurant_id'],
+            's' => $filters['start_at'],
+            'e' => $filters['end_at'],
+        ];
+        if ($filters['user_id'] > 0) {
+            $sql .= ' AND created_by = :u';
+            $params['u'] = $filters['user_id'];
+        }
+        $statement = $this->database->pdo()->prepare($sql);
+        $statement->execute($params);
+
+        return array_map(static fn ($value): int => (int) $value, $statement->fetchAll(PDO::FETCH_COLUMN));
+    }
+
+    private function idsOrphanStockItemsInPeriod(array $filters): array
+    {
+        $extra = '';
+        if ($this->tableExists('kitchen_stock_request_items')) {
+            $extra .= ' AND NOT EXISTS (SELECT 1 FROM kitchen_stock_request_items ksri WHERE ksri.stock_item_id = si.id)';
+        }
+        $statement = $this->database->pdo()->prepare(
+            'SELECT si.id FROM stock_items si
+             WHERE si.restaurant_id = :rid
+               AND si.created_at >= :s AND si.created_at < :e
+               AND NOT EXISTS (SELECT 1 FROM stock_movements sm WHERE sm.stock_item_id = si.id)'
+            . ($this->tableExists('kitchen_inventory') ? ' AND NOT EXISTS (SELECT 1 FROM kitchen_inventory ki WHERE ki.stock_item_id = si.id)' : '')
+            . $extra
+        );
+        $statement->execute([
+            'rid' => $filters['restaurant_id'],
+            's' => $filters['start_at'],
+            'e' => $filters['end_at'],
+        ]);
+
+        return array_map(static fn ($value): int => (int) $value, $statement->fetchAll(PDO::FETCH_COLUMN));
     }
 
     private function tableExists(string $table): bool

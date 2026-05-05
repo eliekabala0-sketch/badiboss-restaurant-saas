@@ -208,7 +208,7 @@ $stockDetail = $report['stock_detail_by_person'] ?? ['people' => [], 'grand_tota
             <?php if (($people['sales_by_server_rows'] ?? []) === []): ?><p class="muted">Aucune vente dans le filtre.</p><?php else: ?>
                 <ul style="margin:0; padding-left:18px;">
                     <?php foreach ($people['sales_by_server_rows'] as $row): ?>
-                        <li><?= e(named_actor_label($row['server_name'] ?? null, 'cashier_server')) ?> : <?= e((string) ($row['sales_count'] ?? 0)) ?> ventes — <?= e(format_money((float) ($row['total_amount'] ?? 0), $restaurantCurrency)) ?></li>
+                        <li><?= e(named_actor_label($row['server_name'] ?? null, 'cashier_server')) ?> : <?= e((string) ($row['sales_count'] ?? 0)) ?> ventes — <?= e(format_money((float) ($row['total_amount'] ?? 0), $restaurantCurrency)) ?><?php if ((float) ($row['pct_of_sales_amount'] ?? 0) > 0 || ($gt['sales_amount'] ?? 0) > 0): ?> — <?= e((string) ($row['pct_of_sales_amount'] ?? 0)) ?> % du montant total<?php endif; ?></li>
                     <?php endforeach; ?>
                 </ul>
             <?php endif; ?>
@@ -218,7 +218,7 @@ $stockDetail = $report['stock_detail_by_person'] ?? ['people' => [], 'grand_tota
             <?php if (($people['kitchen_by_cook'] ?? []) === []): ?><p class="muted">Aucune production.</p><?php else: ?>
                 <ul style="margin:0; padding-left:18px;">
                     <?php foreach ($people['kitchen_by_cook'] as $row): ?>
-                        <li><?= e(named_actor_label($row['full_name'] ?? null, $row['role_code'] ?? 'kitchen')) ?> : <?= e((string) (int) round((float) ($row['plates_prepared'] ?? 0))) ?> plats préparés<?php if ((int) ($row['productions_count'] ?? 0) > 0): ?> (<?= e((string) $row['productions_count']) ?> productions)<?php endif; ?></li>
+                        <li><?= e(named_actor_label($row['full_name'] ?? null, $row['role_code'] ?? 'kitchen')) ?> : <?= e((string) (int) round((float) ($row['plates_prepared'] ?? 0))) ?> plats préparés<?php if ((int) ($row['productions_count'] ?? 0) > 0): ?> (<?= e((string) $row['productions_count']) ?> productions)<?php endif; ?><?php if ((float) ($row['pct_of_plates'] ?? 0) > 0 || ($gt['plates_prepared'] ?? 0) > 0): ?> — <?= e((string) ($row['pct_of_plates'] ?? 0)) ?> % des unités cuisine<?php endif; ?></li>
                     <?php endforeach; ?>
                 </ul>
             <?php endif; ?>
@@ -230,7 +230,7 @@ $stockDetail = $report['stock_detail_by_person'] ?? ['people' => [], 'grand_tota
             <?php if (($people['stock_by_staff'] ?? []) === []): ?><p class="muted">Aucun mouvement validé.</p><?php else: ?>
                 <ul style="margin:0; padding-left:18px;">
                     <?php foreach ($people['stock_by_staff'] as $row): ?>
-                        <li><?= e(named_actor_label($row['full_name'] ?? null, $row['role_code'] ?? 'stock_manager')) ?> : <?= e((string) ($row['sorties_count'] ?? 0)) ?> sorties stock, <?= e((string) ($row['pertes_count'] ?? 0)) ?> pertes</li>
+                        <li><?= e(named_actor_label($row['full_name'] ?? null, $row['role_code'] ?? 'stock_manager')) ?> : <?= e((string) ($row['sorties_count'] ?? 0)) ?> sorties stock, <?= e((string) ($row['pertes_count'] ?? 0)) ?> pertes<?php if (((int) ($gt['stock_movements_lines'] ?? 0)) > 0): ?> — <?= e((string) ($row['pct_of_movements'] ?? 0)) ?> % des mouvements (lignes)<?php endif; ?></li>
                     <?php endforeach; ?>
                 </ul>
             <?php endif; ?>
@@ -263,18 +263,19 @@ $stockDetail = $report['stock_detail_by_person'] ?? ['people' => [], 'grand_tota
 </section>
 
 <section class="card" style="padding:22px; margin-bottom:24px;">
-    <h2 style="margin-top:0;">Activité (indicateur, pas salaire ni prime)</h2>
-    <p class="muted" style="margin-top:0;">Indice basé sur des actions réelles (ventes clôturées, production cuisine, mouvements stock validés, remises caisse, validations demandes stock). Le pourcentage compare chaque agent au plus actif sur la période (= 100&nbsp;%).</p>
-    <p><strong>Activité globale du jour / période</strong> (moyenne des agents actifs) : <strong><?= e((string) ($activity['global_percent'] ?? 0)) ?> %</strong></p>
-    <?php if (($activity['agents'] ?? []) === []): ?>
-        <p class="muted">Pas assez d’actions pour calculer un indice.</p>
-    <?php else: ?>
-        <ul style="margin:0; padding-left:18px;">
-            <?php foreach ($activity['agents'] as $ag): ?>
-                <li><?= e(named_actor_label($ag['full_name'] ?? null, $ag['role_code'] ?? null)) ?> : <?= e((string) ($ag['activity_percent'] ?? 0)) ?> %</li>
-            <?php endforeach; ?>
-        </ul>
-    <?php endif; ?>
+    <details class="compact-card" data-autoclose-details>
+        <summary><strong>Activité agents</strong> · répartition <?= e((string) ($activity['global_percent'] ?? 0)) ?> % (total des parts sur la période)</summary>
+        <p class="muted" style="margin-top:12px;">Indice basé sur des actions réelles (ventes clôturées, production cuisine, mouvements stock validés, remises caisse, validations demandes stock). Chaque <strong>%</strong> est la part de l’agent dans le total d’activité (somme des parts = 100&nbsp;% si activité &gt; 0).</p>
+        <?php if (($activity['agents'] ?? []) === []): ?>
+            <p class="muted" style="margin-bottom:0;">Pas assez d’actions pour calculer une répartition.</p>
+        <?php else: ?>
+            <ul style="margin:12px 0 0; padding-left:18px;">
+                <?php foreach ($activity['agents'] as $ag): ?>
+                    <li><?= e(named_actor_label($ag['full_name'] ?? null, $ag['role_code'] ?? null)) ?> : <?= e((string) ($ag['activity_share_percent'] ?? $ag['activity_percent'] ?? 0)) ?> % <span class="muted">(score <?= e((string) ($ag['raw_score'] ?? 0)) ?>)</span></li>
+                <?php endforeach; ?>
+            </ul>
+        <?php endif; ?>
+    </details>
 </section>
 
 <section class="card" style="padding:22px; margin-bottom:24px;">
@@ -332,13 +333,13 @@ $stockDetail = $report['stock_detail_by_person'] ?? ['people' => [], 'grand_tota
                 <?php else: ?>
                     <?php foreach ($salesDetail['servers'] as $srv): ?>
                         <details style="margin-top:12px; padding:12px; border:1px solid var(--line, #e0e0e0); border-radius:12px;">
-                            <summary>Serveur <?= e(named_actor_label($srv['server_name'] ?? null, $srv['server_role_code'] ?? 'cashier_server')) ?> · Total <?= e(format_money((float) ($srv['server_total'] ?? 0), $restaurantCurrency)) ?></summary>
+                            <summary>Serveur <?= e(named_actor_label($srv['server_name'] ?? null, $srv['server_role_code'] ?? 'cashier_server')) ?> · Total <?= e(format_money((float) ($srv['server_total'] ?? 0), $restaurantCurrency)) ?> — <?= e((string) ($srv['pct_of_grand_total'] ?? 0)) ?> % du total ventes</summary>
                             <ul style="margin:12px 0 0; padding-left:18px;">
                                 <?php foreach (($srv['lines'] ?? []) as $ln): ?>
                                     <li><?= e((string) ($ln['menu_item_name'] ?? '')) ?> x<?php
                                     $qs = (float) ($ln['qty_sold'] ?? 0);
                                     echo e(abs($qs - round($qs)) < 0.001 ? (string) (int) round($qs) : (string) $qs);
-                                    ?> = <?= e(format_money((float) ($ln['line_total'] ?? 0), $restaurantCurrency)) ?></li>
+                                    ?> = <?= e(format_money((float) ($ln['line_total'] ?? 0), $restaurantCurrency)) ?> — <?= e((string) ($ln['pct_of_server_sales'] ?? 0)) ?> % des ventes de ce serveur</li>
                                 <?php endforeach; ?>
                             </ul>
                         </details>
@@ -352,18 +353,18 @@ $stockDetail = $report['stock_detail_by_person'] ?? ['people' => [], 'grand_tota
                 <?php else: ?>
                     <?php foreach ($kitchenDetail['cooks'] as $ck): ?>
                         <details style="margin-top:12px; padding:12px; border:1px solid var(--line, #e0e0e0); border-radius:12px;">
-                            <summary><?= e(named_actor_label($ck['cook_name'] ?? null, $ck['role_code'] ?? 'kitchen')) ?> · <?= e(format_money((float) ($ck['cook_total_value'] ?? 0), $restaurantCurrency)) ?> · <?= e((string) ($ck['cook_total_qty'] ?? 0)) ?> unités</summary>
+                            <summary><?= e(named_actor_label($ck['cook_name'] ?? null, $ck['role_code'] ?? 'kitchen')) ?> · <?= e(format_money((float) ($ck['cook_total_value'] ?? 0), $restaurantCurrency)) ?> · <?= e((string) ($ck['cook_total_qty'] ?? 0)) ?> unités — <?= e((string) ($ck['pct_of_kitchen_qty'] ?? 0)) ?> % de la cuisine (unités)</summary>
                             <p class="muted" style="margin:10px 0 6px;"><strong>Plats</strong></p>
                             <ul style="margin:0; padding-left:18px;">
                                 <?php foreach (($ck['dishes'] ?? []) as $d): ?>
-                                    <li><?= e((string) ($d['dish_label'] ?? '')) ?> · qté <?= e((string) ($d['qty_produced'] ?? 0)) ?> · <?= e(format_money((float) ($d['value_produced'] ?? 0), $restaurantCurrency)) ?></li>
+                                    <li><?= e((string) ($d['dish_label'] ?? '')) ?> · qté <?= e((string) ($d['qty_produced'] ?? 0)) ?> · <?= e(format_money((float) ($d['value_produced'] ?? 0), $restaurantCurrency)) ?> — <?= e((string) ($d['pct_of_cook_qty'] ?? 0)) ?> % des unités du cuisinier</li>
                                 <?php endforeach; ?>
                             </ul>
                             <?php if (($ck['materials'] ?? []) !== []): ?>
                                 <p class="muted" style="margin:12px 0 6px;"><strong>Matières (mouvements liés)</strong></p>
                                 <ul style="margin:0; padding-left:18px;">
                                     <?php foreach ($ck['materials'] as $mat): ?>
-                                        <li><?= e((string) ($mat['name'] ?? '')) ?> · <?= e((string) ($mat['quantity'] ?? 0)) ?></li>
+                                        <li><?= e((string) ($mat['name'] ?? '')) ?> · <?= e((string) ($mat['quantity'] ?? 0)) ?> — <?= e((string) ($mat['pct_of_cook_material_qty'] ?? 0)) ?> % des matières (qté) du cuisinier</li>
                                     <?php endforeach; ?>
                                 </ul>
                             <?php endif; ?>
@@ -378,18 +379,18 @@ $stockDetail = $report['stock_detail_by_person'] ?? ['people' => [], 'grand_tota
                 <?php else: ?>
                     <?php foreach ($stockDetail['people'] as $sp): ?>
                         <details style="margin-top:12px; padding:12px; border:1px solid var(--line, #e0e0e0); border-radius:12px;">
-                            <summary><?= e(named_actor_label($sp['full_name'] ?? null, $sp['role_code'] ?? 'stock_manager')) ?> · <?= e((string) ($sp['total_movements'] ?? 0)) ?> mouvements</summary>
-                            <p style="margin:10px 0 6px;" class="muted">Entrées <?= e((string) ($sp['entrees_lines'] ?? 0)) ?> (qté <?= e((string) ($sp['entrees_qty'] ?? 0)) ?>) · Sorties <?= e((string) ($sp['sorties_lines'] ?? 0)) ?> (<?= e((string) ($sp['sorties_qty'] ?? 0)) ?>) · Pertes <?= e((string) ($sp['pertes_lines'] ?? 0)) ?> · Retours <?= e((string) ($sp['retours_lines'] ?? 0)) ?></p>
+                            <summary><?= e(named_actor_label($sp['full_name'] ?? null, $sp['role_code'] ?? 'stock_manager')) ?> · <?= e((string) ($sp['total_movements'] ?? 0)) ?> mouvements — <?= e((string) ($sp['pct_of_global_movements'] ?? 0)) ?> % du total</summary>
+                            <p style="margin:10px 0 6px;" class="muted">Entrées <?= e((string) ($sp['entrees_lines'] ?? 0)) ?> (<?= e((string) ($sp['pct_entrees'] ?? 0)) ?> % des lignes) · Sorties <?= e((string) ($sp['sorties_lines'] ?? 0)) ?> (<?= e((string) ($sp['pct_sorties'] ?? 0)) ?> %) · Pertes <?= e((string) ($sp['pertes_lines'] ?? 0)) ?> (<?= e((string) ($sp['pct_pertes'] ?? 0)) ?> %) · Retours <?= e((string) ($sp['retours_lines'] ?? 0)) ?> (<?= e((string) ($sp['pct_retours'] ?? 0)) ?> %)<?php if ((int) ($sp['autres_lines'] ?? 0) > 0): ?> · Autres <?= e((string) ($sp['autres_lines'] ?? 0)) ?> (<?= e((string) ($sp['pct_autres'] ?? 0)) ?> %)<?php endif; ?></p>
                             <?php if (($sp['product_lines'] ?? []) !== []): ?>
                                 <div class="table-wrap" style="margin-top:8px;">
                                     <table>
-                                        <thead><tr><th>Produit</th><th>Type</th><th>Lignes</th><th>Qté</th></tr></thead>
+                                        <thead><tr><th>Produit</th><th>Type</th><th>Lignes (% pers.)</th><th>Qté</th></tr></thead>
                                         <tbody>
                                         <?php foreach ($sp['product_lines'] as $pl): ?>
                                             <tr>
                                                 <td><?= e((string) ($pl['product_name'] ?? '')) ?></td>
                                                 <td><?= e((string) ($pl['movement_type'] ?? '')) ?></td>
-                                                <td><?= e((string) ($pl['line_count'] ?? 0)) ?></td>
+                                                <td><?= e((string) ($pl['line_count'] ?? 0)) ?> (<?= e((string) ($pl['pct_of_person_movements'] ?? 0)) ?> %)</td>
                                                 <td><?= e((string) ($pl['qty_sum'] ?? 0)) ?></td>
                                             </tr>
                                         <?php endforeach; ?>

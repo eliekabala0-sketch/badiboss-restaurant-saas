@@ -381,13 +381,27 @@ $stockBadgeClass = static function (?string $status): string {
     <?php else: ?>
         <div class="table-wrap">
             <table>
-                <thead><tr><th>Matiere</th><th>Disponible</th><th>Unite</th></tr></thead>
+                <thead><tr><th>Matière</th><th>Reçu (cumul)</th><th>Utilisé (cumul)</th><th>Restant cuisine</th><th>Dernière réception</th><th>Auteur stock</th><th>Réception cuisine</th><th>Dernier usage (plat)</th></tr></thead>
                 <tbody>
                 <?php foreach (($kitchen_inventory ?? []) as $inventoryItem): ?>
                     <tr>
-                        <td><?= e((string) ($inventoryItem['stock_item_name'] ?? '-')) ?></td>
+                        <td><strong><?= e((string) ($inventoryItem['stock_item_name'] ?? '-')) ?></strong><br><span class="muted"><?= e((string) ($inventoryItem['unit_name'] ?? '')) ?></span></td>
+                        <td><?= e((string) ($inventoryItem['total_received_kitchen'] ?? 0)) ?></td>
+                        <td><?= e((string) ($inventoryItem['total_used_kitchen'] ?? 0)) ?></td>
                         <td><?= e((string) ($inventoryItem['quantity_available'] ?? 0)) ?></td>
-                        <td><?= e((string) ($inventoryItem['unit_name'] ?? '')) ?></td>
+                        <td><?= !empty($inventoryItem['last_received_at']) ? e(format_date_fr($inventoryItem['last_received_at'], $historyTimezone)) : '—' ?></td>
+                        <td><?= e((string) ($inventoryItem['stock_responder_name'] ?? '—')) ?></td>
+                        <td><?= e((string) ($inventoryItem['kitchen_receiver_name'] ?? '—')) ?></td>
+                        <td class="muted" style="min-width:180px;">
+                            <?php if (!empty($inventoryItem['last_use_dish_label'])): ?>
+                                <strong><?= e((string) $inventoryItem['last_use_dish_label']) ?></strong>
+                                <?php if (!empty($inventoryItem['last_use_cook_name'])): ?><br><?= e((string) $inventoryItem['last_use_cook_name']) ?><?php endif; ?>
+                                <?php if (!empty($inventoryItem['last_use_at'])): ?><br><?= e(format_date_fr($inventoryItem['last_use_at'], $historyTimezone)) ?><?php endif; ?>
+                                <?php if (isset($inventoryItem['last_use_quantity'])): ?><br>Qté <?= e((string) $inventoryItem['last_use_quantity']) ?><?php endif; ?>
+                            <?php else: ?>
+                                —
+                            <?php endif; ?>
+                        </td>
                     </tr>
                 <?php endforeach; ?>
                 </tbody>

@@ -79,6 +79,18 @@ $decisionBadgeClass = static function (?string $status): string {
         <p style="margin:14px 0 0;"><a href="/rapport" class="button-muted">Ouvrir le rapport complet</a></p>
     </details>
 </section>
+<?php if (!empty($report_detail_summary['activity_index']['agents'] ?? null)): ?>
+<section class="card" style="padding:20px; margin-bottom:24px;">
+    <details class="compact-card" data-autoclose-details>
+        <summary><strong>Activité agents (jour courant)</strong> · parts total <?= e((string) ($report_detail_summary['activity_index']['global_percent'] ?? 0)) ?> %</summary>
+        <ul style="line-height:1.75; margin:12px 0 0; padding-left:20px;">
+            <?php foreach (($report_detail_summary['activity_index']['agents'] ?? []) as $ag): ?>
+                <li><?= e(named_actor_label($ag['full_name'] ?? null, $ag['role_code'] ?? null)) ?> : <?= e((string) ($ag['activity_share_percent'] ?? $ag['activity_percent'] ?? 0)) ?> %</li>
+            <?php endforeach; ?>
+        </ul>
+        <p style="margin:14px 0 0;"><a href="/rapport" class="button-muted">Détail dans Rapport</a></p>
+    </details>
+</section>
 <?php endif; ?>
 
 <?php

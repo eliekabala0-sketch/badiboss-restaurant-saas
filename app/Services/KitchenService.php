@@ -146,6 +146,7 @@ final class KitchenService
                     mi.name AS menu_item_name,
                     mi.image_url AS menu_item_image_url,
                     mc.name AS menu_category_name,
+                    mc.slug AS menu_category_slug,
                     requested_user.full_name AS requested_by_name,
                     prepared_user.full_name AS prepared_by_name,
                     ready_user.full_name AS ready_by_name,
@@ -185,9 +186,31 @@ final class KitchenService
         }
 
         $requestedQuantity = (float) $item['requested_quantity'];
-        $isBeverage = mb_strtolower(trim((string) ($item['menu_category_name'] ?? ''))) === 'boisson';
-        if (!$isBeverage && $workflowStage === 'PRET_A_SERVIR') {
-            $this->reservePreparedQuantity((int) $item['menu_item_id'], $restaurantId, $suppliedQuantity);
+        $categoryName = (string) ($item['menu_category_name'] ?? '');
+        $categorySlug = (string) ($item['menu_category_slug'] ?? '');
+        $isBeverage = $this->menuLineIsBeverage($categoryName, $categorySlug);
+        if ($workflowStage === 'PRET_A_SERVIR') {
+            if ($isBeverage) {
+                if ($suppliedQuantity <= 0) {
+                    // handled below as NON_FOURNI
+                } else {
+                    $stockService = Container::getInstance()->get('stockService');
+                    $match = $stockService->findKitchenInventoryMatchForMenuItem($restaurantId, (int) $item['menu_item_id'], $suppliedQuantity);
+                    if ($match === null) {
+                        throw new \RuntimeException('Boisson indisponible en cuisine, demander au stock.');
+                    }
+                    $stockService->consumeKitchenBeverageForServerItem(
+                        $restaurantId,
+                        (int) $match['stock_item_id'],
+                        $suppliedQuantity,
+                        $actor,
+                        $requestItemId,
+                        (int) $item['menu_item_id']
+                    );
+                }
+            } else {
+                $this->reservePreparedQuantity((int) $item['menu_item_id'], $restaurantId, $suppliedQuantity);
+            }
         }
         $unavailableQuantity = max($requestedQuantity - $suppliedQuantity, 0);
         $suppliedTotal = $suppliedQuantity * (float) $item['unit_price'];
@@ -540,9 +563,14 @@ final class KitchenService
     private function findServerRequestItemInRestaurant(int $requestItemId, int $restaurantId): array
     {
         $statement = $this->database->pdo()->prepare(
-            'SELECT sri.*, sr.restaurant_id
+            'SELECT sri.*, sr.restaurant_id,
+                    mi.name AS menu_item_catalog_name,
+                    mc.name AS menu_category_name,
+                    mc.slug AS menu_category_slug
              FROM server_request_items sri
              INNER JOIN server_requests sr ON sr.id = sri.request_id
+             INNER JOIN menu_items mi ON mi.id = sri.menu_item_id
+             LEFT JOIN menu_categories mc ON mc.id = mi.category_id
              WHERE sri.id = :id
                AND sr.restaurant_id = :restaurant_id
              LIMIT 1'
@@ -615,6 +643,17 @@ final class KitchenService
             'total_supplied_amount' => (float) ($totals['total_supplied'] ?? 0),
             'id' => $requestId,
         ]);
+    }
+
+    private function menuLineIsBeverage(?string $categoryName, ?string $categorySlug): bool
+    {
+        $n = mb_strtolower(trim((string) $categoryName));
+        $s = mb_strtolower(trim((string) $categorySlug));
+        if ($n === 'boisson' || $s === 'boisson' || $s === 'boissons') {
+            return true;
+        }
+
+        return str_contains($n, 'boisson') || str_contains($s, 'boisson');
     }
 
     private function slugify(string $value): string

@@ -32,6 +32,8 @@ final class ReportService
         $kitchen = $this->kitchenDetailByCook($restaurantId, $startAt, $endAt, 0, $empty);
         $stock = $this->stockDetailByPerson($restaurantId, $startAt, $endAt, 0, $empty);
 
+        $activity = $this->activityIndex($restaurantId, $startAt, $endAt, []);
+
         return [
             'date' => $selectedDate->format('Y-m-d'),
             'period_label' => $label,
@@ -42,6 +44,7 @@ final class ReportService
             'kitchen_cook_count' => count($kitchen['cooks'] ?? []),
             'stock_grand_movements' => (int) ($stock['grand_total_movements'] ?? 0),
             'stock_people_count' => count($stock['people'] ?? []),
+            'activity_index' => $activity,
         ];
     }
 
@@ -260,6 +263,28 @@ final class ReportService
             $totLosses += (int) ($row['pertes_count'] ?? 0);
         }
 
+        $totMov = 0;
+        foreach ($stock as $row) {
+            $totMov += (int) ($row['movements_total'] ?? 0);
+        }
+
+        foreach ($salesByServer as &$sRow) {
+            $sRow['pct_of_sales_amount'] = $totSalesAmount <= 0.0 ? 0.0 : round(100.0 * (float) ($sRow['total_amount'] ?? 0) / $totSalesAmount, 2);
+            $sRow['pct_of_sales_count'] = $totSalesCount <= 0 ? 0.0 : round(100.0 * (int) ($sRow['sales_count'] ?? 0) / $totSalesCount, 2);
+        }
+        unset($sRow);
+
+        foreach ($kitchen as &$kRow) {
+            $kRow['pct_of_plates'] = $totPlates <= 0.0 ? 0.0 : round(100.0 * (float) ($kRow['plates_prepared'] ?? 0) / $totPlates, 2);
+        }
+        unset($kRow);
+
+        foreach ($stock as &$stRow) {
+            $mt = (int) ($stRow['movements_total'] ?? 0);
+            $stRow['pct_of_movements'] = $totMov <= 0 ? 0.0 : round(100.0 * $mt / $totMov, 2);
+        }
+        unset($stRow);
+
         return [
             'sales_by_server_rows' => $salesByServer,
             'kitchen_by_cook' => $kitchen,
@@ -272,6 +297,7 @@ final class ReportService
                 'kitchen_productions' => array_sum(array_map(static fn (array $r): int => (int) ($r['productions_count'] ?? 0), $kitchen)),
                 'stock_sorties' => $totStockOut,
                 'stock_pertes' => $totLosses,
+                'stock_movements_lines' => $totMov,
             ],
         ];
     }
@@ -398,7 +424,7 @@ final class ReportService
     }
 
     /**
-     * @return array{global_percent: int, agents: list<array<string, mixed>>}
+     * @return array{global_percent: int, agents: list<array<string, mixed>>, total_raw_score: float}
      */
     private function activityIndex(int $restaurantId, DateTimeImmutable $startAt, DateTimeImmutable $endAt, array $viewFilters): array
     {
@@ -530,28 +556,29 @@ final class ReportService
         }
 
         $rows = array_values($scores);
-        $maxScore = 0.0;
+        $sumScore = 0.0;
         foreach ($rows as $row) {
-            $maxScore = max($maxScore, (float) ($row['score'] ?? 0));
+            $sumScore += max(0.0, (float) ($row['score'] ?? 0));
         }
-        $maxScore = $maxScore > 0 ? $maxScore : 1.0;
+
         $agents = [];
-        $sumPct = 0;
         foreach ($rows as $row) {
-            $pct = (int) round(100.0 * (float) ($row['score'] ?? 0) / $maxScore);
-            $sumPct += $pct;
+            $raw = max(0.0, (float) ($row['score'] ?? 0));
+            $share = $sumScore <= 0.0 ? 0.0 : round(100.0 * $raw / $sumScore, 2);
             $agents[] = [
                 'user_id' => (int) ($row['user_id'] ?? 0),
                 'full_name' => (string) ($row['full_name'] ?? ''),
                 'role_code' => (string) ($row['role_code'] ?? ''),
-                'raw_score' => (float) ($row['score'] ?? 0),
-                'activity_percent' => min(100, $pct),
+                'raw_score' => $raw,
+                'activity_percent' => $share,
+                'activity_share_percent' => $share,
             ];
         }
-        usort($agents, static fn (array $a, array $b): int => ($b['activity_percent'] ?? 0) <=> ($a['activity_percent'] ?? 0));
-        $globalPercent = count($agents) > 0 ? (int) round($sumPct / count($agents)) : 0;
+        usort($agents, static fn (array $a, array $b): int => ($b['raw_score'] ?? 0.0) <=> ($a['raw_score'] ?? 0.0));
 
-        return ['global_percent' => min(100, $globalPercent), 'agents' => $agents];
+        $globalPercent = $sumScore > 0.0 ? 100 : 0;
+
+        return ['global_percent' => $globalPercent, 'agents' => $agents, 'total_raw_score' => round($sumScore, 2)];
     }
 
     /**
@@ -771,12 +798,24 @@ final class ReportService
                 'menu_item_name' => (string) ($row['menu_item_name'] ?? ''),
                 'qty_sold' => (float) ($row['qty_sold'] ?? 0),
                 'line_total' => $lineTotal,
+                'pct_of_server_sales' => 0.0,
             ];
             $byKey[$sname]['server_total'] += $lineTotal;
             $grand += $lineTotal;
         }
+        $servers = array_values($byKey);
+        foreach ($servers as &$srv) {
+            $srvTotal = (float) ($srv['server_total'] ?? 0);
+            $srv['pct_of_grand_total'] = $grand <= 0.0 ? 0.0 : round(100.0 * $srvTotal / $grand, 2);
+            foreach ($srv['lines'] as &$ln) {
+                $lt = (float) ($ln['line_total'] ?? 0);
+                $ln['pct_of_server_sales'] = $srvTotal <= 0.0 ? 0.0 : round(100.0 * $lt / $srvTotal, 2);
+            }
+            unset($ln);
+        }
+        unset($srv);
 
-        return ['servers' => array_values($byKey), 'grand_total' => round($grand, 2)];
+        return ['servers' => $servers, 'grand_total' => round($grand, 2)];
     }
 
     /**
@@ -849,6 +888,7 @@ final class ReportService
             $materialsByCook[$cid][] = [
                 'name' => (string) ($mr['material_name'] ?? ''),
                 'quantity' => (float) ($mr['material_qty'] ?? 0),
+                'pct_of_cook_material_qty' => 0.0,
             ];
         }
 
@@ -877,6 +917,7 @@ final class ReportService
                 'qty_produced' => $q,
                 'value_produced' => $v,
                 'batches' => $b,
+                'pct_of_cook_qty' => 0.0,
             ];
             $byCook[$cid]['cook_total_qty'] += $q;
             $byCook[$cid]['cook_total_value'] += $v;
@@ -888,6 +929,22 @@ final class ReportService
         foreach ($byCook as &$c) {
             $c['cook_total_qty'] = round((float) $c['cook_total_qty'], 2);
             $c['cook_total_value'] = round((float) $c['cook_total_value'], 2);
+            $c['pct_of_kitchen_qty'] = $grandQty <= 0.0 ? 0.0 : round(100.0 * (float) $c['cook_total_qty'] / $grandQty, 2);
+            $cookQty = (float) $c['cook_total_qty'];
+            foreach ($c['dishes'] as &$dish) {
+                $dq = (float) ($dish['qty_produced'] ?? 0);
+                $dish['pct_of_cook_qty'] = $cookQty <= 0.0 ? 0.0 : round(100.0 * $dq / $cookQty, 2);
+            }
+            unset($dish);
+            $matSum = 0.0;
+            foreach ($c['materials'] as $mat) {
+                $matSum += (float) ($mat['quantity'] ?? 0);
+            }
+            foreach ($c['materials'] as &$mat) {
+                $mq = (float) ($mat['quantity'] ?? 0);
+                $mat['pct_of_cook_material_qty'] = $matSum <= 0.0 ? 0.0 : round(100.0 * $mq / $matSum, 2);
+            }
+            unset($mat);
         }
         unset($c);
 
@@ -977,6 +1034,7 @@ final class ReportService
                 'movement_type' => (string) ($lr['movement_type'] ?? ''),
                 'line_count' => (int) ($lr['line_count'] ?? 0),
                 'qty_sum' => (float) ($lr['qty_sum'] ?? 0),
+                'pct_of_person_movements' => 0.0,
             ];
         }
 
@@ -1030,6 +1088,18 @@ final class ReportService
             foreach (['entrees_qty', 'sorties_qty', 'pertes_qty', 'retours_qty', 'autres_qty'] as $k) {
                 $p[$k] = round((float) $p[$k], 2);
             }
+            $tm = (int) ($p['total_movements'] ?? 0);
+            $p['pct_of_global_movements'] = $grandMov <= 0 ? 0.0 : round(100.0 * $tm / $grandMov, 2);
+            $p['pct_entrees'] = $tm <= 0 ? 0.0 : round(100.0 * (int) ($p['entrees_lines'] ?? 0) / $tm, 2);
+            $p['pct_sorties'] = $tm <= 0 ? 0.0 : round(100.0 * (int) ($p['sorties_lines'] ?? 0) / $tm, 2);
+            $p['pct_pertes'] = $tm <= 0 ? 0.0 : round(100.0 * (int) ($p['pertes_lines'] ?? 0) / $tm, 2);
+            $p['pct_retours'] = $tm <= 0 ? 0.0 : round(100.0 * (int) ($p['retours_lines'] ?? 0) / $tm, 2);
+            $p['pct_autres'] = $tm <= 0 ? 0.0 : round(100.0 * (int) ($p['autres_lines'] ?? 0) / $tm, 2);
+            foreach ($p['product_lines'] as &$pl) {
+                $lc = (int) ($pl['line_count'] ?? 0);
+                $pl['pct_of_person_movements'] = $tm <= 0 ? 0.0 : round(100.0 * $lc / $tm, 2);
+            }
+            unset($pl);
         }
         unset($p);
 

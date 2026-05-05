@@ -290,7 +290,7 @@ final class OperationsController
             'kitchen_stock_requests' => $kitchenStockBlocks['requests'],
             'kitchen_stock_request_items_by_request' => $kitchenStockBlocks['items_by_request'],
             'stock_items' => Container::getInstance()->get('stockService')->listItems($restaurantId),
-            'kitchen_inventory' => Container::getInstance()->get('stockService')->listKitchenInventory($restaurantId),
+            'kitchen_inventory' => Container::getInstance()->get('stockService')->listKitchenInventoryDashboard($restaurantId),
             'kitchen_evolution' => Container::getInstance()->get('stockService')->listKitchenEvolution($restaurantId),
             'menu_categories' => Container::getInstance()->get('menuAdmin')->listCategories($restaurantId),
             'menu_items' => Container::getInstance()->get('menuAdmin')->listItems($restaurantId),

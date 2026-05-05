@@ -12,14 +12,18 @@
 <?php $selectedTypes = $resetFilters['data_types'] ?? []; ?>
 <?php $resetOptions = [
     'commandes_serveur' => 'Commandes serveur',
-    'demandes_cuisine' => 'Demandes cuisine',
-    'demandes_stock' => 'Demandes stock',
+    'demandes_cuisine' => 'Cuisine / plats prepares',
+    'demandes_stock' => 'Demandes stock cuisine',
+    'stock_magasin' => 'Stock magasin (mouvements)',
+    'stock_cuisine' => 'Stock cuisine (inventaire)',
     'ventes' => 'Ventes',
+    'caisse_finance' => 'Caisse / finance',
     'pertes' => 'Pertes',
-    'incidents' => 'Incidents',
-    'retours' => 'Retours',
-    'rapports_operationnels' => 'Rapports operationnels',
+    'incidents' => 'Incidents / cas',
+    'retours' => 'Retours ventes',
+    'rapports_operationnels' => 'Corrections / incidents rapports',
     'audit_operationnel' => 'Audit operationnel lie',
+    'stock_articles_fiches' => 'Articles stock (fiches orphelines, periode)',
     'images_test' => 'Images de test',
 ]; ?>
 
@@ -121,6 +125,9 @@
                 <h3 style="margin-top:0;">Previsualisation</h3>
                 <p class="muted">Restaurant : <?= e($reset_preview['restaurant']['name'] ?? '-') ?> · Periode : <?= e($reset_preview['period']['label'] ?? '-') ?></p>
                 <p class="muted">Montant total concerne : <?= e(number_format((float) ($reset_preview['amount_total'] ?? 0), 2, '.', ' ')) ?></p>
+                <?php if ((int) ($reset_preview['counts']['stock_magasin_mouvements_exclus'] ?? 0) > 0): ?>
+                    <p class="muted"><strong>Attention :</strong> <?= e((string) (int) $reset_preview['counts']['stock_magasin_mouvements_exclus']) ?> mouvement(s) stock sur la periode sont lies a une production cuisine et ne seront pas effaces tant que les productions restent (choisir aussi « Cuisine / plats prepares » ou effacer les productions d abord).</p>
+                <?php endif; ?>
                 <div class="table-wrap">
                     <table>
                         <thead>

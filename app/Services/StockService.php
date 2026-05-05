@@ -841,6 +841,225 @@ final class StockService
         return $statement->fetchAll(PDO::FETCH_ASSOC);
     }
 
+    /**
+     * Stock cuisine enrichi : reçu cumulé, utilisé, restant, dernière réception, acteurs, plat récent.
+     *
+     * @return list<array<string, mixed>>
+     */
+    public function listKitchenInventoryDashboard(int $restaurantId): array
+    {
+        $rows = $this->listKitchenInventory($restaurantId);
+        if ($rows === []) {
+            return [];
+        }
+
+        $pdo = $this->database->pdo();
+
+        $recvTotals = $pdo->prepare(
+            'SELECT stock_item_id,
+                    COALESCE(SUM(quantity_supplied), 0) AS total_received
+             FROM kitchen_stock_request_items
+             WHERE restaurant_id = :restaurant_id
+               AND received_at IS NOT NULL
+             GROUP BY stock_item_id'
+        );
+        $recvTotals->execute(['restaurant_id' => $restaurantId]);
+        $receivedByItem = [];
+        foreach ($recvTotals->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $receivedByItem[(int) $r['stock_item_id']] = (float) ($r['total_received'] ?? 0);
+        }
+
+        $useTotals = $pdo->prepare(
+            'SELECT stock_item_id,
+                    COALESCE(SUM(quantity_used), 0) AS total_used
+             FROM kitchen_production_materials
+             WHERE restaurant_id = :restaurant_id
+             GROUP BY stock_item_id'
+        );
+        $useTotals->execute(['restaurant_id' => $restaurantId]);
+        $usedByItem = [];
+        foreach ($useTotals->fetchAll(PDO::FETCH_ASSOC) as $u) {
+            $usedByItem[(int) $u['stock_item_id']] = (float) ($u['total_used'] ?? 0);
+        }
+
+        $lastRecvStmt = $pdo->prepare(
+            'SELECT ksri.received_at,
+                    ksri.responded_by,
+                    ksri.received_by,
+                    su.full_name AS stock_responder_name,
+                    ku.full_name AS kitchen_receiver_name
+             FROM kitchen_stock_request_items ksri
+             LEFT JOIN users su ON su.id = ksri.responded_by
+             LEFT JOIN users ku ON ku.id = ksri.received_by
+             WHERE ksri.restaurant_id = :restaurant_id
+               AND ksri.stock_item_id = :stock_item_id
+               AND ksri.received_at IS NOT NULL
+             ORDER BY ksri.received_at DESC, ksri.id DESC
+             LIMIT 1'
+        );
+
+        $lastUseStmt = $pdo->prepare(
+            'SELECT kpm.created_at,
+                    kpm.quantity_used,
+                    mi.name AS menu_item_name,
+                    kp.dish_type,
+                    u.full_name AS cook_name
+             FROM kitchen_production_materials kpm
+             INNER JOIN kitchen_production kp ON kp.id = kpm.kitchen_production_id
+             LEFT JOIN menu_items mi ON mi.id = kp.menu_item_id
+             INNER JOIN users u ON u.id = kp.created_by
+             WHERE kpm.restaurant_id = :restaurant_id
+               AND kpm.stock_item_id = :stock_item_id
+             ORDER BY kpm.created_at DESC, kpm.id DESC
+             LIMIT 1'
+        );
+
+        $out = [];
+        foreach ($rows as $row) {
+            $sid = (int) ($row['stock_item_id'] ?? 0);
+            $lastRecvStmt->execute(['restaurant_id' => $restaurantId, 'stock_item_id' => $sid]);
+            $lr = $lastRecvStmt->fetch(PDO::FETCH_ASSOC) ?: [];
+            $lastUseStmt->execute(['restaurant_id' => $restaurantId, 'stock_item_id' => $sid]);
+            $lu = $lastUseStmt->fetch(PDO::FETCH_ASSOC) ?: [];
+
+            $dishLabel = (string) ($lu['menu_item_name'] ?? '');
+            if ($dishLabel === '' && ($lu['dish_type'] ?? '') !== '') {
+                $dishLabel = (string) $lu['dish_type'];
+            }
+
+            $out[] = array_merge($row, [
+                'total_received_kitchen' => round((float) ($receivedByItem[$sid] ?? 0), 3),
+                'total_used_kitchen' => round((float) ($usedByItem[$sid] ?? 0), 3),
+                'last_received_at' => $lr['received_at'] ?? null,
+                'stock_responder_name' => $lr['stock_responder_name'] ?? null,
+                'kitchen_receiver_name' => $lr['kitchen_receiver_name'] ?? null,
+                'last_use_at' => $lu['created_at'] ?? null,
+                'last_use_quantity' => isset($lu['quantity_used']) ? (float) $lu['quantity_used'] : null,
+                'last_use_dish_label' => $dishLabel !== '' ? $dishLabel : null,
+                'last_use_cook_name' => $lu['cook_name'] ?? null,
+            ]);
+        }
+
+        return $out;
+    }
+
+    /**
+     * Associe une ligne de carte à un article de stock en cuisine (même nom, restaurant), avec stock disponible.
+     *
+     * @return array<string, mixed>|null
+     */
+    public function findKitchenInventoryMatchForMenuItem(int $restaurantId, int $menuItemId, float $minQuantity = 0.0): ?array
+    {
+        $this->ensureKitchenInventoryTables();
+        $statement = $this->database->pdo()->prepare(
+            'SELECT ki.id AS kitchen_inventory_id,
+                    ki.quantity_available,
+                    si.id AS stock_item_id,
+                    si.name AS stock_item_name,
+                    si.unit_name
+             FROM menu_items mi
+             INNER JOIN stock_items si ON si.restaurant_id = mi.restaurant_id
+                AND LOWER(TRIM(si.name)) = LOWER(TRIM(mi.name))
+             INNER JOIN kitchen_inventory ki ON ki.restaurant_id = mi.restaurant_id
+                AND ki.stock_item_id = si.id
+             WHERE mi.restaurant_id = :restaurant_id
+               AND mi.id = :menu_item_id
+               AND ki.quantity_available >= :min_qty
+             ORDER BY ki.quantity_available DESC
+             LIMIT 1'
+        );
+        $statement->execute([
+            'restaurant_id' => $restaurantId,
+            'menu_item_id' => $menuItemId,
+            'min_qty' => $minQuantity,
+        ]);
+        $row = $statement->fetch(PDO::FETCH_ASSOC);
+
+        return $row === false ? null : $row;
+    }
+
+    public function consumeKitchenBeverageForServerItem(
+        int $restaurantId,
+        int $stockItemId,
+        float $quantity,
+        array $actor,
+        int $serverRequestItemId,
+        int $menuItemId,
+    ): void {
+        $this->ensureKitchenInventoryTables();
+        if ($quantity <= 0) {
+            throw new \RuntimeException('Quantite boisson invalide.');
+        }
+
+        $materials = [[
+            'stock_item_id' => $stockItemId,
+            'quantity_used' => $quantity,
+            'note' => 'Service boisson (stock cuisine) · demande serveur #' . $serverRequestItemId,
+        ]];
+
+        $pdo = $this->database->pdo();
+        $pdo->beginTransaction();
+
+        try {
+            $inventory = $this->findKitchenInventoryItem($restaurantId, $stockItemId);
+            if ($inventory === null || (float) ($inventory['quantity_available'] ?? 0) < $quantity) {
+                throw new \RuntimeException('Boisson indisponible en cuisine, demander au stock.');
+            }
+
+            $statement = $pdo->prepare(
+                'UPDATE kitchen_inventory
+                 SET quantity_available = quantity_available - :quantity_used,
+                     updated_at = NOW()
+                 WHERE restaurant_id = :restaurant_id AND stock_item_id = :stock_item_id'
+            );
+            $statement->execute([
+                'quantity_used' => $quantity,
+                'restaurant_id' => $restaurantId,
+                'stock_item_id' => $stockItemId,
+            ]);
+
+            $stockItem = $this->findStockItemInRestaurant($stockItemId, $restaurantId);
+            $this->insertMovement($restaurantId, [
+                'stock_item_id' => $stockItemId,
+                'movement_type' => 'CONSOMMATION_CUISINE',
+                'quantity' => $quantity,
+                'unit_cost_snapshot' => (float) ($stockItem['estimated_unit_cost'] ?? 0),
+                'total_cost_snapshot' => $quantity * (float) ($stockItem['estimated_unit_cost'] ?? 0),
+                'status' => 'VALIDE',
+                'user_id' => $actor['id'],
+                'validated_by' => $actor['id'],
+                'reference_type' => 'server_request_beverage',
+                'reference_id' => $serverRequestItemId,
+                'note' => 'Consommation stock cuisine — boisson, menu #' . $menuItemId,
+            ]);
+
+            $pdo->commit();
+        } catch (\Throwable $throwable) {
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+            throw $throwable;
+        }
+
+        Container::getInstance()->get('audit')->log([
+            'restaurant_id' => $restaurantId,
+            'user_id' => $actor['id'],
+            'actor_name' => $actor['full_name'],
+            'actor_role_code' => $actor['role_code'],
+            'module_name' => 'kitchen',
+            'action_name' => 'kitchen_beverage_consumed',
+            'entity_type' => 'server_request_items',
+            'entity_id' => (string) $serverRequestItemId,
+            'new_values' => [
+                'stock_item_id' => $stockItemId,
+                'quantity' => $quantity,
+                'menu_item_id' => $menuItemId,
+                'materials' => $materials,
+            ],
+            'justification' => 'Debit stock cuisine pour service boisson',
+        ]);
+    }
+
     public function consumeKitchenMaterials(int $restaurantId, array $materials, array $actor, ?int $menuItemId = null): array
     {
         $this->ensureKitchenInventoryTables();
