@@ -785,6 +785,9 @@ final class OperationsController
             'action_scope' => $actionScope,
             'action_name' => trim((string) ($request->query['action_name'] ?? '')),
             'closed_sales_only' => isset($request->query['closed_sales_only']) && (string) $request->query['closed_sales_only'] === '1',
+            'menu_item_id' => (int) ($request->query['menu_item_id'] ?? 0),
+            'stock_item_id' => (int) ($request->query['stock_item_id'] ?? 0),
+            'stock_movement_type' => trim((string) ($request->query['stock_movement_type'] ?? '')),
         ];
 
         $reportUsers = Container::getInstance()->get('roleAdmin')->listUsersForRestaurant($restaurantId);
@@ -811,6 +814,8 @@ final class OperationsController
             'view_filters' => $viewFilters,
             'report_users' => $reportUsers,
             'report_role_codes' => array_keys($reportRoleCodes),
+            'report_menu_items' => Container::getInstance()->get('menuAdmin')->listPublicItems($restaurantId),
+            'report_stock_items' => Container::getInstance()->get('stockService')->listItems($restaurantId),
             'report' => Container::getInstance()->get('reportService')->dailyReport($restaurantId, $date, $period, $viewFilters),
         ]);
 

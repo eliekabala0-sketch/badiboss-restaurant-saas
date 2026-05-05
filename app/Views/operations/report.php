@@ -12,18 +12,26 @@ $printQuery = http_build_query(array_filter([
     'action_scope' => ($viewFilters['action_scope'] ?? 'all') !== 'all' ? (string) $viewFilters['action_scope'] : null,
     'action_name' => trim((string) ($viewFilters['action_name'] ?? '')) !== '' ? (string) $viewFilters['action_name'] : null,
     'closed_sales_only' => !empty($viewFilters['closed_sales_only']) ? '1' : null,
+    'menu_item_id' => (int) ($viewFilters['menu_item_id'] ?? 0) > 0 ? (string) (int) $viewFilters['menu_item_id'] : null,
+    'stock_item_id' => (int) ($viewFilters['stock_item_id'] ?? 0) > 0 ? (string) (int) $viewFilters['stock_item_id'] : null,
+    'stock_movement_type' => trim((string) ($viewFilters['stock_movement_type'] ?? '')) !== '' ? (string) $viewFilters['stock_movement_type'] : null,
     'print' => '1',
 ], static fn ($value): bool => $value !== null && $value !== ''));
 $cashClarity = $report['financial_report']['cash_clarity'] ?? [];
 $people = $report['people_overview'] ?? [];
 $activity = $report['activity_index'] ?? ['global_percent' => 0, 'agents' => []];
 $timeline = $report['nominative_timeline'] ?? [];
+$salesDetail = $report['sales_detail_by_server'] ?? ['servers' => [], 'grand_total' => 0];
+$kitchenDetail = $report['kitchen_detail_by_cook'] ?? ['cooks' => [], 'grand_total_qty' => 0, 'grand_total_value' => 0];
+$stockDetail = $report['stock_detail_by_person'] ?? ['people' => [], 'grand_total_movements' => 0];
 ?>
 <style>
 @media print {
     .no-print { display:none !important; }
     .card { box-shadow:none !important; border:1px solid #d6d6d6; }
 }
+.report-detail-nested > details { margin-top:12px; }
+.report-detail-nested summary { cursor:pointer; }
 </style>
 <section class="topbar">
     <div class="brand">
@@ -162,6 +170,29 @@ $timeline = $report['nominative_timeline'] ?? [];
             <input type="checkbox" name="closed_sales_only" value="1" <?= !empty($viewFilters['closed_sales_only']) ? 'checked' : '' ?>>
             Ventes clôturées uniquement (totaux ventes par serveur)
         </label>
+        <label>Produit (carte / ventes)</label>
+        <select name="menu_item_id">
+            <option value="0">Tous les produits</option>
+            <?php foreach (($report_menu_items ?? []) as $mi): ?>
+                <option value="<?= e((string) $mi['id']) ?>" <?= (int) ($viewFilters['menu_item_id'] ?? 0) === (int) $mi['id'] ? 'selected' : '' ?>><?= e((string) ($mi['name'] ?? '')) ?></option>
+            <?php endforeach; ?>
+        </select>
+        <label>Article stock (mouvements)</label>
+        <select name="stock_item_id">
+            <option value="0">Tous les articles</option>
+            <?php foreach (($report_stock_items ?? []) as $sti): ?>
+                <option value="<?= e((string) $sti['id']) ?>" <?= (int) ($viewFilters['stock_item_id'] ?? 0) === (int) $sti['id'] ? 'selected' : '' ?>><?= e((string) ($sti['name'] ?? '')) ?></option>
+            <?php endforeach; ?>
+        </select>
+        <label>Type de mouvement stock</label>
+        <select name="stock_movement_type">
+            <option value="" <?= (($viewFilters['stock_movement_type'] ?? '') === '') ? 'selected' : '' ?>>Tous</option>
+            <option value="ENTREE" <?= (($viewFilters['stock_movement_type'] ?? '') === 'ENTREE') ? 'selected' : '' ?>>Entrée</option>
+            <option value="SORTIE_CUISINE" <?= (($viewFilters['stock_movement_type'] ?? '') === 'SORTIE_CUISINE') ? 'selected' : '' ?>>Sortie cuisine</option>
+            <option value="SORTIE" <?= (($viewFilters['stock_movement_type'] ?? '') === 'SORTIE') ? 'selected' : '' ?>>Sortie</option>
+            <option value="PERTE" <?= (($viewFilters['stock_movement_type'] ?? '') === 'PERTE') ? 'selected' : '' ?>>Perte</option>
+            <option value="RETOUR_STOCK" <?= (($viewFilters['stock_movement_type'] ?? '') === 'RETOUR_STOCK') ? 'selected' : '' ?>>Retour stock</option>
+        </select>
         <div style="margin-top:14px;"><button type="submit">Afficher</button></div>
     </form>
     </details>
@@ -287,6 +318,91 @@ $timeline = $report['nominative_timeline'] ?? [];
         </div>
         <p class="muted" style="margin-bottom:0;">Format phrase (exemple) : <?= e(nominative_timeline_sentence($timeline[0] ?? [], $restaurantCurrency, $reportTimezone)) ?></p>
     <?php endif; ?>
+</section>
+
+<section class="card no-print" style="padding:22px; margin-bottom:24px;">
+    <details class="compact-card" data-autoclose-details>
+        <summary><strong>Rapports détaillés — par personne et par produit</strong></summary>
+        <p class="muted" style="margin-top:12px; margin-bottom:0;">Sections repliables pour éviter de surcharger l’écran ; adapté mobile. Les filtres ci-dessus (période, personne, rôle, produit carte, article stock, type de mouvement) s’appliquent.</p>
+        <div class="report-detail-nested" style="margin-top:16px;">
+            <details>
+                <summary><strong>1. Ventes par serveur et par produit</strong> · Total général <?= e(format_money((float) ($salesDetail['grand_total'] ?? 0), $restaurantCurrency)) ?></summary>
+                <?php if (($salesDetail['servers'] ?? []) === []): ?>
+                    <p class="muted" style="margin-top:12px;">Aucune ligne dans le filtre.</p>
+                <?php else: ?>
+                    <?php foreach ($salesDetail['servers'] as $srv): ?>
+                        <details style="margin-top:12px; padding:12px; border:1px solid var(--line, #e0e0e0); border-radius:12px;">
+                            <summary>Serveur <?= e(named_actor_label($srv['server_name'] ?? null, $srv['server_role_code'] ?? 'cashier_server')) ?> · Total <?= e(format_money((float) ($srv['server_total'] ?? 0), $restaurantCurrency)) ?></summary>
+                            <ul style="margin:12px 0 0; padding-left:18px;">
+                                <?php foreach (($srv['lines'] ?? []) as $ln): ?>
+                                    <li><?= e((string) ($ln['menu_item_name'] ?? '')) ?> x<?php
+                                    $qs = (float) ($ln['qty_sold'] ?? 0);
+                                    echo e(abs($qs - round($qs)) < 0.001 ? (string) (int) round($qs) : (string) $qs);
+                                    ?> = <?= e(format_money((float) ($ln['line_total'] ?? 0), $restaurantCurrency)) ?></li>
+                                <?php endforeach; ?>
+                            </ul>
+                        </details>
+                    <?php endforeach; ?>
+                <?php endif; ?>
+            </details>
+            <details>
+                <summary><strong>2. Production cuisine par personne</strong> · <?= e((string) ($kitchenDetail['grand_total_qty'] ?? 0)) ?> unités · <?= e(format_money((float) ($kitchenDetail['grand_total_value'] ?? 0), $restaurantCurrency)) ?></summary>
+                <?php if (($kitchenDetail['cooks'] ?? []) === []): ?>
+                    <p class="muted" style="margin-top:12px;">Aucune production dans le filtre.</p>
+                <?php else: ?>
+                    <?php foreach ($kitchenDetail['cooks'] as $ck): ?>
+                        <details style="margin-top:12px; padding:12px; border:1px solid var(--line, #e0e0e0); border-radius:12px;">
+                            <summary><?= e(named_actor_label($ck['cook_name'] ?? null, $ck['role_code'] ?? 'kitchen')) ?> · <?= e(format_money((float) ($ck['cook_total_value'] ?? 0), $restaurantCurrency)) ?> · <?= e((string) ($ck['cook_total_qty'] ?? 0)) ?> unités</summary>
+                            <p class="muted" style="margin:10px 0 6px;"><strong>Plats</strong></p>
+                            <ul style="margin:0; padding-left:18px;">
+                                <?php foreach (($ck['dishes'] ?? []) as $d): ?>
+                                    <li><?= e((string) ($d['dish_label'] ?? '')) ?> · qté <?= e((string) ($d['qty_produced'] ?? 0)) ?> · <?= e(format_money((float) ($d['value_produced'] ?? 0), $restaurantCurrency)) ?></li>
+                                <?php endforeach; ?>
+                            </ul>
+                            <?php if (($ck['materials'] ?? []) !== []): ?>
+                                <p class="muted" style="margin:12px 0 6px;"><strong>Matières (mouvements liés)</strong></p>
+                                <ul style="margin:0; padding-left:18px;">
+                                    <?php foreach ($ck['materials'] as $mat): ?>
+                                        <li><?= e((string) ($mat['name'] ?? '')) ?> · <?= e((string) ($mat['quantity'] ?? 0)) ?></li>
+                                    <?php endforeach; ?>
+                                </ul>
+                            <?php endif; ?>
+                        </details>
+                    <?php endforeach; ?>
+                <?php endif; ?>
+            </details>
+            <details>
+                <summary><strong>3. Stock par responsable</strong> · <?= e((string) ($stockDetail['grand_total_movements'] ?? 0)) ?> mouvements (lignes)</summary>
+                <?php if (($stockDetail['people'] ?? []) === []): ?>
+                    <p class="muted" style="margin-top:12px;">Aucun mouvement validé dans le filtre.</p>
+                <?php else: ?>
+                    <?php foreach ($stockDetail['people'] as $sp): ?>
+                        <details style="margin-top:12px; padding:12px; border:1px solid var(--line, #e0e0e0); border-radius:12px;">
+                            <summary><?= e(named_actor_label($sp['full_name'] ?? null, $sp['role_code'] ?? 'stock_manager')) ?> · <?= e((string) ($sp['total_movements'] ?? 0)) ?> mouvements</summary>
+                            <p style="margin:10px 0 6px;" class="muted">Entrées <?= e((string) ($sp['entrees_lines'] ?? 0)) ?> (qté <?= e((string) ($sp['entrees_qty'] ?? 0)) ?>) · Sorties <?= e((string) ($sp['sorties_lines'] ?? 0)) ?> (<?= e((string) ($sp['sorties_qty'] ?? 0)) ?>) · Pertes <?= e((string) ($sp['pertes_lines'] ?? 0)) ?> · Retours <?= e((string) ($sp['retours_lines'] ?? 0)) ?></p>
+                            <?php if (($sp['product_lines'] ?? []) !== []): ?>
+                                <div class="table-wrap" style="margin-top:8px;">
+                                    <table>
+                                        <thead><tr><th>Produit</th><th>Type</th><th>Lignes</th><th>Qté</th></tr></thead>
+                                        <tbody>
+                                        <?php foreach ($sp['product_lines'] as $pl): ?>
+                                            <tr>
+                                                <td><?= e((string) ($pl['product_name'] ?? '')) ?></td>
+                                                <td><?= e((string) ($pl['movement_type'] ?? '')) ?></td>
+                                                <td><?= e((string) ($pl['line_count'] ?? 0)) ?></td>
+                                                <td><?= e((string) ($pl['qty_sum'] ?? 0)) ?></td>
+                                            </tr>
+                                        <?php endforeach; ?>
+                                        </tbody>
+                                    </table>
+                                </div>
+                            <?php endif; ?>
+                        </details>
+                    <?php endforeach; ?>
+                <?php endif; ?>
+            </details>
+        </div>
+    </details>
 </section>
 
 <section class="grid stats">

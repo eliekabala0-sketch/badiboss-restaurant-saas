@@ -16,6 +16,35 @@ final class ReportService
         return $this->reportForPeriod($restaurantId, $date, $period, $viewFilters);
     }
     public function todayForRestaurant(int $restaurantId): string { return (new DateTimeImmutable('now', $this->reportTimezone($restaurantId)))->format('Y-m-d'); }
+
+    /**
+     * Aperçu compact pour le tableau de bord /owner (jour courant uniquement, sans charger tout le rapport).
+     *
+     * @return array<string, mixed>
+     */
+    public function reportDetailSummaryForDashboard(int $restaurantId): array
+    {
+        $timezone = $this->reportTimezone($restaurantId);
+        $selectedDate = $this->normalizeDate($this->todayForRestaurant($restaurantId), $timezone);
+        [$startAt, $endAt, $label] = $this->periodBounds($selectedDate, 'daily', $timezone);
+        $empty = [];
+        $sales = $this->salesDetailByServerProduct($restaurantId, $startAt, $endAt, false, 0, $empty);
+        $kitchen = $this->kitchenDetailByCook($restaurantId, $startAt, $endAt, 0, $empty);
+        $stock = $this->stockDetailByPerson($restaurantId, $startAt, $endAt, 0, $empty);
+
+        return [
+            'date' => $selectedDate->format('Y-m-d'),
+            'period_label' => $label,
+            'sales_grand_total' => (float) ($sales['grand_total'] ?? 0),
+            'sales_server_count' => count($sales['servers'] ?? []),
+            'kitchen_grand_qty' => (float) ($kitchen['grand_total_qty'] ?? 0),
+            'kitchen_grand_value' => (float) ($kitchen['grand_total_value'] ?? 0),
+            'kitchen_cook_count' => count($kitchen['cooks'] ?? []),
+            'stock_grand_movements' => (int) ($stock['grand_total_movements'] ?? 0),
+            'stock_people_count' => count($stock['people'] ?? []),
+        ];
+    }
+
     public function reportForPeriod(int $restaurantId, string $date, string $period, array $viewFilters = []): array
     {
         $timezone = $this->reportTimezone($restaurantId);
@@ -26,7 +55,7 @@ final class ReportService
         $closedOnly = (bool) ($viewFilters['closed_sales_only'] ?? false);
         $userId = (int) ($viewFilters['user_id'] ?? 0);
         $salesByServer = $this->salesByServer($restaurantId, $startAt, $endAt, $closedOnly, $userId);
-        $summary = ['period' => $period, 'period_label' => $label, 'selected_date' => $selectedDate->format('Y-m-d'), 'timezone' => $timezone->getName(), 'range_start' => $startAt->format('Y-m-d H:i:s'), 'range_end' => $displayEndAt->format('Y-m-d H:i:s'), 'opening_stock_total' => $this->openingStock($restaurantId, $startAt, $currentStock), 'current_stock_total' => $currentStock, 'kitchen_outputs' => $this->sumMovement($restaurantId, $startAt, $endAt, 'SORTIE_CUISINE'), 'stock_returns' => $this->sumMovement($restaurantId, $startAt, $endAt, 'RETOUR_STOCK'), 'kitchen_production' => $this->sumProduction($restaurantId, $startAt, $endAt), 'stock_report' => $this->stockReport($restaurantId, $startAt, $endAt), 'kitchen_report' => $this->kitchenReport($restaurantId, $startAt, $endAt), 'server_report' => $this->serverReport($restaurantId, $startAt, $endAt), 'financial_report' => $this->financialReport($restaurantId, $startAt, $endAt, $displayEndAt), 'product_margins' => $this->productMargins($restaurantId, $startAt, $endAt), 'sales_by_server' => $salesByServer, 'sales_by_type' => $this->salesByType($restaurantId, $startAt, $endAt), 'material_losses' => $this->sumLosses($restaurantId, $startAt, $endAt, 'MATIERE_PREMIERE'), 'financial_losses' => $this->sumLosses($restaurantId, $startAt, $endAt, 'ARGENT'), 'dish_yields' => $this->dishYields($restaurantId, $startAt, $endAt), 'product_issues' => $this->productIssues($restaurantId, $startAt, $endAt), 'incident_statuses' => $this->incidentsByField($restaurantId, $startAt, $endAt, 'status'), 'incident_qualifications' => $this->incidentsByField($restaurantId, $startAt, $endAt, 'final_qualification'), 'incident_responsibilities' => $this->incidentsByField($restaurantId, $startAt, $endAt, 'responsibility_scope'), 'incident_cases' => $this->incidentCases($restaurantId, $startAt, $endAt), 'fraud_alerts' => $this->fraudAlerts($restaurantId, $startAt, $endAt), 'view_filters' => $viewFilters, 'people_overview' => $this->peopleOverview($restaurantId, $startAt, $endAt, $userId, $salesByServer, $viewFilters), 'activity_index' => $this->activityIndex($restaurantId, $startAt, $endAt, $viewFilters), 'nominative_timeline' => $this->nominativeTimeline($restaurantId, $startAt, $endAt, $viewFilters)];
+        $summary = ['period' => $period, 'period_label' => $label, 'selected_date' => $selectedDate->format('Y-m-d'), 'timezone' => $timezone->getName(), 'range_start' => $startAt->format('Y-m-d H:i:s'), 'range_end' => $displayEndAt->format('Y-m-d H:i:s'), 'opening_stock_total' => $this->openingStock($restaurantId, $startAt, $currentStock), 'current_stock_total' => $currentStock, 'kitchen_outputs' => $this->sumMovement($restaurantId, $startAt, $endAt, 'SORTIE_CUISINE'), 'stock_returns' => $this->sumMovement($restaurantId, $startAt, $endAt, 'RETOUR_STOCK'), 'kitchen_production' => $this->sumProduction($restaurantId, $startAt, $endAt), 'stock_report' => $this->stockReport($restaurantId, $startAt, $endAt), 'kitchen_report' => $this->kitchenReport($restaurantId, $startAt, $endAt), 'server_report' => $this->serverReport($restaurantId, $startAt, $endAt), 'financial_report' => $this->financialReport($restaurantId, $startAt, $endAt, $displayEndAt), 'product_margins' => $this->productMargins($restaurantId, $startAt, $endAt), 'sales_by_server' => $salesByServer, 'sales_by_type' => $this->salesByType($restaurantId, $startAt, $endAt), 'material_losses' => $this->sumLosses($restaurantId, $startAt, $endAt, 'MATIERE_PREMIERE'), 'financial_losses' => $this->sumLosses($restaurantId, $startAt, $endAt, 'ARGENT'), 'dish_yields' => $this->dishYields($restaurantId, $startAt, $endAt), 'product_issues' => $this->productIssues($restaurantId, $startAt, $endAt), 'incident_statuses' => $this->incidentsByField($restaurantId, $startAt, $endAt, 'status'), 'incident_qualifications' => $this->incidentsByField($restaurantId, $startAt, $endAt, 'final_qualification'), 'incident_responsibilities' => $this->incidentsByField($restaurantId, $startAt, $endAt, 'responsibility_scope'), 'incident_cases' => $this->incidentCases($restaurantId, $startAt, $endAt), 'fraud_alerts' => $this->fraudAlerts($restaurantId, $startAt, $endAt), 'view_filters' => $viewFilters, 'people_overview' => $this->peopleOverview($restaurantId, $startAt, $endAt, $userId, $salesByServer, $viewFilters), 'activity_index' => $this->activityIndex($restaurantId, $startAt, $endAt, $viewFilters), 'nominative_timeline' => $this->nominativeTimeline($restaurantId, $startAt, $endAt, $viewFilters), 'sales_detail_by_server' => $this->salesDetailByServerProduct($restaurantId, $startAt, $endAt, $closedOnly, $userId, $viewFilters), 'kitchen_detail_by_cook' => $this->kitchenDetailByCook($restaurantId, $startAt, $endAt, $userId, $viewFilters), 'stock_detail_by_person' => $this->stockDetailByPerson($restaurantId, $startAt, $endAt, $userId, $viewFilters)];
         $salesTotal = 0.0; foreach ($summary['sales_by_type'] as $row) { $salesTotal += (float) $row['total_amount']; }
         $summary['general_report'] = ['total_product_value' => (float) $summary['kitchen_report']['value_produced'], 'total_sold_value' => $salesTotal, 'real_material_cost_value' => (float) $summary['kitchen_report']['real_material_cost_of_sales'], 'total_losses_value' => (float) $summary['stock_report']['stock_losses_value'] + (float) $summary['kitchen_report']['kitchen_losses_value'] + (float) $summary['server_report']['server_loss_value'] + (float) $summary['financial_losses'], 'stock_loss_value' => (float) $summary['stock_report']['stock_losses_value'], 'kitchen_loss_value' => (float) $summary['kitchen_report']['kitchen_losses_value'], 'server_loss_value' => (float) $summary['server_report']['server_loss_value']];
         $summary['estimated_profit'] = $salesTotal - (float) $summary['kitchen_report']['real_material_cost_of_sales'] - (float) $summary['stock_report']['stock_losses_value'] - (float) $summary['kitchen_report']['kitchen_losses_value'] - (float) $summary['server_report']['server_loss_value'] - (float) $summary['financial_losses'];
@@ -674,6 +703,337 @@ final class ReportService
         }
 
         return $out;
+    }
+
+    /**
+     * Ventes détaillées par serveur et par produit (carte/menu).
+     *
+     * @return array{servers: list<array<string, mixed>>, grand_total: float}
+     */
+    private function salesDetailByServerProduct(int $restaurantId, DateTimeImmutable $startAt, DateTimeImmutable $endAt, bool $closedOnly, int $filterUserId, array $viewFilters): array
+    {
+        $menuItemId = (int) ($viewFilters['menu_item_id'] ?? 0);
+        $roleCode = trim((string) ($viewFilters['role_code'] ?? ''));
+        $extra = '';
+        if ($closedOnly) {
+            $extra .= ' AND s.status IN ("VALIDE","CLOTURE","VENDU_TOTAL","VENDU_PARTIEL")';
+        }
+        if ($filterUserId > 0) {
+            $extra .= ' AND s.server_id = ' . $filterUserId;
+        }
+        if ($roleCode !== '') {
+            $extra .= ' AND r.code = ' . $this->database->pdo()->quote($roleCode);
+        }
+        if ($menuItemId > 0) {
+            $extra .= ' AND mi.id = ' . $menuItemId;
+        }
+        $statement = $this->database->pdo()->prepare(
+            'SELECT COALESCE(u.full_name, "Vente automatique") AS server_name,
+                    COALESCE(u.id, 0) AS server_user_id,
+                    COALESCE(r.code, "") AS server_role_code,
+                    mi.id AS menu_item_id,
+                    mi.name AS menu_item_name,
+                    COALESCE(SUM(si.quantity), 0) AS qty_sold,
+                    COALESCE(SUM(si.quantity * si.unit_price), 0) AS line_total
+             FROM sale_items si
+             INNER JOIN sales s ON s.id = si.sale_id
+             INNER JOIN menu_items mi ON mi.id = si.menu_item_id
+             LEFT JOIN users u ON u.id = s.server_id
+             LEFT JOIN roles r ON r.id = u.role_id
+             WHERE s.restaurant_id = :restaurant_id
+               AND COALESCE(s.validated_at, s.created_at) >= :start_at
+               AND COALESCE(s.validated_at, s.created_at) < :end_at' . $extra . '
+             GROUP BY server_name, server_user_id, server_role_code, mi.id, mi.name
+             ORDER BY server_name ASC, line_total DESC'
+        );
+        $statement->execute([
+            'restaurant_id' => $restaurantId,
+            'start_at' => $startAt->format('Y-m-d H:i:s'),
+            'end_at' => $endAt->format('Y-m-d H:i:s'),
+        ]);
+        $rows = $statement->fetchAll(PDO::FETCH_ASSOC);
+        $byKey = [];
+        $grand = 0.0;
+        foreach ($rows as $row) {
+            $sname = (string) ($row['server_name'] ?? '');
+            if (!isset($byKey[$sname])) {
+                $byKey[$sname] = [
+                    'server_name' => $sname,
+                    'server_user_id' => (int) ($row['server_user_id'] ?? 0),
+                    'server_role_code' => (string) ($row['server_role_code'] ?? ''),
+                    'lines' => [],
+                    'server_total' => 0.0,
+                ];
+            }
+            $lineTotal = (float) ($row['line_total'] ?? 0);
+            $byKey[$sname]['lines'][] = [
+                'menu_item_id' => (int) ($row['menu_item_id'] ?? 0),
+                'menu_item_name' => (string) ($row['menu_item_name'] ?? ''),
+                'qty_sold' => (float) ($row['qty_sold'] ?? 0),
+                'line_total' => $lineTotal,
+            ];
+            $byKey[$sname]['server_total'] += $lineTotal;
+            $grand += $lineTotal;
+        }
+
+        return ['servers' => array_values($byKey), 'grand_total' => round($grand, 2)];
+    }
+
+    /**
+     * Production cuisine par cuisinier, avec matières liées au mouvement de stock si présent.
+     *
+     * @return array{cooks: list<array<string, mixed>>, grand_total_qty: float, grand_total_value: float}
+     */
+    private function kitchenDetailByCook(int $restaurantId, DateTimeImmutable $startAt, DateTimeImmutable $endAt, int $filterUserId, array $viewFilters): array
+    {
+        $menuItemId = (int) ($viewFilters['menu_item_id'] ?? 0);
+        $roleCode = trim((string) ($viewFilters['role_code'] ?? ''));
+        $extra = '';
+        if ($filterUserId > 0) {
+            $extra .= ' AND kp.created_by = ' . $filterUserId;
+        }
+        if ($roleCode !== '') {
+            $extra .= ' AND r.code = ' . $this->database->pdo()->quote($roleCode);
+        }
+        if ($menuItemId > 0) {
+            $extra .= ' AND kp.menu_item_id = ' . $menuItemId;
+        }
+        $statement = $this->database->pdo()->prepare(
+            'SELECT kp.created_by AS cook_id,
+                    u.full_name AS cook_name,
+                    COALESCE(r.code, "") AS role_code,
+                    COALESCE(mi.name, kp.dish_type) AS dish_label,
+                    COALESCE(SUM(kp.quantity_produced), 0) AS qty_produced,
+                    COALESCE(SUM(kp.total_sale_value_snapshot), 0) AS value_produced,
+                    COUNT(kp.id) AS batches
+             FROM kitchen_production kp
+             INNER JOIN users u ON u.id = kp.created_by
+             LEFT JOIN roles r ON r.id = u.role_id
+             LEFT JOIN menu_items mi ON mi.id = kp.menu_item_id
+             WHERE kp.restaurant_id = :restaurant_id
+               AND kp.created_at >= :start_at AND kp.created_at < :end_at' . $extra . '
+             GROUP BY kp.created_by, u.full_name, r.code, dish_label
+             ORDER BY u.full_name ASC, value_produced DESC'
+        );
+        $statement->execute([
+            'restaurant_id' => $restaurantId,
+            'start_at' => $startAt->format('Y-m-d H:i:s'),
+            'end_at' => $endAt->format('Y-m-d H:i:s'),
+        ]);
+        $rows = $statement->fetchAll(PDO::FETCH_ASSOC);
+
+        $matStatement = $this->database->pdo()->prepare(
+            'SELECT kp.created_by AS cook_id, si.name AS material_name, COALESCE(SUM(sm.quantity), 0) AS material_qty
+             FROM kitchen_production kp
+             INNER JOIN users u ON u.id = kp.created_by
+             LEFT JOIN roles r ON r.id = u.role_id
+             INNER JOIN stock_movements sm ON sm.id = kp.stock_movement_id
+             INNER JOIN stock_items si ON si.id = sm.stock_item_id
+             WHERE kp.restaurant_id = :restaurant_id
+               AND kp.created_at >= :start_at AND kp.created_at < :end_at' . $extra . '
+             GROUP BY kp.created_by, si.id, si.name
+             ORDER BY cook_id ASC, material_name ASC'
+        );
+        $matStatement->execute([
+            'restaurant_id' => $restaurantId,
+            'start_at' => $startAt->format('Y-m-d H:i:s'),
+            'end_at' => $endAt->format('Y-m-d H:i:s'),
+        ]);
+        $matRows = $matStatement->fetchAll(PDO::FETCH_ASSOC);
+        $materialsByCook = [];
+        foreach ($matRows as $mr) {
+            $cid = (int) $mr['cook_id'];
+            if (!isset($materialsByCook[$cid])) {
+                $materialsByCook[$cid] = [];
+            }
+            $materialsByCook[$cid][] = [
+                'name' => (string) ($mr['material_name'] ?? ''),
+                'quantity' => (float) ($mr['material_qty'] ?? 0),
+            ];
+        }
+
+        $byCook = [];
+        $grandQty = 0.0;
+        $grandVal = 0.0;
+        foreach ($rows as $row) {
+            $cid = (int) ($row['cook_id'] ?? 0);
+            if (!isset($byCook[$cid])) {
+                $byCook[$cid] = [
+                    'cook_id' => $cid,
+                    'cook_name' => (string) ($row['cook_name'] ?? ''),
+                    'role_code' => (string) ($row['role_code'] ?? ''),
+                    'dishes' => [],
+                    'materials' => $materialsByCook[$cid] ?? [],
+                    'cook_total_qty' => 0.0,
+                    'cook_total_value' => 0.0,
+                    'batches' => 0,
+                ];
+            }
+            $q = (float) ($row['qty_produced'] ?? 0);
+            $v = (float) ($row['value_produced'] ?? 0);
+            $b = (int) ($row['batches'] ?? 0);
+            $byCook[$cid]['dishes'][] = [
+                'dish_label' => (string) ($row['dish_label'] ?? ''),
+                'qty_produced' => $q,
+                'value_produced' => $v,
+                'batches' => $b,
+            ];
+            $byCook[$cid]['cook_total_qty'] += $q;
+            $byCook[$cid]['cook_total_value'] += $v;
+            $byCook[$cid]['batches'] += $b;
+            $grandQty += $q;
+            $grandVal += $v;
+        }
+
+        foreach ($byCook as &$c) {
+            $c['cook_total_qty'] = round((float) $c['cook_total_qty'], 2);
+            $c['cook_total_value'] = round((float) $c['cook_total_value'], 2);
+        }
+        unset($c);
+
+        return [
+            'cooks' => array_values($byCook),
+            'grand_total_qty' => round($grandQty, 2),
+            'grand_total_value' => round($grandVal, 2),
+        ];
+    }
+
+    /**
+     * Stock : mouvements validés par responsable (entrées, sorties, pertes, retours) + lignes par produit.
+     *
+     * @return array{people: list<array<string, mixed>>, grand_total_movements: int}
+     */
+    private function stockDetailByPerson(int $restaurantId, DateTimeImmutable $startAt, DateTimeImmutable $endAt, int $filterUserId, array $viewFilters): array
+    {
+        $stockItemId = (int) ($viewFilters['stock_item_id'] ?? 0);
+        $roleCode = trim((string) ($viewFilters['role_code'] ?? ''));
+        $movType = trim((string) ($viewFilters['stock_movement_type'] ?? ''));
+        $allowedTypes = ['ENTREE', 'SORTIE_CUISINE', 'SORTIE', 'PERTE', 'RETOUR_STOCK', 'CONSOMMATION_CUISINE', 'CORRECTION_INVENTAIRE'];
+        if ($movType !== '' && !in_array($movType, $allowedTypes, true)) {
+            $movType = '';
+        }
+        $extra = '';
+        if ($filterUserId > 0) {
+            $extra .= ' AND sm.user_id = ' . $filterUserId;
+        }
+        if ($roleCode !== '') {
+            $extra .= ' AND r.code = ' . $this->database->pdo()->quote($roleCode);
+        }
+        if ($stockItemId > 0) {
+            $extra .= ' AND sm.stock_item_id = ' . $stockItemId;
+        }
+        if ($movType !== '') {
+            $extra .= ' AND sm.movement_type = ' . $this->database->pdo()->quote($movType);
+        }
+
+        $statement = $this->database->pdo()->prepare(
+            'SELECT sm.user_id, u.full_name, COALESCE(r.code, "") AS role_code, sm.movement_type,
+                    COUNT(*) AS line_count,
+                    COALESCE(SUM(sm.quantity), 0) AS qty_sum
+             FROM stock_movements sm
+             INNER JOIN users u ON u.id = sm.user_id
+             LEFT JOIN roles r ON r.id = u.role_id
+             WHERE sm.restaurant_id = :restaurant_id
+               AND sm.status = "VALIDE"
+               AND sm.created_at >= :start_at AND sm.created_at < :end_at' . $extra . '
+             GROUP BY sm.user_id, u.full_name, r.code, sm.movement_type
+             ORDER BY u.full_name ASC, sm.movement_type ASC'
+        );
+        $statement->execute([
+            'restaurant_id' => $restaurantId,
+            'start_at' => $startAt->format('Y-m-d H:i:s'),
+            'end_at' => $endAt->format('Y-m-d H:i:s'),
+        ]);
+        $aggRows = $statement->fetchAll(PDO::FETCH_ASSOC);
+
+        $lineStatement = $this->database->pdo()->prepare(
+            'SELECT sm.user_id, si.name AS product_name, sm.movement_type,
+                    COUNT(*) AS line_count,
+                    COALESCE(SUM(sm.quantity), 0) AS qty_sum
+             FROM stock_movements sm
+             INNER JOIN stock_items si ON si.id = sm.stock_item_id
+             INNER JOIN users u ON u.id = sm.user_id
+             LEFT JOIN roles r ON r.id = u.role_id
+             WHERE sm.restaurant_id = :restaurant_id
+               AND sm.status = "VALIDE"
+               AND sm.created_at >= :start_at AND sm.created_at < :end_at' . $extra . '
+             GROUP BY sm.user_id, si.id, si.name, sm.movement_type
+             ORDER BY u.full_name ASC, product_name ASC'
+        );
+        $lineStatement->execute([
+            'restaurant_id' => $restaurantId,
+            'start_at' => $startAt->format('Y-m-d H:i:s'),
+            'end_at' => $endAt->format('Y-m-d H:i:s'),
+        ]);
+        $lineRows = $lineStatement->fetchAll(PDO::FETCH_ASSOC);
+        $linesByUser = [];
+        foreach ($lineRows as $lr) {
+            $uid = (int) ($lr['user_id'] ?? 0);
+            if (!isset($linesByUser[$uid])) {
+                $linesByUser[$uid] = [];
+            }
+            $linesByUser[$uid][] = [
+                'product_name' => (string) ($lr['product_name'] ?? ''),
+                'movement_type' => (string) ($lr['movement_type'] ?? ''),
+                'line_count' => (int) ($lr['line_count'] ?? 0),
+                'qty_sum' => (float) ($lr['qty_sum'] ?? 0),
+            ];
+        }
+
+        $byUser = [];
+        $grandMov = 0;
+        foreach ($aggRows as $row) {
+            $uid = (int) ($row['user_id'] ?? 0);
+            if (!isset($byUser[$uid])) {
+                $byUser[$uid] = [
+                    'user_id' => $uid,
+                    'full_name' => (string) ($row['full_name'] ?? ''),
+                    'role_code' => (string) ($row['role_code'] ?? ''),
+                    'entrees_lines' => 0,
+                    'sorties_lines' => 0,
+                    'pertes_lines' => 0,
+                    'retours_lines' => 0,
+                    'autres_lines' => 0,
+                    'entrees_qty' => 0.0,
+                    'sorties_qty' => 0.0,
+                    'pertes_qty' => 0.0,
+                    'retours_qty' => 0.0,
+                    'autres_qty' => 0.0,
+                    'total_movements' => 0,
+                    'product_lines' => $linesByUser[$uid] ?? [],
+                ];
+            }
+            $type = (string) ($row['movement_type'] ?? '');
+            $lc = (int) ($row['line_count'] ?? 0);
+            $qs = (float) ($row['qty_sum'] ?? 0);
+            $byUser[$uid]['total_movements'] += $lc;
+            $grandMov += $lc;
+            if ($type === 'ENTREE') {
+                $byUser[$uid]['entrees_lines'] += $lc;
+                $byUser[$uid]['entrees_qty'] += $qs;
+            } elseif ($type === 'PERTE') {
+                $byUser[$uid]['pertes_lines'] += $lc;
+                $byUser[$uid]['pertes_qty'] += $qs;
+            } elseif ($type === 'RETOUR_STOCK') {
+                $byUser[$uid]['retours_lines'] += $lc;
+                $byUser[$uid]['retours_qty'] += $qs;
+            } elseif ($type === 'SORTIE_CUISINE' || $type === 'SORTIE' || $type === 'CONSOMMATION_CUISINE') {
+                $byUser[$uid]['sorties_lines'] += $lc;
+                $byUser[$uid]['sorties_qty'] += $qs;
+            } else {
+                $byUser[$uid]['autres_lines'] += $lc;
+                $byUser[$uid]['autres_qty'] += $qs;
+            }
+        }
+
+        foreach ($byUser as &$p) {
+            foreach (['entrees_qty', 'sorties_qty', 'pertes_qty', 'retours_qty', 'autres_qty'] as $k) {
+                $p[$k] = round((float) $p[$k], 2);
+            }
+        }
+        unset($p);
+
+        return ['people' => array_values($byUser), 'grand_total_movements' => $grandMov];
     }
 
     private function alertRules(): array

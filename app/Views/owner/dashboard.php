@@ -66,6 +66,21 @@ $decisionBadgeClass = static function (?string $status): string {
     <article class="card stat"><span>Paiement</span><strong><?= e(subscription_payment_label($subscription['payment_status'] ?? null)) ?></strong></article>
 </section>
 
+<?php if (!empty($report_detail_summary) && !empty($can_access_reports)): ?>
+<section class="card" style="padding:20px; margin-bottom:24px;">
+    <details class="compact-card" data-autoclose-details>
+        <summary><strong>Résumé rapports détaillés (jour courant)</strong></summary>
+        <p class="muted" style="margin-top:12px;"><?= e((string) ($report_detail_summary['period_label'] ?? '')) ?> — <?= e((string) ($report_detail_summary['date'] ?? '')) ?>. Les détails par produit et par personne sont dans le rapport, repliables pour rester lisibles sur téléphone.</p>
+        <ul style="line-height:1.75; margin:12px 0 0; padding-left:20px;">
+            <li><strong>Ventes</strong> : <?= e((string) ($report_detail_summary['sales_server_count'] ?? 0)) ?> serveur(s) avec lignes · <?= e(format_money((float) ($report_detail_summary['sales_grand_total'] ?? 0), $restaurantCurrency)) ?></li>
+            <li><strong>Cuisine</strong> : <?= e((string) ($report_detail_summary['kitchen_cook_count'] ?? 0)) ?> cuisinier(s) · <?= e((string) ($report_detail_summary['kitchen_grand_qty'] ?? 0)) ?> unités · <?= e(format_money((float) ($report_detail_summary['kitchen_grand_value'] ?? 0), $restaurantCurrency)) ?></li>
+            <li><strong>Stock</strong> : <?= e((string) ($report_detail_summary['stock_people_count'] ?? 0)) ?> responsable(s) · <?= e((string) ($report_detail_summary['stock_grand_movements'] ?? 0)) ?> mouvements validés</li>
+        </ul>
+        <p style="margin:14px 0 0;"><a href="/rapport" class="button-muted">Ouvrir le rapport complet</a></p>
+    </details>
+</section>
+<?php endif; ?>
+
 <?php
 $restaurantAccessUrl = restaurant_generated_access_url($restaurant);
 $restaurantRegisterUrl = restaurant_generated_registration_url($restaurant);

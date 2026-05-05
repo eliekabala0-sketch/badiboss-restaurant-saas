@@ -98,6 +98,8 @@ final class DashboardController
         $settings = Container::getInstance()->get('platformSettings')->listSystemSettings();
         $incidentService = Container::getInstance()->get('incidentService');
 
+        $canAccessReports = can_access('reports.view');
+
         view('owner/dashboard', [
             'title' => 'Tableau de bord restaurant',
             'user' => $_SESSION['user'],
@@ -113,7 +115,10 @@ final class DashboardController
             'can_access_kitchen' => can_access('kitchen.view'),
             'can_access_sales' => can_access('sales.view'),
             'can_access_cash' => can_access('cash.view'),
-            'can_access_reports' => can_access('reports.view'),
+            'can_access_reports' => $canAccessReports,
+            'report_detail_summary' => $canAccessReports
+                ? Container::getInstance()->get('reportService')->reportDetailSummaryForDashboard($restaurantId)
+                : null,
             'flash_success' => flash('success'),
             'flash_error' => flash('error'),
         ]);
