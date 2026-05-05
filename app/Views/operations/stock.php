@@ -9,8 +9,57 @@ $activePreviewLimit = 5;
 $restaurantCurrency = restaurant_currency($restaurant);
 $restaurantLogo = restaurant_media_url_or_default($restaurant['logo_url'] ?? null, 'logo');
 $kitchenStockRequestItemsByRequest = $kitchen_stock_request_items_by_request ?? [];
+$stockCategoryFilter = $stock_category_filter ?? 'all';
+$stockCategoryLabels = $stock_category_labels ?? [];
+$stockItemIdsForFilter = $stock_item_ids_for_filter ?? null;
 $stock_movement_display_limit = 150;
-$stock_movement_history = array_slice($movements, 0, $stock_movement_display_limit);
+$movements_display = $movements_display ?? $movements;
+$stock_movement_history = array_slice($movements_display, 0, $stock_movement_display_limit);
+
+$itemsForLevels = $items;
+if ($stockItemIdsForFilter !== null) {
+    if ($stockItemIdsForFilter === []) {
+        $itemsForLevels = [];
+    } else {
+        $idSetLevels = array_flip($stockItemIdsForFilter);
+        $itemsForLevels = array_values(array_filter(
+            $items,
+            static fn (array $it): bool => isset($idSetLevels[(int) $it['id']])
+        ));
+    }
+}
+
+$movementHistoryGroups = [];
+foreach ($stock_movement_history as $m) {
+    try {
+        $entryDate = new DateTimeImmutable((string) ($m['created_at'] ?? 'now'), $historyTimezone);
+    } catch (\Throwable) {
+        continue;
+    }
+    $groupKey = $entryDate->format('Y-m-d');
+    if (!isset($movementHistoryGroups[$groupKey])) {
+        $movementHistoryGroups[$groupKey] = [
+            'label' => $groupKey === $todayDate ? 'Aujourd hui' : ($groupKey === $yesterdayDate ? 'Hier' : $entryDate->format('d/m/Y')),
+            'dom_id' => 'stock_movehist_' . str_replace('-', '_', $groupKey),
+            'rows' => [],
+        ];
+    }
+    $movementHistoryGroups[$groupKey]['rows'][] = $m;
+}
+uksort($movementHistoryGroups, static fn (string $a, string $b): int => strcmp($b, $a));
+
+$stockFilterHref = static function (string $token): string {
+    if ($token === 'all') {
+        return '/stock';
+    }
+
+    return '/stock?stock_cat=' . rawurlencode($token);
+};
+
+$printStockHref = '/stock?print=1';
+if ($stockCategoryFilter !== 'all' && $stockCategoryFilter !== '') {
+    $printStockHref .= '&stock_cat=' . rawurlencode($stockCategoryFilter);
+}
 
 $stockRequestCases = array_values(array_filter(
     $cases,
@@ -89,6 +138,28 @@ usort($waitingRequests, $sortRequests);
 usort($processingRequests, $sortRequests);
 usort($readyRequests, $sortRequests);
 usort($managerCases, static fn (array $left, array $right): int => strcmp((string) ($right['created_at'] ?? ''), (string) ($left['created_at'] ?? '')));
+
+if ($stockItemIdsForFilter !== null) {
+    $idSetStockFilter = array_flip($stockItemIdsForFilter);
+    $closedRequests = array_values(array_filter(
+        $closedRequests,
+        static function (array $req) use ($idSetStockFilter, $kitchenStockRequestItemsByRequest): bool {
+            foreach ($kitchenStockRequestItemsByRequest[(int) ($req['id'] ?? 0)] ?? [] as $line) {
+                if (isset($idSetStockFilter[(int) ($line['stock_item_id'] ?? 0)])) {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+    ));
+    $managerCases = array_values(array_filter(
+        $managerCases,
+        static function (array $case) use ($idSetStockFilter): bool {
+            return isset($idSetStockFilter[(int) ($case['stock_item_id'] ?? 0)]);
+        }
+    ));
+}
 
 $historyEntries = [];
 foreach ($closedRequests as $request) {
@@ -194,12 +265,37 @@ $priorityBadgeClass = static function (?string $priority): string {
 <section class="card no-print" style="padding:18px; margin-bottom:24px;">
     <div class="toolbar-actions">
         <button type="button" onclick="window.print()">Imprimer</button>
-        <a href="/stock?print=1" class="button-muted" target="_blank" rel="noopener noreferrer">Export imprimable / PDF navigateur</a>
+        <a href="<?= e($printStockHref) ?>" class="button-muted" target="_blank" rel="noopener noreferrer">Export imprimable / PDF navigateur</a>
     </div>
 </section>
 
 <?php if (!empty($flash_success)): ?><div class="flash-ok"><?= e($flash_success) ?></div><?php endif; ?>
 <?php if (!empty($flash_error)): ?><div class="flash-bad"><?= e($flash_error) ?></div><?php endif; ?>
+
+<details class="compact-card no-print" style="margin-bottom:20px;">
+    <summary><strong>Filtrer par catégorie</strong><?php if ($stockCategoryFilter !== 'all' && $stockCategoryFilter !== ''): ?> <span class="muted">(actif)</span><?php endif; ?></summary>
+    <div style="padding:14px 0 4px;">
+        <p class="muted" style="margin-top:0;">Filtre les <strong>niveaux de stock</strong>, l&rsquo;<strong>historique clôture</strong> (lignes concernées) et l&rsquo;<strong>historique mouvements magasin</strong>. Les formulaires et la file des demandes cuisine restent inchangés.</p>
+        <div style="display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-bottom:12px;">
+            <a class="button-muted" href="<?= e($stockFilterHref('all')) ?>">Tout</a>
+            <a class="button-muted" href="<?= e($stockFilterHref('bucket_boissons')) ?>">Boissons</a>
+            <a class="button-muted" href="<?= e($stockFilterHref('bucket_cuisine')) ?>">Matières premières cuisine</a>
+            <a class="button-muted" href="<?= e($stockFilterHref('bucket_autres')) ?>">Autres catégories</a>
+            <a class="button-muted" href="<?= e($stockFilterHref('bucket_uncat')) ?>">Sans catégorie</a>
+        </div>
+        <?php if ($stockCategoryLabels !== []): ?>
+            <p class="muted" style="margin-bottom:8px;"><strong>Libellés enregistrés sur les articles</strong></p>
+            <div style="display:flex; flex-wrap:wrap; gap:8px;">
+                <?php foreach ($stockCategoryLabels as $catLabel): ?>
+                    <a class="button-muted" href="<?= e($stockFilterHref('exact:' . $catLabel)) ?>"><?= e($catLabel) ?></a>
+                <?php endforeach; ?>
+            </div>
+        <?php else: ?>
+            <p class="muted" style="margin-bottom:0;">Aucun libellé de catégorie sur les articles pour le moment — utilisez les familles ci-dessus ou renseignez la catégorie à la création d&rsquo;article.</p>
+        <?php endif; ?>
+    </div>
+</details>
+
 <section class="card" style="padding:18px; margin-bottom:24px;">
     <div class="menu-thumb">
         <img src="<?= e($restaurantLogo) ?>" alt="Logo restaurant">
@@ -542,8 +638,8 @@ $priorityBadgeClass = static function (?string $priority): string {
 
 <section class="card" style="margin-top:24px;">
     <div style="padding:22px 22px 10px;">
-        <h2 style="margin:0;">Historique cloture</h2>
-        <p class="muted" style="margin:6px 0 0;">Aujourd hui reste visible par defaut. Les jours precedents sont replies et la journee peut etre etendue avec Voir plus.</p>
+        <h2 style="margin:0;">Historique clôture</h2>
+        <p class="muted" style="margin:6px 0 0;">Par jour (Aujourd hui, Hier, date) — blocs repliés par défaut. Dépliez une journée ou utilisez Voir plus pour les longues listes.</p>
     </div>
 
     <?php if ($historyGroups === []): ?>
@@ -553,7 +649,7 @@ $priorityBadgeClass = static function (?string $priority): string {
     <?php else: ?>
         <?php foreach ($historyGroups as $group): ?>
             <?php $entries = $group['entries']; ?>
-            <details style="padding:0 22px 18px;">
+            <details class="compact-card" style="padding:0 22px 18px;">
                 <summary style="cursor:pointer; list-style:none; padding:14px 0; border-top:1px solid var(--line); display:flex; justify-content:space-between; gap:12px; align-items:center;">
                     <span>
                         <strong><?= e($group['label']) ?></strong>
@@ -598,11 +694,13 @@ $priorityBadgeClass = static function (?string $priority): string {
 </section>
 
 <section class="card" style="margin-top:24px;">
-    <div style="padding:22px 22px 10px;">
-        <h2 style="margin:0;">Niveaux de stock</h2>
-        <p class="muted" style="margin:6px 0 0;">Lecture rapide des quantites disponibles et des sorties encore provisoires.</p>
-    </div>
-    <div class="table-wrap">
+    <details class="compact-card" style="padding:0;">
+        <summary style="cursor:pointer; list-style:none; padding:22px 22px 18px;">
+            <h2 style="margin:0; display:inline;">Niveaux de stock</h2>
+            <span class="muted"> · <?= e((string) count($itemsForLevels)) ?> article(s)</span>
+            <p class="muted" style="margin:8px 0 0;">Lecture rapide des quantites disponibles et des sorties encore provisoires.</p>
+        </summary>
+    <div class="table-wrap" style="padding:0 22px 22px;">
         <table>
             <thead>
             <tr>
@@ -616,7 +714,7 @@ $priorityBadgeClass = static function (?string $priority): string {
             </tr>
             </thead>
             <tbody>
-            <?php foreach ($items as $item): ?>
+            <?php foreach ($itemsForLevels as $item): ?>
                 <tr>
                     <td>
                         <strong><?= e($item['name']) ?></strong><br>
@@ -653,7 +751,11 @@ $priorityBadgeClass = static function (?string $priority): string {
             <?php endforeach; ?>
             </tbody>
         </table>
+        <?php if ($itemsForLevels === []): ?>
+            <p class="muted" style="margin:0;">Aucun article dans ce filtre.</p>
+        <?php endif; ?>
     </div>
+    </details>
 </section>
 
 <section class="card" style="padding:24px; margin-top:24px;" id="historique_mouvements_magasin">
@@ -661,49 +763,68 @@ $priorityBadgeClass = static function (?string $priority): string {
     <p class="muted">
         Stock physique cumulé : avant / variation (magasin) / après pour les mouvements qui modifient l’article en magasin.
         Les sorties cuisine provisoires et la consommation en cuisine ne changent pas ce solde (variation = 0 ici).
-        <?php if (count($movements) > $stock_movement_display_limit): ?>
+        <?php if (count($movements_display) > $stock_movement_display_limit): ?>
+            Affichage des <?= e((string) $stock_movement_display_limit) ?> plus recents sur <?= e((string) count($movements_display)) ?> (filtre appliqué).
+        <?php elseif (count($movements) > $stock_movement_display_limit): ?>
             Affichage des <?= e((string) $stock_movement_display_limit) ?> plus recents sur <?= e((string) count($movements)) ?>.
         <?php endif; ?>
     </p>
-    <?php if ($movements === []): ?>
-        <p class="muted">Aucun mouvement enregistre pour ce restaurant.</p>
+    <?php if ($stock_movement_history === []): ?>
+        <p class="muted">Aucun mouvement enregistre pour ce restaurant<?= $stockCategoryFilter !== 'all' && $stockCategoryFilter !== '' ? ' dans ce filtre' : '' ?>.</p>
     <?php else: ?>
-        <div class="table-wrap">
-            <table>
-                <thead>
-                <tr>
-                    <th>Date</th>
-                    <th>Produit</th>
-                    <th>Type</th>
-                    <th>Qté saisie</th>
-                    <th>Δ magasin</th>
-                    <th>Avant</th>
-                    <th>Après</th>
-                    <th>Statut</th>
-                    <th>Auteur</th>
-                    <th>Validateur</th>
-                    <th>Note</th>
-                </tr>
-                </thead>
-                <tbody>
-                <?php foreach ($stock_movement_history as $m): ?>
-                    <tr>
-                        <td><?= e(format_date_fr($m['created_at'] ?? null, $historyTimezone)) ?></td>
-                        <td><strong><?= e((string) ($m['stock_item_name'] ?? '-')) ?></strong><br><span class="muted"><?= e((string) ($m['unit_name'] ?? '')) ?></span></td>
-                        <td><?= e(movement_type_label((string) ($m['movement_type'] ?? ''))) ?></td>
-                        <td><?= e((string) ($m['quantity'] ?? 0)) ?></td>
-                        <td><?= e((string) ($m['quantity_delta_physical'] ?? 0)) ?></td>
-                        <td><?= e((string) ($m['quantity_before_physical'] ?? '-')) ?></td>
-                        <td><?= e((string) ($m['quantity_after_physical'] ?? '-')) ?></td>
-                        <td><?= e(validation_status_label($m['status'] ?? null)) ?></td>
-                        <td><?= e(named_actor_label($m['user_name'] ?? null, $m['user_role_code'] ?? null)) ?></td>
-                        <td><?= e(named_actor_label($m['validated_by_name'] ?? null, $m['validated_by_role_code'] ?? null)) ?></td>
-                        <td style="min-width:180px;"><?= e((string) (($m['note'] ?? '') !== '' ? $m['note'] : '-')) ?></td>
-                    </tr>
-                <?php endforeach; ?>
-                </tbody>
-            </table>
-        </div>
+        <?php foreach ($movementHistoryGroups as $mgroup): ?>
+            <?php $mrows = $mgroup['rows']; ?>
+            <details class="compact-card" style="margin-bottom:8px;">
+                <summary style="cursor:pointer; list-style:none; padding:12px 0; border-top:1px solid var(--line); display:flex; justify-content:space-between; gap:12px; align-items:center;">
+                    <span>
+                        <strong><?= e($mgroup['label']) ?></strong>
+                        <span class="muted"> · <?= e((string) count($mrows)) ?> mouvement(s)</span>
+                    </span>
+                    <span class="muted">Mouvements</span>
+                </summary>
+                <div class="table-wrap" style="margin-top:8px;">
+                    <table>
+                        <thead>
+                        <tr>
+                            <th>Date</th>
+                            <th>Produit</th>
+                            <th>Type</th>
+                            <th>Qté saisie</th>
+                            <th>Δ magasin</th>
+                            <th>Avant</th>
+                            <th>Après</th>
+                            <th>Statut</th>
+                            <th>Auteur</th>
+                            <th>Validateur</th>
+                            <th>Note</th>
+                        </tr>
+                        </thead>
+                        <tbody>
+                        <?php foreach ($mrows as $idx => $m): ?>
+                            <tr class="<?= $idx >= $historyPreviewLimit ? 'history-extra' : '' ?>" data-history-group="<?= e($mgroup['dom_id']) ?>" <?= $idx >= $historyPreviewLimit ? 'style="display:none;"' : '' ?>>
+                                <td><?= e(format_date_fr($m['created_at'] ?? null, $historyTimezone)) ?></td>
+                                <td><strong><?= e((string) ($m['stock_item_name'] ?? '-')) ?></strong><br><span class="muted"><?= e((string) ($m['unit_name'] ?? '')) ?></span><?php $cl = trim((string) ($m['stock_item_category_label'] ?? '')); if ($cl !== ''): ?><br><span class="muted"><?= e($cl) ?></span><?php endif; ?></td>
+                                <td><?= e(movement_type_label((string) ($m['movement_type'] ?? ''))) ?></td>
+                                <td><?= e((string) ($m['quantity'] ?? 0)) ?></td>
+                                <td><?= e((string) ($m['quantity_delta_physical'] ?? 0)) ?></td>
+                                <td><?= e((string) ($m['quantity_before_physical'] ?? '-')) ?></td>
+                                <td><?= e((string) ($m['quantity_after_physical'] ?? '-')) ?></td>
+                                <td><?= e(validation_status_label($m['status'] ?? null)) ?></td>
+                                <td><?= e(named_actor_label($m['user_name'] ?? null, $m['user_role_code'] ?? null)) ?></td>
+                                <td><?= e(named_actor_label($m['validated_by_name'] ?? null, $m['validated_by_role_code'] ?? null)) ?></td>
+                                <td style="min-width:180px;"><?= e((string) (($m['note'] ?? '') !== '' ? $m['note'] : '-')) ?></td>
+                            </tr>
+                        <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                </div>
+                <?php if (count($mrows) > $historyPreviewLimit): ?>
+                    <div style="padding-top:12px;">
+                        <button type="button" data-history-toggle="<?= e($mgroup['dom_id']) ?>">Voir plus</button>
+                    </div>
+                <?php endif; ?>
+            </details>
+        <?php endforeach; ?>
     <?php endif; ?>
 </section>
 

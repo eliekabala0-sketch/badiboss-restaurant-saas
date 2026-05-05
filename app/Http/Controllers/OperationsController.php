@@ -18,11 +18,37 @@ final class OperationsController
 
         Container::getInstance()->get('salesService')->reconcileOverdueReturnsToAutomaticSales($restaurantId);
 
+        $items = Container::getInstance()->get('stockService')->listItems($restaurantId);
+        $movements = Container::getInstance()->get('stockService')->listMovementHistoryRows($restaurantId);
+        $stockCategoryFilter = trim((string) ($request->query['stock_cat'] ?? 'all'));
+        $stockItemIdsForFilter = stock_item_ids_matching_category_filter($items, $stockCategoryFilter);
+        $movementsDisplay = $stockItemIdsForFilter === null
+            ? $movements
+            : array_values(array_filter(
+                $movements,
+                static function (array $row) use ($stockItemIdsForFilter): bool {
+                    return in_array((int) ($row['stock_item_id'] ?? 0), $stockItemIdsForFilter, true);
+                }
+            ));
+        $stockCategoryLabels = [];
+        foreach ($items as $stockItemRow) {
+            $label = trim((string) ($stockItemRow['category_label'] ?? ''));
+            if ($label !== '') {
+                $stockCategoryLabels[$label] = true;
+            }
+        }
+        ksort($stockCategoryLabels, SORT_NATURAL | SORT_FLAG_CASE);
+        $stockCategoryLabels = array_keys($stockCategoryLabels);
+
         view('operations/stock', [
             'title' => 'Stock',
             'restaurant' => Container::getInstance()->get('restaurantAdmin')->findRestaurant($restaurantId),
-            'items' => Container::getInstance()->get('stockService')->listItems($restaurantId),
-            'movements' => Container::getInstance()->get('stockService')->listMovementHistoryRows($restaurantId),
+            'items' => $items,
+            'movements' => $movements,
+            'movements_display' => $movementsDisplay,
+            'stock_category_filter' => $stockCategoryFilter,
+            'stock_item_ids_for_filter' => $stockItemIdsForFilter,
+            'stock_category_labels' => $stockCategoryLabels,
             'kitchen_stock_requests' => $kitchenStockBlocks['requests'],
             'kitchen_stock_request_items_by_request' => $kitchenStockBlocks['items_by_request'],
             'correction_requests' => Container::getInstance()->get('correctionService')->listRecentForRestaurant($restaurantId, 12),

@@ -64,7 +64,7 @@ final class StockService
     {
         $this->ensureStockMovementEnum();
         $statement = $this->database->pdo()->prepare(
-            'SELECT sm.*, si.name AS stock_item_name, si.unit_name,
+            'SELECT sm.*, si.name AS stock_item_name, si.unit_name, si.category_label AS stock_item_category_label,
                     u.full_name AS user_name,
                     ur.code AS user_role_code,
                     v.full_name AS validated_by_name,

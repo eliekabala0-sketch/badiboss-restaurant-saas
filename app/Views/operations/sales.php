@@ -7,7 +7,6 @@ $closedStatuses = ['CLOTURE', 'VENDU_PARTIEL', 'VENDU_TOTAL'];
 $historyTimezone = safe_timezone($restaurant['settings']['restaurant_reports_timezone'] ?? ($restaurant['timezone'] ?? null));
 $todayDate = (new DateTimeImmutable('now', $historyTimezone))->format('Y-m-d');
 $yesterdayDate = (new DateTimeImmutable('yesterday', $historyTimezone))->format('Y-m-d');
-$autoCloseMinutes = max(15, (int) ($restaurant['settings']['restaurant_server_auto_close_minutes'] ?? 90));
 $historyPreviewLimit = 6;
 $activePreviewLimit = 6;
 $restaurantCurrency = restaurant_currency($restaurant);
@@ -433,7 +432,7 @@ foreach ($historyEntries as $entry) {
     <details class="compact-card">
         <summary><strong>Remis au serveur (à clôturer)</strong></summary>
     <h2 style="margin-top:14px;">Remis au serveur</h2>
-    <p class="muted">Ces demandes doivent etre cloturees avant toute remise caisse. Une cloture automatique reste possible apres <?= e((string) $autoCloseMinutes) ?> minutes.</p>
+    <p class="muted">Ces demandes doivent etre cloturees avant toute remise caisse. Les demandes non cloturees le soir passent en cloture automatique au passage de minuit (fuseau du restaurant), avec enregistrement de la vente comme pour une cloture manuelle.</p>
     <?php if ($remittedRequests === []): ?>
         <p class="muted">Aucune demande en attente de cloture.</p>
     <?php else: ?>

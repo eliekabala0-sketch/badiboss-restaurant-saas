@@ -901,3 +901,63 @@ function case_responsibility_label(?string $scope, ?string $responsibleName = nu
         default => (string) $scope,
     };
 }
+
+/**
+ * Regroupe le libellé catégorie stock pour filtres (heuristique métier, insensible à la casse).
+ */
+function stock_item_category_bucket(?string $categoryLabel): string
+{
+    $l = mb_strtolower(trim((string) $categoryLabel), 'UTF-8');
+    if ($l === '') {
+        return 'uncat';
+    }
+
+    if (preg_match('/\bboisson|soda|jus\b|\bvin\b|bi[eè]re|caf[eé]\b|th[eé]\b|spirit|whisky|coca|sprite|soft|liqueur|champagne|cola|energy|\beau\b/i', $l)) {
+        return 'boissons';
+    }
+
+    if (preg_match('/viande|volaille|poisson|l[eé]gume|fruit|[eé]pice|farine|huile|\briz\b|p[aâ]te|mati[eè]re|cuisine|frais|surgel|boucher|boulange|laitier|fromage|œuf|oeuf|tomate|oignon/i', $l)) {
+        return 'cuisine';
+    }
+
+    return 'autres';
+}
+
+/**
+ * @param list<array<string, mixed>> $items Lignes stock_items du restaurant
+ *
+ * @return list<int>|null null = pas de filtre (tout afficher)
+ */
+function stock_item_ids_matching_category_filter(array $items, string $filter): ?array
+{
+    $filter = trim($filter);
+    if ($filter === '' || strcasecmp($filter, 'all') === 0) {
+        return null;
+    }
+
+    if (str_starts_with($filter, 'exact:')) {
+        $label = rawurldecode(substr($filter, 6));
+        $ids = [];
+        foreach ($items as $it) {
+            if (trim((string) ($it['category_label'] ?? '')) === $label) {
+                $ids[] = (int) $it['id'];
+            }
+        }
+
+        return array_values(array_unique($ids));
+    }
+
+    if (str_starts_with($filter, 'bucket_')) {
+        $bucket = substr($filter, 7);
+        $ids = [];
+        foreach ($items as $it) {
+            if (stock_item_category_bucket($it['category_label'] ?? null) === $bucket) {
+                $ids[] = (int) $it['id'];
+            }
+        }
+
+        return array_values(array_unique($ids));
+    }
+
+    return null;
+}

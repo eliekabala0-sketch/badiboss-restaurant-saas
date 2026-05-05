@@ -281,10 +281,7 @@ final class SalesService
     public function reconcileOverdueServerClosures(int $restaurantId): int
     {
         $timezone = $this->restaurantTimezone($restaurantId);
-        $settings = Container::getInstance()->get('platformSettings')->restaurantSettings($restaurantId);
-        $autoCloseMinutes = max(15, (int) ($settings['restaurant_server_auto_close_minutes'] ?? 90));
         $now = new DateTimeImmutable('now', $timezone);
-        $cutoff = $now->modify('-' . $autoCloseMinutes . ' minutes')->format('Y-m-d H:i:s');
         $todayStart = $now->setTime(0, 0, 0)->format('Y-m-d H:i:s');
 
         $statement = $this->database->pdo()->prepare(
@@ -293,15 +290,11 @@ final class SalesService
              WHERE restaurant_id = :restaurant_id
                AND status = "REMIS_SERVEUR"
                AND total_supplied_amount > 0
-               AND (
-                    COALESCE(received_at, supplied_at, updated_at, created_at) <= :cutoff
-                    OR COALESCE(received_at, supplied_at, updated_at, created_at) < :today_start
-               )
+               AND COALESCE(received_at, supplied_at, updated_at, created_at) < :today_start
              ORDER BY COALESCE(received_at, supplied_at, updated_at, created_at) ASC, id ASC'
         );
         $statement->execute([
             'restaurant_id' => $restaurantId,
-            'cutoff' => $cutoff,
             'today_start' => $todayStart,
         ]);
 
@@ -315,7 +308,7 @@ final class SalesService
         foreach ($statement->fetchAll(PDO::FETCH_ASSOC) as $row) {
             $this->closeServerRequest($restaurantId, (int) $row['id'], [
                 'sale_type' => 'SUR_PLACE',
-                'note' => 'Clôture automatique après remise au serveur.',
+                'note' => 'Clôture automatique au changement de jour (minuit, fuseau du restaurant).',
                 'closure_mode' => 'auto',
             ], $systemActor, true);
             $count++;
