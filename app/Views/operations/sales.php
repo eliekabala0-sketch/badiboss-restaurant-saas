@@ -323,7 +323,9 @@ foreach ($historyEntries as $entry) {
 </section>
 
 <section class="card" style="padding:22px; margin-top:24px;">
-    <h2 style="margin-top:0;">Remise caisse pratique</h2>
+    <details class="compact-card">
+        <summary><strong>Remise caisse pratique</strong></summary>
+    <h2 style="margin-top:14px;">Remise caisse pratique</h2>
     <p class="muted">Le service ne saisit jamais un montant libre. Chaque remise vient d une vente deja cloturee et chaque vente ne peut etre remise qu une seule fois.</p>
 
     <?php if ($pendingCashRemittances === [] && $remittedRequests === []): ?>
@@ -424,10 +426,13 @@ foreach ($historyEntries as $entry) {
             <?php endforeach; ?>
         </div>
     <?php endif; ?>
+    </details>
 </section>
 
 <section class="card" style="padding:22px; margin-top:24px;">
-    <h2 style="margin-top:0;">Remis au serveur</h2>
+    <details class="compact-card">
+        <summary><strong>Remis au serveur (à clôturer)</strong></summary>
+    <h2 style="margin-top:14px;">Remis au serveur</h2>
     <p class="muted">Ces demandes doivent etre cloturees avant toute remise caisse. Une cloture automatique reste possible apres <?= e((string) $autoCloseMinutes) ?> minutes.</p>
     <?php if ($remittedRequests === []): ?>
         <p class="muted">Aucune demande en attente de cloture.</p>
@@ -513,6 +518,7 @@ foreach ($historyEntries as $entry) {
             </div>
         <?php endif; ?>
     <?php endif; ?>
+    </details>
 </section>
 
 <template id="server-order-line-template">
@@ -672,7 +678,9 @@ foreach ($historyEntries as $entry) {
 </script>
 
 <section class="card" style="padding:22px; margin-top:24px;">
-    <h2 style="margin-top:0;">Signaler un retour ou une casse</h2>
+    <details class="compact-card">
+        <summary><strong>Signaler retour / casse / incident</strong></summary>
+    <h2 style="margin-top:14px;">Signaler un retour ou une casse</h2>
     <p class="muted">Le service declare le cas ici. Toute decision manager reste centralisee dans le tableau de bord /owner.</p>
     <?php if (can_access('sales.incident.signal')): ?>
         <form method="post" action="/ventes/incidents">
@@ -697,12 +705,15 @@ foreach ($historyEntries as $entry) {
     <?php else: ?>
         <p class="muted">Signalement reserve au service terrain.</p>
     <?php endif; ?>
+    </details>
 </section>
 
 <section class="card" style="margin-top:24px;">
-    <div style="padding:22px 22px 10px;">
+    <details class="compact-card" style="padding:0;">
+        <summary style="padding:22px 22px 10px; cursor:pointer; list-style:none;"><strong>Historique du service</strong></summary>
+    <div style="padding:0 22px 10px;">
         <h2 style="margin:0;">Historique du service</h2>
-        <p class="muted" style="margin:6px 0 0;">Le jour courant reste ouvert. Les jours precedents restent replies pour eviter l encombrement.</p>
+        <p class="muted" style="margin:6px 0 0;">Groupé par jour (Aujourd’hui, Hier, date). Ouvrez un bloc pour le détail. Utilisez « Voir plus » pour les longues listes.</p>
     </div>
 
     <?php if ($historyGroups === []): ?>
@@ -712,7 +723,7 @@ foreach ($historyEntries as $entry) {
     <?php else: ?>
         <?php foreach ($historyGroups as $group): ?>
             <?php $entries = $group['entries']; ?>
-            <details <?= $group['is_current'] ? 'open' : '' ?> style="padding:0 22px 18px;">
+            <details style="padding:0 22px 18px;">
                 <summary style="cursor:pointer; list-style:none; padding:14px 0; border-top:1px solid var(--line); display:flex; justify-content:space-between; gap:12px; align-items:center;">
                     <span>
                         <strong><?= e($group['label']) ?></strong>
@@ -754,6 +765,7 @@ foreach ($historyEntries as $entry) {
             </details>
         <?php endforeach; ?>
     <?php endif; ?>
+    </details>
 </section>
 
 <?php if ($sales !== []): ?>

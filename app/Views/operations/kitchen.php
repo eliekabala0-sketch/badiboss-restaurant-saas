@@ -375,7 +375,9 @@ $stockBadgeClass = static function (?string $status): string {
 </section>
 
 <section class="card" style="padding:22px; margin-top:24px;">
-    <h2 style="margin-top:0;">Matieres premieres disponibles en cuisine</h2>
+    <details class="compact-card">
+        <summary><strong>Matières en cuisine (stock disponible)</strong></summary>
+    <h2 style="margin-top:14px;">Matieres premieres disponibles en cuisine</h2>
     <?php if (($kitchen_inventory ?? []) === []): ?>
         <p class="muted">Aucune matiere premiere disponible en cuisine pour le moment. Demandez au stock si necessaire.</p>
     <?php else: ?>
@@ -408,10 +410,13 @@ $stockBadgeClass = static function (?string $status): string {
             </table>
         </div>
     <?php endif; ?>
+    </details>
 </section>
 
 <section class="card" style="padding:22px; margin-top:24px;">
-    <h2 style="margin-top:0;">Évolution matières (réceptions et utilisations)</h2>
+    <details class="compact-card">
+        <summary><strong>Évolution matières (reçu / utilisé / contexte)</strong></summary>
+    <h2 style="margin-top:14px;">Évolution matières (réceptions et utilisations)</h2>
     <p class="muted" style="margin-bottom:0;">
         Chaque ligne retrace une réception validée depuis le stock ou une matière consommée pour une production, avec l’auteur et le plat menu lié lorsque le système le connaît déjà.
         Le tableau « Disponible » ci-dessus reflète le stock cuisine actuel après ces flux.
@@ -455,6 +460,7 @@ $stockBadgeClass = static function (?string $status): string {
             </table>
         </div>
     <?php endif; ?>
+    </details>
 </section>
 
 <section class="card" style="padding:22px; margin-top:24px;">
@@ -515,6 +521,9 @@ $stockBadgeClass = static function (?string $status): string {
                                 </thead>
                                 <tbody>
                                 <?php foreach ($serverItems as $index => $item): ?>
+                                    <?php
+                                    $lineIsBeverage = menu_line_is_beverage($item['menu_category_name'] ?? null, $item['menu_category_slug'] ?? null);
+                                    ?>
                                     <tr class="<?= $index >= $activePreviewLimit ? 'history-extra' : '' ?>" data-history-group="<?= e($serverGroupId) ?>" <?= $index >= $activePreviewLimit ? 'style="display:none;"' : '' ?>>
                                         <td><?= e(format_date_fr($item['request_created_at'] ?? $item['created_at'], $historyTimezone)) ?></td>
                                         <td><?= e((string) ($item['service_reference'] ?: '-')) ?></td>
@@ -532,6 +541,16 @@ $stockBadgeClass = static function (?string $status): string {
                                         <td style="min-width:180px;"><?= e((string) ($item['request_note'] ?: '-')) ?></td>
                                         <td style="min-width:220px;">
                                             <?php if (can_access('kitchen.request.fulfill')): ?>
+                                                <?php if ($lineIsBeverage): ?>
+                                                    <p class="muted" style="margin:0 0 8px;">Boisson : débit stock cuisine au « prêt ». Pas de plat préparé à déclarer.</p>
+                                                    <form method="post" action="/cuisine/demandes-serveur/<?= e((string) $item['id']) ?>/fourni">
+                                                        <label>Quantité servie</label>
+                                                        <div class="quantity-stepper" data-quantity-stepper><button type="button" data-stepper-minus>-</button><input name="supplied_quantity" value="<?= e((string) ((float) $item['supplied_quantity'] > 0 ? (float) $item['supplied_quantity'] : (float) $item['requested_quantity'])) ?>" min="0" step="1"><button type="button" data-stepper-plus>+</button></div>
+                                                        <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:10px;">
+                                                            <button type="submit" name="workflow_stage" value="PRET_A_SERVIR">Marquer prêt (boisson)</button>
+                                                        </div>
+                                                    </form>
+                                                <?php else: ?>
                                                 <form method="post" action="/cuisine/demandes-serveur/<?= e((string) $item['id']) ?>/fourni">
                                                     <label>Quantite preparee</label>
                                                     <div class="quantity-stepper" data-quantity-stepper><button type="button" data-stepper-minus>-</button><input name="supplied_quantity" value="<?= e((string) ((float) $item['supplied_quantity'] > 0 ? (float) $item['supplied_quantity'] : (float) $item['requested_quantity'])) ?>" min="0" step="1"><button type="button" data-stepper-plus>+</button></div>
@@ -540,6 +559,7 @@ $stockBadgeClass = static function (?string $status): string {
                                                         <button type="submit" name="workflow_stage" value="PRET_A_SERVIR">Marquer pret</button>
                                                     </div>
                                                 </form>
+                                                <?php endif; ?>
                                             <?php else: ?>
                                                 <span class="muted">Lecture seule.</span>
                                             <?php endif; ?>
@@ -695,7 +715,7 @@ $stockBadgeClass = static function (?string $status): string {
         <div style="padding:0 22px 22px;" class="section-stack">
             <?php foreach ($activeStockRequests as $index => $request): ?>
                 <?php $requestItems = $kitchenStockRequestItemsByRequest[(int) $request['id']] ?? []; ?>
-                <details class="<?= $index >= $activePreviewLimit ? 'history-extra' : '' ?>" data-history-group="kitchen_active_stock" <?= $index >= $activePreviewLimit ? 'style="display:none;"' : '' ?> open style="border-top:1px solid var(--line); padding-top:16px;">
+                <details class="<?= $index >= $activePreviewLimit ? 'history-extra' : '' ?>" data-history-group="kitchen_active_stock" <?= $index >= $activePreviewLimit ? 'style="display:none;"' : '' ?> style="border-top:1px solid var(--line); padding-top:16px;">
                     <summary style="cursor:pointer; list-style:none; display:flex; justify-content:space-between; gap:12px; align-items:flex-start;">
                         <div>
                             <strong>Demande #<?= e((string) $request['id']) ?></strong>
@@ -906,7 +926,7 @@ $stockBadgeClass = static function (?string $status): string {
     <?php else: ?>
         <?php foreach ($historyGroups as $group): ?>
             <?php $entries = $group['entries']; ?>
-            <details <?= $group['is_current'] ? 'open' : '' ?> style="padding:0 22px 18px;">
+            <details style="padding:0 22px 18px;">
                 <summary style="cursor:pointer; list-style:none; padding:14px 0; border-top:1px solid var(--line); display:flex; justify-content:space-between; gap:12px; align-items:center;">
                     <span>
                         <strong><?= e($group['label']) ?></strong>

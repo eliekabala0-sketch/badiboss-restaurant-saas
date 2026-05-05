@@ -188,7 +188,7 @@ final class KitchenService
         $requestedQuantity = (float) $item['requested_quantity'];
         $categoryName = (string) ($item['menu_category_name'] ?? '');
         $categorySlug = (string) ($item['menu_category_slug'] ?? '');
-        $isBeverage = $this->menuLineIsBeverage($categoryName, $categorySlug);
+        $isBeverage = menu_line_is_beverage($categoryName, $categorySlug);
         if ($workflowStage === 'PRET_A_SERVIR') {
             if ($isBeverage) {
                 if ($suppliedQuantity <= 0) {
@@ -197,7 +197,7 @@ final class KitchenService
                     $stockService = Container::getInstance()->get('stockService');
                     $match = $stockService->findKitchenInventoryMatchForMenuItem($restaurantId, (int) $item['menu_item_id'], $suppliedQuantity);
                     if ($match === null) {
-                        throw new \RuntimeException('Boisson indisponible en cuisine, demander au stock.');
+                        throw new \RuntimeException('Boisson indisponible en cuisine, demandez au stock.');
                     }
                     $stockService->consumeKitchenBeverageForServerItem(
                         $restaurantId,
@@ -643,17 +643,6 @@ final class KitchenService
             'total_supplied_amount' => (float) ($totals['total_supplied'] ?? 0),
             'id' => $requestId,
         ]);
-    }
-
-    private function menuLineIsBeverage(?string $categoryName, ?string $categorySlug): bool
-    {
-        $n = mb_strtolower(trim((string) $categoryName));
-        $s = mb_strtolower(trim((string) $categorySlug));
-        if ($n === 'boisson' || $s === 'boisson' || $s === 'boissons') {
-            return true;
-        }
-
-        return str_contains($n, 'boisson') || str_contains($s, 'boisson');
     }
 
     private function slugify(string $value): string

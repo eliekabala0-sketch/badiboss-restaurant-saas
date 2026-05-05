@@ -175,7 +175,9 @@ $cashiers = $cash['cashiers'] ?? [];
 </section>
 
 <section class="card" style="padding:22px; margin-top:24px;">
-    <h2 style="margin-top:0;">Historique des remises</h2>
+    <details class="compact-card">
+        <summary><strong>Historique des remises</strong></summary>
+    <h2 style="margin-top:14px;">Historique des remises</h2>
     <div class="table-wrap">
         <table>
             <thead>
@@ -236,10 +238,13 @@ $cashiers = $cash['cashiers'] ?? [];
             </tbody>
         </table>
     </div>
+    </details>
 </section>
 
 <section class="card" style="padding:22px; margin-top:24px;">
-    <h2 style="margin-top:0;">Historique des mouvements caisse</h2>
+    <details class="compact-card">
+        <summary><strong>Historique des mouvements caisse</strong></summary>
+    <h2 style="margin-top:14px;">Historique des mouvements caisse</h2>
     <div class="table-wrap">
         <table>
             <thead><tr><th>Type</th><th>Montant</th><th>Acteur</th><th>Note</th><th>Date</th></tr></thead>
@@ -256,4 +261,5 @@ $cashiers = $cash['cashiers'] ?? [];
             </tbody>
         </table>
     </div>
+    </details>
 </section>

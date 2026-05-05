@@ -612,6 +612,20 @@ function permission_description_fr(?string $permissionCode): string
     };
 }
 
+/**
+ * Ligne carte identifiée comme boisson (catégorie) — même règle que la logique cuisine / stock.
+ */
+function menu_line_is_beverage(?string $categoryName, ?string $categorySlug): bool
+{
+    $n = mb_strtolower(trim((string) $categoryName));
+    $s = mb_strtolower(trim((string) $categorySlug));
+    if ($n === 'boisson' || $s === 'boisson' || $s === 'boissons') {
+        return true;
+    }
+
+    return str_contains($n, 'boisson') || str_contains($s, 'boisson');
+}
+
 function restaurant_currency(array|int|string|null $restaurant = null): string
 {
     $candidate = null;

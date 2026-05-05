@@ -370,7 +370,7 @@ $priorityBadgeClass = static function (?string $priority): string {
             <div style="padding:0 22px 22px;" class="section-stack">
                 <?php foreach ($section['requests'] as $index => $request): ?>
                     <?php $requestItems = $kitchenStockRequestItemsByRequest[(int) $request['id']] ?? []; ?>
-                    <details class="<?= $index >= $activePreviewLimit ? 'history-extra' : '' ?>" data-history-group="<?= e($section['dom_id']) ?>" <?= $index >= $activePreviewLimit ? 'style="display:none;"' : '' ?> open style="border-top:1px solid var(--line); padding-top:16px;">
+                    <details class="<?= $index >= $activePreviewLimit ? 'history-extra' : '' ?>" data-history-group="<?= e($section['dom_id']) ?>" <?= $index >= $activePreviewLimit ? 'style="display:none;"' : '' ?> style="border-top:1px solid var(--line); padding-top:16px;">
                         <summary style="cursor:pointer; list-style:none; display:flex; justify-content:space-between; gap:12px; align-items:flex-start;">
                             <div>
                                 <strong>Demande #<?= e((string) $request['id']) ?></strong>
@@ -553,7 +553,7 @@ $priorityBadgeClass = static function (?string $priority): string {
     <?php else: ?>
         <?php foreach ($historyGroups as $group): ?>
             <?php $entries = $group['entries']; ?>
-            <details <?= $group['is_current'] ? 'open' : '' ?> style="padding:0 22px 18px;">
+            <details style="padding:0 22px 18px;">
                 <summary style="cursor:pointer; list-style:none; padding:14px 0; border-top:1px solid var(--line); display:flex; justify-content:space-between; gap:12px; align-items:center;">
                     <span>
                         <strong><?= e($group['label']) ?></strong>

@@ -82,15 +82,19 @@ $decisionBadgeClass = static function (?string $status): string {
 <?php if (!empty($report_detail_summary['activity_index']['agents'] ?? null)): ?>
 <section class="card" style="padding:20px; margin-bottom:24px;">
     <details class="compact-card" data-autoclose-details>
-        <summary><strong>Activité agents (jour courant)</strong> · parts total <?= e((string) ($report_detail_summary['activity_index']['global_percent'] ?? 0)) ?> %</summary>
+        <summary><strong>Activité (jour courant)</strong> · <?= e((string) (int) round((float) ($report_detail_summary['activity_index']['grand_total_actions'] ?? $report_detail_summary['activity_index']['total_raw_score'] ?? 0))) ?> actions</summary>
         <ul style="line-height:1.75; margin:12px 0 0; padding-left:20px;">
             <?php foreach (($report_detail_summary['activity_index']['agents'] ?? []) as $ag): ?>
-                <li><?= e(named_actor_label($ag['full_name'] ?? null, $ag['role_code'] ?? null)) ?> : <?= e((string) ($ag['activity_share_percent'] ?? $ag['activity_percent'] ?? 0)) ?> %</li>
+                <li><?= e(named_actor_label($ag['full_name'] ?? null, $ag['role_code'] ?? null)) ?> : <strong>Activité</strong> <?= e((string) ($ag['activity_share_percent'] ?? $ag['activity_percent'] ?? 0)) ?> %
+                    <span class="muted">(<?= e((string) (int) round((float) ($ag['total_actions'] ?? $ag['raw_score'] ?? 0))) ?> actions · serveur <?= e((string) (int) ($ag['server_actions'] ?? 0)) ?>, cuisine <?= e((string) (int) ($ag['kitchen_actions'] ?? 0)) ?>, stock <?= e((string) (int) ($ag['stock_actions'] ?? 0)) ?>, caisse <?= e((string) (int) ($ag['cash_actions'] ?? 0)) ?>)</span>
+                </li>
             <?php endforeach; ?>
         </ul>
         <p style="margin:14px 0 0;"><a href="/rapport" class="button-muted">Détail dans Rapport</a></p>
     </details>
 </section>
+<?php endif; ?>
+
 <?php endif; ?>
 
 <?php
