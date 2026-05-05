@@ -71,6 +71,7 @@ $router->get('/stock', [OperationsController::class, 'stock'], [AuthMiddleware::
 $router->post('/stock/items', [OperationsController::class, 'createStockItem'], [AuthMiddleware::class, StockAccessMiddleware::class]);
 $router->post('/stock/items/{id}/update', [OperationsController::class, 'updateStockItem'], [AuthMiddleware::class, StockAccessMiddleware::class]);
 $router->post('/stock/entries', [OperationsController::class, 'addStockEntry'], [AuthMiddleware::class, StockAccessMiddleware::class]);
+$router->post('/stock/mouvements-libres', [OperationsController::class, 'recordFreeStockMovement'], [AuthMiddleware::class, StockAccessMiddleware::class]);
 $router->post('/stock/sorties-cuisine', [OperationsController::class, 'sendToKitchen'], [AuthMiddleware::class, StockAccessMiddleware::class]);
 $router->post('/stock/retours', [OperationsController::class, 'validateReturnStock'], [AuthMiddleware::class, StockAccessMiddleware::class]);
 $router->post('/stock/retours-endommages', [OperationsController::class, 'signalDamagedStockReturn'], [AuthMiddleware::class, StockAccessMiddleware::class]);

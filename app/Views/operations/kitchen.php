@@ -11,6 +11,7 @@ $restaurantCurrency = restaurant_currency($restaurant);
 $restaurantLogo = restaurant_media_url_or_default($restaurant['logo_url'] ?? null, 'logo');
 $serverRequestHistoryItems = $server_request_history_items ?? [];
 $kitchenStockRequestItemsByRequest = $kitchen_stock_request_items_by_request ?? [];
+$kitchen_evolution = $kitchen_evolution ?? [];
 
 $normalizeServiceItemStatus = static function (array $item): string {
     $status = (string) ($item['status'] ?: $item['request_status']);
@@ -387,6 +388,53 @@ $stockBadgeClass = static function (?string $status): string {
                         <td><?= e((string) ($inventoryItem['stock_item_name'] ?? '-')) ?></td>
                         <td><?= e((string) ($inventoryItem['quantity_available'] ?? 0)) ?></td>
                         <td><?= e((string) ($inventoryItem['unit_name'] ?? '')) ?></td>
+                    </tr>
+                <?php endforeach; ?>
+                </tbody>
+            </table>
+        </div>
+    <?php endif; ?>
+</section>
+
+<section class="card" style="padding:22px; margin-top:24px;">
+    <h2 style="margin-top:0;">Évolution matières (réceptions et utilisations)</h2>
+    <p class="muted" style="margin-bottom:0;">
+        Chaque ligne retrace une réception validée depuis le stock ou une matière consommée pour une production, avec l’auteur et le plat menu lié lorsque le système le connaît déjà.
+        Le tableau « Disponible » ci-dessus reflète le stock cuisine actuel après ces flux.
+    </p>
+    <?php if ($kitchen_evolution === []): ?>
+        <p class="muted" style="margin-top:14px;">Aucun mouvement cuisine récent à afficher (réceptions ou productions avec matières).</p>
+    <?php else: ?>
+        <div class="table-wrap" style="margin-top:14px;">
+            <table>
+                <thead>
+                <tr>
+                    <th>Date</th>
+                    <th>Type</th>
+                    <th>Matière</th>
+                    <th>Quantité</th>
+                    <th>Plat / contexte</th>
+                    <th>Par</th>
+                    <th>Note</th>
+                </tr>
+                </thead>
+                <tbody>
+                <?php foreach ($kitchen_evolution as $row): ?>
+                    <tr>
+                        <td><?= e(format_date_fr($row['occurred_at'] ?? null, $historyTimezone)) ?></td>
+                        <td><?= e((string) ($row['ev_kind'] ?? '') === 'reception' ? 'Reçu du stock' : 'Utilisé (production)') ?></td>
+                        <td><strong><?= e((string) ($row['stock_item_name'] ?? '-')) ?></strong><br><span class="muted"><?= e((string) ($row['unit_name'] ?? '')) ?></span></td>
+                        <td><?= e((string) ($row['quantity'] ?? 0)) ?></td>
+                        <td style="min-width:200px;">
+                            <?php if ((string) ($row['ev_kind'] ?? '') === 'reception'): ?>
+                                <span class="muted">Demande #<?= e((string) ($row['request_id'] ?? '-')) ?></span>
+                            <?php else: ?>
+                                <?= e((string) ($row['menu_item_name'] ?? '') !== '' ? $row['menu_item_name'] : ($row['dish_type'] ?? 'Production')) ?>
+                                <br><span class="muted">Production #<?= e((string) ($row['kitchen_production_id'] ?? '-')) ?></span>
+                            <?php endif; ?>
+                        </td>
+                        <td><?= e(named_actor_label($row['actor_name'] ?? null, $row['actor_role_code'] ?? null)) ?></td>
+                        <td style="min-width:160px;"><?= e((string) (($row['line_note'] ?? '') !== '' ? $row['line_note'] : '-')) ?></td>
                     </tr>
                 <?php endforeach; ?>
                 </tbody>

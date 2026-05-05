@@ -46,6 +46,315 @@ final class StockService
         return $statement->fetchAll(PDO::FETCH_ASSOC);
     }
 
+    /**
+     * Historique magasin : soldes physiques cumulés (ENTREE, PERTE, RETOUR_STOCK, SORTIE, CORRECTION_INVENTAIRE validés).
+     * Les sorties cuisine PROVISOIRE et CONSOMMATION_CUISINE ne modifient pas quantity_in_stock : variation physique = 0 pour le calcul.
+     *
+     * @return list<array<string, mixed>>
+     */
+    public function listMovementHistoryRows(int $restaurantId): array
+    {
+        $this->ensureStockMovementEnum();
+        $statement = $this->database->pdo()->prepare(
+            'SELECT sm.*, si.name AS stock_item_name, si.unit_name,
+                    u.full_name AS user_name,
+                    ur.code AS user_role_code,
+                    v.full_name AS validated_by_name,
+                    vr.code AS validated_by_role_code
+             FROM stock_movements sm
+             INNER JOIN stock_items si ON si.id = sm.stock_item_id
+             INNER JOIN users u ON u.id = sm.user_id
+             LEFT JOIN roles ur ON ur.id = u.role_id
+             LEFT JOIN users v ON v.id = sm.validated_by
+             LEFT JOIN roles vr ON vr.id = v.role_id
+             WHERE sm.restaurant_id = :restaurant_id
+             ORDER BY sm.id ASC'
+        );
+        $statement->execute(['restaurant_id' => $restaurantId]);
+        $rows = $statement->fetchAll(PDO::FETCH_ASSOC);
+        if ($rows === []) {
+            return [];
+        }
+
+        $runningByItem = [];
+        $enriched = [];
+        foreach ($rows as $row) {
+            $itemId = (int) $row['stock_item_id'];
+            $runningByItem[$itemId] ??= 0.0;
+            $before = (float) $runningByItem[$itemId];
+            $deltaPhysical = $this->physicalStockLedgerDelta($row);
+            $after = $before + $deltaPhysical;
+            $row['quantity_before_physical'] = $before;
+            $row['quantity_delta_physical'] = $deltaPhysical;
+            $row['quantity_after_physical'] = $after;
+            $runningByItem[$itemId] = $after;
+            $enriched[] = $row;
+        }
+
+        return array_reverse($enriched);
+    }
+
+    /**
+     * Réception stock→cuisine (demandes clôturées) et consommations liées aux productions.
+     *
+     * @return list<array<string, mixed>>
+     */
+    public function listKitchenEvolution(int $restaurantId, int $limit = 200): array
+    {
+        $this->ensureKitchenInventoryTables();
+        $limit = max(1, min($limit, 400));
+
+        $receptionStatement = $this->database->pdo()->prepare(
+            'SELECT "reception" AS ev_kind,
+                    ksri.received_at AS occurred_at,
+                    si.id AS stock_item_id,
+                    si.name AS stock_item_name,
+                    si.unit_name,
+                    ksri.quantity_supplied AS quantity,
+                    ksri.received_by AS actor_user_id,
+                    ru.full_name AS actor_name,
+                    rr.code AS actor_role_code,
+                    ksr.id AS request_id,
+                    NULL AS kitchen_production_id,
+                    NULL AS menu_item_name,
+                    NULL AS dish_type,
+                    ksri.note AS line_note
+             FROM kitchen_stock_request_items ksri
+             INNER JOIN kitchen_stock_requests ksr ON ksr.id = ksri.request_id
+             INNER JOIN stock_items si ON si.id = ksri.stock_item_id
+             LEFT JOIN users ru ON ru.id = ksri.received_by
+             LEFT JOIN roles rr ON rr.id = ru.role_id
+             WHERE ksri.restaurant_id = :restaurant_id
+               AND ksri.received_at IS NOT NULL
+               AND ksri.quantity_supplied > 0'
+        );
+        $receptionStatement->execute(['restaurant_id' => $restaurantId]);
+        $receptions = $receptionStatement->fetchAll(PDO::FETCH_ASSOC);
+
+        $useStatement = $this->database->pdo()->prepare(
+            'SELECT "utilisation" AS ev_kind,
+                    kpm.created_at AS occurred_at,
+                    si.id AS stock_item_id,
+                    si.name AS stock_item_name,
+                    si.unit_name,
+                    kpm.quantity_used AS quantity,
+                    kp.created_by AS actor_user_id,
+                    u.full_name AS actor_name,
+                    ur.code AS actor_role_code,
+                    NULL AS request_id,
+                    kp.id AS kitchen_production_id,
+                    mi.name AS menu_item_name,
+                    kp.dish_type,
+                    kpm.note AS line_note
+             FROM kitchen_production_materials kpm
+             INNER JOIN kitchen_production kp ON kp.id = kpm.kitchen_production_id
+             INNER JOIN stock_items si ON si.id = kpm.stock_item_id
+             INNER JOIN users u ON u.id = kp.created_by
+             LEFT JOIN roles ur ON ur.id = u.role_id
+             LEFT JOIN menu_items mi ON mi.id = kp.menu_item_id
+             WHERE kpm.restaurant_id = :restaurant_id'
+        );
+        $useStatement->execute(['restaurant_id' => $restaurantId]);
+        $uses = $useStatement->fetchAll(PDO::FETCH_ASSOC);
+
+        $merged = array_merge($receptions, $uses);
+        usort(
+            $merged,
+            static fn (array $left, array $right): int => strcmp((string) ($right['occurred_at'] ?? ''), (string) ($left['occurred_at'] ?? ''))
+        );
+
+        return array_slice($merged, 0, $limit);
+    }
+
+    public function recordFreeStockMovement(int $restaurantId, array $payload, array $actor): void
+    {
+        $this->ensureStockMovementEnum();
+        $kind = strtoupper(trim((string) ($payload['movement_kind'] ?? '')));
+        $note = trim((string) ($payload['note'] ?? '')) ?: null;
+
+        if ($kind === 'PERTE') {
+            $itemId = $this->resolveStockItemForFreeInput($restaurantId, $payload, $actor);
+            $this->declareLoss($restaurantId, [
+                'stock_item_id' => $itemId,
+                'quantity' => $payload['quantity'],
+                'amount' => $payload['amount'] ?? 0,
+                'description' => $note ?? 'Perte (saisie libre)',
+            ], $actor);
+
+            return;
+        }
+
+        $itemId = $this->resolveStockItemForFreeInput($restaurantId, $payload, $actor);
+        $item = $this->findStockItemInRestaurant($itemId, $restaurantId);
+        $unitCost = (float) ($item['estimated_unit_cost'] ?? 0);
+
+        $pdo = $this->database->pdo();
+        $pdo->beginTransaction();
+
+        try {
+            if ($kind === 'ENTREE') {
+                $quantity = (float) ($payload['quantity'] ?? 0);
+                if ($quantity <= 0) {
+                    throw new \RuntimeException('Quantite d entree invalide.');
+                }
+                $entryCost = (float) ($payload['unit_cost'] ?? $unitCost);
+                $movementId = $this->insertMovement($restaurantId, [
+                    'stock_item_id' => $itemId,
+                    'movement_type' => 'ENTREE',
+                    'quantity' => $quantity,
+                    'unit_cost_snapshot' => $entryCost,
+                    'total_cost_snapshot' => $quantity * $entryCost,
+                    'status' => 'VALIDE',
+                    'user_id' => $actor['id'],
+                    'validated_by' => $actor['id'],
+                    'reference_type' => 'manual_stock',
+                    'reference_id' => null,
+                    'note' => $note,
+                ]);
+                $this->adjustStockItem($itemId, $restaurantId, $quantity);
+                $this->updateEstimatedUnitCost($itemId, $restaurantId, $entryCost);
+                $pdo->commit();
+                Container::getInstance()->get('audit')->log([
+                    'restaurant_id' => $restaurantId,
+                    'user_id' => $actor['id'],
+                    'actor_name' => $actor['full_name'],
+                    'actor_role_code' => $actor['role_code'],
+                    'module_name' => 'stock',
+                    'action_name' => 'stock_free_movement_entry',
+                    'entity_type' => 'stock_movements',
+                    'entity_id' => (string) $movementId,
+                    'new_values' => $payload,
+                    'justification' => 'Entrée stock (saisie libre)',
+                ]);
+
+                return;
+            }
+
+            if ($kind === 'SORTIE') {
+                $quantity = (float) ($payload['quantity'] ?? 0);
+                if ($quantity <= 0) {
+                    throw new \RuntimeException('Quantite de sortie invalide.');
+                }
+                if ($quantity > (float) $item['quantity_in_stock']) {
+                    throw new \RuntimeException('Sortie impossible: stock insuffisant.');
+                }
+                $movementId = $this->insertMovement($restaurantId, [
+                    'stock_item_id' => $itemId,
+                    'movement_type' => 'SORTIE',
+                    'quantity' => $quantity,
+                    'unit_cost_snapshot' => $unitCost,
+                    'total_cost_snapshot' => $quantity * $unitCost,
+                    'status' => 'VALIDE',
+                    'user_id' => $actor['id'],
+                    'validated_by' => $actor['id'],
+                    'reference_type' => 'manual_stock',
+                    'reference_id' => null,
+                    'note' => $note,
+                ]);
+                $this->adjustStockItem($itemId, $restaurantId, -1 * $quantity);
+                $pdo->commit();
+                Container::getInstance()->get('audit')->log([
+                    'restaurant_id' => $restaurantId,
+                    'user_id' => $actor['id'],
+                    'actor_name' => $actor['full_name'],
+                    'actor_role_code' => $actor['role_code'],
+                    'module_name' => 'stock',
+                    'action_name' => 'stock_free_movement_out',
+                    'entity_type' => 'stock_movements',
+                    'entity_id' => (string) $movementId,
+                    'new_values' => $payload,
+                    'justification' => 'Sortie stock hors cuisine (saisie libre)',
+                ]);
+
+                return;
+            }
+
+            if ($kind === 'RETOUR') {
+                $quantity = (float) ($payload['quantity'] ?? 0);
+                if ($quantity <= 0) {
+                    throw new \RuntimeException('Quantite de retour invalide.');
+                }
+                $movementId = $this->insertMovement($restaurantId, [
+                    'stock_item_id' => $itemId,
+                    'movement_type' => 'RETOUR_STOCK',
+                    'quantity' => $quantity,
+                    'unit_cost_snapshot' => $unitCost,
+                    'total_cost_snapshot' => $quantity * $unitCost,
+                    'status' => 'VALIDE',
+                    'user_id' => $actor['id'],
+                    'validated_by' => $actor['id'],
+                    'reference_type' => 'manuel_magasin',
+                    'reference_id' => null,
+                    'note' => $note,
+                ]);
+                $this->adjustStockItem($itemId, $restaurantId, $quantity);
+                $pdo->commit();
+                Container::getInstance()->get('audit')->log([
+                    'restaurant_id' => $restaurantId,
+                    'user_id' => $actor['id'],
+                    'actor_name' => $actor['full_name'],
+                    'actor_role_code' => $actor['role_code'],
+                    'module_name' => 'stock',
+                    'action_name' => 'stock_free_movement_return',
+                    'entity_type' => 'stock_movements',
+                    'entity_id' => (string) $movementId,
+                    'new_values' => $payload,
+                    'justification' => 'Retour / réintégration stock (saisie libre)',
+                ]);
+
+                return;
+            }
+
+            if ($kind === 'CORRECTION') {
+                $signed = (float) ($payload['signed_adjustment'] ?? 0);
+                if (abs($signed) < 0.00001) {
+                    throw new \RuntimeException('Correction inventaire: variation nulle.');
+                }
+                $current = (float) $item['quantity_in_stock'];
+                if ($current + $signed < -0.00001) {
+                    throw new \RuntimeException('Correction impossible: le stock deviendrait négatif.');
+                }
+                $movementId = $this->insertMovement($restaurantId, [
+                    'stock_item_id' => $itemId,
+                    'movement_type' => 'CORRECTION_INVENTAIRE',
+                    'quantity' => $signed,
+                    'unit_cost_snapshot' => $unitCost,
+                    'total_cost_snapshot' => abs($signed) * $unitCost,
+                    'status' => 'VALIDE',
+                    'user_id' => $actor['id'],
+                    'validated_by' => $actor['id'],
+                    'reference_type' => 'inventaire_manuel',
+                    'reference_id' => null,
+                    'note' => $note,
+                ]);
+                $this->adjustStockItem($itemId, $restaurantId, $signed);
+                $pdo->commit();
+                Container::getInstance()->get('audit')->log([
+                    'restaurant_id' => $restaurantId,
+                    'user_id' => $actor['id'],
+                    'actor_name' => $actor['full_name'],
+                    'actor_role_code' => $actor['role_code'],
+                    'module_name' => 'stock',
+                    'action_name' => 'stock_inventory_correction',
+                    'entity_type' => 'stock_movements',
+                    'entity_id' => (string) $movementId,
+                    'new_values' => $payload,
+                    'justification' => 'Correction inventaire contrôlée',
+                ]);
+
+                return;
+            }
+
+            throw new \RuntimeException('Type de mouvement libre inconnu.');
+        } catch (\Throwable $throwable) {
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+
+            throw $throwable;
+        }
+    }
+
     public function createItem(int $restaurantId, array $payload, array $actor): void
     {
         $optionalColumns = $this->stockItemOptionalColumns();
@@ -988,8 +1297,100 @@ final class StockService
         }
     }
 
+    private function physicalStockLedgerDelta(array $movement): float
+    {
+        $type = (string) ($movement['movement_type'] ?? '');
+        $status = (string) ($movement['status'] ?? '');
+        $qty = (float) ($movement['quantity'] ?? 0);
+        if ($status !== 'VALIDE') {
+            return 0.0;
+        }
+
+        return match ($type) {
+            'ENTREE', 'RETOUR_STOCK' => $qty,
+            'PERTE', 'SORTIE' => -abs($qty),
+            'CORRECTION_INVENTAIRE' => $qty,
+            default => 0.0,
+        };
+    }
+
+    /**
+     * @param array<string, mixed> $payload
+     */
+    private function resolveStockItemForFreeInput(int $restaurantId, array $payload, array $actor): int
+    {
+        $freeName = trim((string) ($payload['free_item_name'] ?? ''));
+        if ($freeName !== '') {
+            $unit = trim((string) ($payload['free_unit_name'] ?? '')) ?: 'unité';
+
+            return $this->findOrCreateStockItemByName($restaurantId, $freeName, $unit, $actor);
+        }
+
+        $id = (int) ($payload['stock_item_id'] ?? 0);
+        if ($id <= 0) {
+            throw new \RuntimeException('Choisissez un article ou saisissez un nom de produit libre.');
+        }
+        $this->findStockItemInRestaurant($id, $restaurantId);
+
+        return $id;
+    }
+
+    private function findOrCreateStockItemByName(int $restaurantId, string $name, string $unitName, array $actor): int
+    {
+        $statement = $this->database->pdo()->prepare(
+            'SELECT id FROM stock_items WHERE restaurant_id = :restaurant_id AND LOWER(name) = LOWER(:name) LIMIT 1'
+        );
+        $statement->execute([
+            'restaurant_id' => $restaurantId,
+            'name' => $name,
+        ]);
+        $existing = $statement->fetchColumn();
+        if ($existing !== false) {
+            return (int) $existing;
+        }
+
+        $this->createItem($restaurantId, [
+            'name' => $name,
+            'unit_name' => $unitName,
+            'quantity_in_stock' => 0,
+            'alert_threshold' => 0,
+            'estimated_unit_cost' => 0,
+            'category_label' => '',
+            'item_note' => 'Article créé depuis la saisie libre des mouvements.',
+        ], $actor);
+
+        return (int) $this->database->pdo()->lastInsertId();
+    }
+
+    private function ensureStockMovementEnum(): void
+    {
+        $statement = $this->database->pdo()->query(
+            "SHOW COLUMNS FROM stock_movements WHERE Field = 'movement_type'"
+        );
+        $row = $statement !== false ? $statement->fetch(PDO::FETCH_ASSOC) : false;
+        $type = (string) ($row['Type'] ?? '');
+        if ($type !== '' && str_contains($type, 'CONSOMMATION_CUISINE')
+            && str_contains($type, 'SORTIE') && str_contains($type, 'CORRECTION_INVENTAIRE')) {
+            return;
+        }
+
+        $this->database->pdo()->exec(
+            "ALTER TABLE stock_movements MODIFY COLUMN movement_type
+            ENUM(
+                'ENTREE',
+                'SORTIE_CUISINE',
+                'RETOUR_STOCK',
+                'PERTE',
+                'CONSOMMATION_CUISINE',
+                'SORTIE',
+                'CORRECTION_INVENTAIRE'
+            ) NOT NULL"
+        );
+    }
+
     private function insertMovement(int $restaurantId, array $payload): int
     {
+        $this->ensureStockMovementEnum();
         $statement = $this->database->pdo()->prepare(
             'INSERT INTO stock_movements
             (restaurant_id, stock_item_id, movement_type, quantity, unit_cost_snapshot, total_cost_snapshot, status, user_id, validated_by, reference_type, reference_id, note, created_at, validated_at)

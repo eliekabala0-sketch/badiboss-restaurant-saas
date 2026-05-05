@@ -689,8 +689,11 @@ function movement_type_label(?string $type): string
     return match ($type) {
         'ENTREE' => 'Entrée',
         'SORTIE_CUISINE' => 'Sortie cuisine',
+        'SORTIE' => 'Sortie stock',
         'RETOUR_STOCK' => 'Retour stock',
         'PERTE' => 'Perte',
+        'CONSOMMATION_CUISINE' => 'Consommation cuisine',
+        'CORRECTION_INVENTAIRE' => 'Correction inventaire',
         default => (string) $type,
     };
 }

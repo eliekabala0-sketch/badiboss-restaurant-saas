@@ -22,7 +22,7 @@ final class OperationsController
             'title' => 'Stock',
             'restaurant' => Container::getInstance()->get('restaurantAdmin')->findRestaurant($restaurantId),
             'items' => Container::getInstance()->get('stockService')->listItems($restaurantId),
-            'movements' => Container::getInstance()->get('stockService')->listMovements($restaurantId),
+            'movements' => Container::getInstance()->get('stockService')->listMovementHistoryRows($restaurantId),
             'kitchen_stock_requests' => $kitchenStockBlocks['requests'],
             'kitchen_stock_request_items_by_request' => $kitchenStockBlocks['items_by_request'],
             'correction_requests' => Container::getInstance()->get('correctionService')->listRecentForRestaurant($restaurantId, 12),
@@ -161,6 +161,32 @@ final class OperationsController
         redirect($this->stockUrl($restaurantId));
     }
 
+    public function recordFreeStockMovement(Request $request): void
+    {
+        $restaurantId = $this->resolveRestaurantId($request);
+        $kind = strtoupper(trim((string) $request->input('movement_kind', '')));
+        if ($kind === 'PERTE') {
+            authorize_access('stock.loss.declare');
+        } else {
+            authorize_access('stock.entry.create');
+        }
+
+        Container::getInstance()->get('stockService')->recordFreeStockMovement($restaurantId, [
+            'movement_kind' => $request->input('movement_kind'),
+            'stock_item_id' => $request->input('stock_item_id'),
+            'free_item_name' => $request->input('free_item_name', ''),
+            'free_unit_name' => $request->input('free_unit_name', 'unité'),
+            'quantity' => $request->input('quantity', 0),
+            'signed_adjustment' => $request->input('signed_adjustment', 0),
+            'unit_cost' => $request->input('unit_cost', 0),
+            'amount' => $request->input('amount', 0),
+            'note' => $request->input('note', ''),
+        ], current_user());
+
+        flash('success', 'Mouvement de stock enregistre.');
+        redirect($this->stockUrl($restaurantId));
+    }
+
     public function respondKitchenStockRequest(Request $request): void
     {
         $restaurantId = $this->resolveRestaurantId($request);
@@ -265,6 +291,7 @@ final class OperationsController
             'kitchen_stock_request_items_by_request' => $kitchenStockBlocks['items_by_request'],
             'stock_items' => Container::getInstance()->get('stockService')->listItems($restaurantId),
             'kitchen_inventory' => Container::getInstance()->get('stockService')->listKitchenInventory($restaurantId),
+            'kitchen_evolution' => Container::getInstance()->get('stockService')->listKitchenEvolution($restaurantId),
             'menu_categories' => Container::getInstance()->get('menuAdmin')->listCategories($restaurantId),
             'menu_items' => Container::getInstance()->get('menuAdmin')->listItems($restaurantId),
             'sale_items' => Container::getInstance()->get('salesService')->listSaleItemsForKitchen($restaurantId),

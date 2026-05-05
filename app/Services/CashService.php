@@ -346,7 +346,6 @@ final class CashService
         $transfers = $this->listTransfers($restaurantId, $filters);
         $movements = $this->listMovements($restaurantId, $filters);
 
-        $soldTotal = (float) $this->database->pdo()->prepare('SELECT COALESCE(SUM(total_amount), 0) FROM sales WHERE restaurant_id = :restaurant_id');
         $soldStatement = $this->database->pdo()->prepare('SELECT COALESCE(SUM(total_amount), 0) FROM sales WHERE restaurant_id = :restaurant_id');
         $soldStatement->execute(['restaurant_id' => $restaurantId]);
         $soldTotal = (float) $soldStatement->fetchColumn();
@@ -410,6 +409,10 @@ final class CashService
         $this->ensureSchema();
         $this->assertRestaurantUser($toUserId, $restaurantId);
         $amount = $this->normalizeAmount($payload['amount'] ?? 0);
+        $available = $this->availableCashForChainTransfer($restaurantId);
+        if ($amount > $available + 0.001) {
+            throw new \RuntimeException('Solde caisse insuffisant pour ce transfert.');
+        }
         $statement = $this->database->pdo()->prepare(
             'INSERT INTO cash_transfers
             (restaurant_id, from_user_id, to_user_id, amount, currency, source_type, source_id, status, note, discrepancy_amount, requested_at, created_by, created_at, updated_at)
@@ -437,6 +440,16 @@ final class CashService
         ], 'Transfert de caisse');
 
         return $transferId;
+    }
+
+    /**
+     * Solde caisse (même formule que summary.cash_balance) pour bloquer un transfert supérieur aux liquidités.
+     */
+    private function availableCashForChainTransfer(int $restaurantId): float
+    {
+        $summary = $this->summary($restaurantId, []);
+
+        return max(0.0, round((float) ($summary['cash_balance'] ?? 0), 2));
     }
 
     private function receiveChainTransfer(int $restaurantId, int $transferId, array $payload, array $actor, string $expectedStatus, string $newStatus, string $auditAction, string $justification): void

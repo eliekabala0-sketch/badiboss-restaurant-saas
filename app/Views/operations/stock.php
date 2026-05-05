@@ -9,6 +9,8 @@ $activePreviewLimit = 5;
 $restaurantCurrency = restaurant_currency($restaurant);
 $restaurantLogo = restaurant_media_url_or_default($restaurant['logo_url'] ?? null, 'logo');
 $kitchenStockRequestItemsByRequest = $kitchen_stock_request_items_by_request ?? [];
+$stock_movement_display_limit = 150;
+$stock_movement_history = array_slice($movements, 0, $stock_movement_display_limit);
 
 $stockRequestCases = array_values(array_filter(
     $cases,
@@ -299,6 +301,49 @@ $priorityBadgeClass = static function (?string $priority): string {
         </article>
     <?php endif; ?>
 </section>
+
+<?php if (can_access('stock.entry.create') || can_access('stock.loss.declare')): ?>
+    <section class="card" style="padding:22px; margin-top:24px;">
+        <details class="compact-card" data-autoclose-details>
+            <summary><strong>Mouvements stock (saisie libre)</strong></summary>
+            <h2 style="margin-top:0;">Enregistrer un mouvement reel</h2>
+            <p class="muted">Indiquez un produit existant <strong>ou</strong> un nom libre (un article sera cree avec stock zero si besoin). Chaque action reste sur ce restaurant uniquement.</p>
+            <form method="post" action="/stock/mouvements-libres" class="split">
+                <div style="grid-column:1 / -1;">
+                    <label>Type de mouvement</label>
+                    <select name="movement_kind" required>
+                        <?php if (can_access('stock.entry.create')): ?>
+                            <option value="ENTREE">Entree stock</option>
+                            <option value="SORTIE">Sortie stock (hors cuisine)</option>
+                            <option value="RETOUR">Retour / reintegration magasin</option>
+                            <option value="CORRECTION">Correction inventaire (+ ou -)</option>
+                        <?php endif; ?>
+                        <?php if (can_access('stock.loss.declare')): ?>
+                            <option value="PERTE">Perte matiere</option>
+                        <?php endif; ?>
+                    </select>
+                </div>
+                <div style="grid-column:1 / -1;">
+                    <label>Article existant (optionnel)</label>
+                    <select name="stock_item_id">
+                        <option value="">— Utiliser le nom libre ci-dessous —</option>
+                        <?php foreach ($items as $item): ?>
+                            <option value="<?= e((string) $item['id']) ?>"><?= e($item['name']) ?> (<?= e($item['unit_name']) ?>)</option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+                <div><label>Nom produit libre</label><input name="free_item_name" placeholder="Ex. Tomates cerises"></div>
+                <div><label>Unite si nouveau produit</label><input name="free_unit_name" placeholder="kg, piece, carton" value="piece"></div>
+                <div><label>Quantite (entree, sortie, retour, perte)</label><input name="quantity" value="0" step="0.001"></div>
+                <div><label>Variation inventaire (correction, peut etre negative)</label><input name="signed_adjustment" value="0" step="0.001"></div>
+                <div><label>Cout unitaire (entree)</label><input name="unit_cost" value="0" step="0.01"></div>
+                <div><label>Montant estime (perte)</label><input name="amount" value="0" step="0.01"></div>
+                <div style="grid-column:1 / -1;"><label>Motif / note</label><textarea name="note" placeholder="Fournisseur, echantillon, casse, inventaire..."></textarea></div>
+                <div style="grid-column:1 / -1;"><button type="submit">Enregistrer le mouvement</button></div>
+            </form>
+        </details>
+    </section>
+<?php endif; ?>
 
 <section class="card" style="padding:22px; margin-top:24px;">
     <h2 style="margin-top:0;">Demandes cuisine actives</h2>
@@ -611,6 +656,57 @@ $priorityBadgeClass = static function (?string $priority): string {
     </div>
 </section>
 
+<section class="card" style="padding:24px; margin-top:24px;" id="historique_mouvements_magasin">
+    <h2 style="margin-top:0;">Historique mouvements magasin</h2>
+    <p class="muted">
+        Stock physique cumulé : avant / variation (magasin) / après pour les mouvements qui modifient l’article en magasin.
+        Les sorties cuisine provisoires et la consommation en cuisine ne changent pas ce solde (variation = 0 ici).
+        <?php if (count($movements) > $stock_movement_display_limit): ?>
+            Affichage des <?= e((string) $stock_movement_display_limit) ?> plus recents sur <?= e((string) count($movements)) ?>.
+        <?php endif; ?>
+    </p>
+    <?php if ($movements === []): ?>
+        <p class="muted">Aucun mouvement enregistre pour ce restaurant.</p>
+    <?php else: ?>
+        <div class="table-wrap">
+            <table>
+                <thead>
+                <tr>
+                    <th>Date</th>
+                    <th>Produit</th>
+                    <th>Type</th>
+                    <th>Qté saisie</th>
+                    <th>Δ magasin</th>
+                    <th>Avant</th>
+                    <th>Après</th>
+                    <th>Statut</th>
+                    <th>Auteur</th>
+                    <th>Validateur</th>
+                    <th>Note</th>
+                </tr>
+                </thead>
+                <tbody>
+                <?php foreach ($stock_movement_history as $m): ?>
+                    <tr>
+                        <td><?= e(format_date_fr($m['created_at'] ?? null, $historyTimezone)) ?></td>
+                        <td><strong><?= e((string) ($m['stock_item_name'] ?? '-')) ?></strong><br><span class="muted"><?= e((string) ($m['unit_name'] ?? '')) ?></span></td>
+                        <td><?= e(movement_type_label((string) ($m['movement_type'] ?? ''))) ?></td>
+                        <td><?= e((string) ($m['quantity'] ?? 0)) ?></td>
+                        <td><?= e((string) ($m['quantity_delta_physical'] ?? 0)) ?></td>
+                        <td><?= e((string) ($m['quantity_before_physical'] ?? '-')) ?></td>
+                        <td><?= e((string) ($m['quantity_after_physical'] ?? '-')) ?></td>
+                        <td><?= e(validation_status_label($m['status'] ?? null)) ?></td>
+                        <td><?= e(named_actor_label($m['user_name'] ?? null, $m['user_role_code'] ?? null)) ?></td>
+                        <td><?= e(named_actor_label($m['validated_by_name'] ?? null, $m['validated_by_role_code'] ?? null)) ?></td>
+                        <td style="min-width:180px;"><?= e((string) (($m['note'] ?? '') !== '' ? $m['note'] : '-')) ?></td>
+                    </tr>
+                <?php endforeach; ?>
+                </tbody>
+            </table>
+        </div>
+    <?php endif; ?>
+</section>
+
 <section class="card" style="padding:24px; margin-top:24px;">
     <h2 style="margin-top:0;">Corrections sensibles</h2>
     <p class="muted">Apres validation, aucune quantite n est modifiee directement. Toute correction passe par une demande motivee puis une validation du gerant ou proprietaire.</p>
@@ -623,7 +719,7 @@ $priorityBadgeClass = static function (?string $priority): string {
                 <tbody>
                 <?php foreach (array_slice($movements, 0, 12) as $movement): ?>
                     <tr>
-                        <td><?= e((string) $movement['movement_type']) ?></td>
+                        <td><?= e(movement_type_label((string) $movement['movement_type'])) ?></td>
                         <td><?= e((string) $movement['stock_item_name']) ?></td>
                         <td><?= e((string) $movement['quantity']) ?></td>
                         <td><?= e(validation_status_label($movement['status'] ?? null)) ?></td>
