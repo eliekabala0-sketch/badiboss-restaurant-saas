@@ -24,6 +24,9 @@ final class RailwayDbTools
             ['name' => 'received_by', 'sql' => 'ALTER TABLE server_requests ADD COLUMN received_by BIGINT UNSIGNED NULL AFTER ready_by'],
             ['name' => 'ready_at', 'sql' => 'ALTER TABLE server_requests ADD COLUMN ready_at DATETIME NULL AFTER supplied_at'],
             ['name' => 'received_at', 'sql' => 'ALTER TABLE server_requests ADD COLUMN received_at DATETIME NULL AFTER ready_at'],
+            ['name' => 'resolution_note', 'sql' => 'ALTER TABLE server_requests ADD COLUMN resolution_note TEXT NULL AFTER note'],
+            ['name' => 'resolution_by', 'sql' => 'ALTER TABLE server_requests ADD COLUMN resolution_by BIGINT UNSIGNED NULL AFTER resolution_note'],
+            ['name' => 'resolution_at', 'sql' => 'ALTER TABLE server_requests ADD COLUMN resolution_at DATETIME NULL AFTER resolution_by'],
         ],
         'server_request_items' => [
             ['name' => 'unavailable_quantity', 'sql' => 'ALTER TABLE server_request_items ADD COLUMN unavailable_quantity DECIMAL(12,2) NOT NULL DEFAULT 0.00 AFTER supplied_quantity'],
@@ -36,6 +39,9 @@ final class RailwayDbTools
             ['name' => 'unavailable_quantity', 'sql' => 'ALTER TABLE kitchen_stock_requests ADD COLUMN unavailable_quantity DECIMAL(12,2) NOT NULL DEFAULT 0.00 AFTER quantity_supplied'],
             ['name' => 'received_by', 'sql' => 'ALTER TABLE kitchen_stock_requests ADD COLUMN received_by BIGINT UNSIGNED NULL AFTER responded_by'],
             ['name' => 'received_at', 'sql' => 'ALTER TABLE kitchen_stock_requests ADD COLUMN received_at DATETIME NULL AFTER responded_at'],
+            ['name' => 'resolution_note', 'sql' => 'ALTER TABLE kitchen_stock_requests ADD COLUMN resolution_note TEXT NULL AFTER response_note'],
+            ['name' => 'resolution_by', 'sql' => 'ALTER TABLE kitchen_stock_requests ADD COLUMN resolution_by BIGINT UNSIGNED NULL AFTER resolution_note'],
+            ['name' => 'resolution_at', 'sql' => 'ALTER TABLE kitchen_stock_requests ADD COLUMN resolution_at DATETIME NULL AFTER resolution_by'],
         ],
         'operation_cases' => [
             ['name' => 'responsible_user_id', 'sql' => 'ALTER TABLE operation_cases ADD COLUMN responsible_user_id BIGINT UNSIGNED NULL AFTER responsibility_scope'],
@@ -170,7 +176,7 @@ final class RailwayDbTools
                 }
             }
 
-            $pdo->exec("ALTER TABLE server_requests MODIFY status ENUM('DEMANDE','EN_PREPARATION','PRET_A_SERVIR','REMIS_SERVEUR','FOURNI_PARTIEL','FOURNI_TOTAL','VENDU_PARTIEL','VENDU_TOTAL','CLOTURE') NOT NULL DEFAULT 'DEMANDE'");
+            $pdo->exec("ALTER TABLE server_requests MODIFY status ENUM('DEMANDE','EN_PREPARATION','PRET_A_SERVIR','REMIS_SERVEUR','FOURNI_PARTIEL','FOURNI_TOTAL','VENDU_PARTIEL','VENDU_TOTAL','CLOTURE','ANNULE','REFUSE_CUISINE') NOT NULL DEFAULT 'DEMANDE'");
             $report['enum_updates'][] = 'server_requests.status';
 
             $pdo->exec("ALTER TABLE server_request_items MODIFY supply_status ENUM('DEMANDE','EN_PREPARATION','PRET_A_SERVIR','REMIS_SERVEUR','FOURNI_TOTAL','FOURNI_PARTIEL','NON_FOURNI','CLOTURE') NOT NULL DEFAULT 'DEMANDE'");
@@ -183,7 +189,7 @@ final class RailwayDbTools
             $pdo->exec("UPDATE kitchen_stock_requests SET status = 'NON_FOURNI' WHERE status = 'INDISPONIBLE'");
             $report['data_backfills'][] = 'kitchen_stock_requests.status INDISPONIBLE -> NON_FOURNI';
 
-            $pdo->exec("ALTER TABLE kitchen_stock_requests MODIFY status ENUM('DEMANDE','EN_COURS_TRAITEMENT','FOURNI_TOTAL','FOURNI_PARTIEL','NON_FOURNI','DISPONIBLE','PARTIELLEMENT_DISPONIBLE','INDISPONIBLE','CLOTURE') NOT NULL DEFAULT 'DEMANDE'");
+            $pdo->exec("ALTER TABLE kitchen_stock_requests MODIFY status ENUM('DEMANDE','EN_COURS_TRAITEMENT','FOURNI_TOTAL','FOURNI_PARTIEL','NON_FOURNI','DISPONIBLE','PARTIELLEMENT_DISPONIBLE','INDISPONIBLE','CLOTURE','ANNULE','REFUSE_STOCK') NOT NULL DEFAULT 'DEMANDE'");
             $report['enum_updates'][] = 'kitchen_stock_requests.status';
 
             if (self::columnExists($pdo, 'server_request_items', 'unavailable_quantity')) {

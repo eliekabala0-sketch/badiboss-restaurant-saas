@@ -133,6 +133,10 @@ $closedStockRequests = array_values(array_filter(
     $kitchen_stock_requests,
     static fn (array $request): bool => (string) $request['status'] === 'CLOTURE'
 ));
+$endedStockRequests = array_values(array_filter(
+    $kitchen_stock_requests,
+    static fn (array $request): bool => in_array((string) $request['status'], ['ANNULE', 'REFUSE_STOCK'], true)
+));
 usort($activeStockRequests, $sortStockRequests);
 
 $pendingKitchenCases = array_values(array_filter(
@@ -152,10 +156,21 @@ $resolvedKitchenCases = array_values(array_filter(
 ));
 
 $historyEntries = [];
+$seenTerminalServerHistoryRequests = [];
 foreach ($serverRequestHistoryItems as $item) {
     $requestStatus = (string) ($item['request_status'] ?? '');
     if (in_array($requestStatus, $activeRequestStatuses, true)) {
         continue;
+    }
+
+    if (in_array($requestStatus, ['ANNULE', 'REFUSE_CUISINE'], true)) {
+        $rid = (int) ($item['request_id'] ?? 0);
+        if ($rid > 0 && isset($seenTerminalServerHistoryRequests[$rid])) {
+            continue;
+        }
+        if ($rid > 0) {
+            $seenTerminalServerHistoryRequests[$rid] = true;
+        }
     }
 
     $eventDate = (string) ($item['request_received_at'] ?: $item['updated_at'] ?: $item['request_created_at'] ?: $item['created_at']);
@@ -166,7 +181,17 @@ foreach ($serverRequestHistoryItems as $item) {
         'date' => $eventDate,
         'details' => 'Serveur ' . ($item['server_name'] ?? '-') . ' · demande ' . (string) ($item['requested_quantity'] ?? 0)
             . ' · prepare ' . (string) ($item['supplied_quantity'] ?? 0)
-            . ' · indisponible ' . (string) ($item['unavailable_quantity'] ?? 0),
+            . ' · indisponible ' . (string) ($item['unavailable_quantity'] ?? 0)
+            . (in_array($requestStatus, ['ANNULE', 'REFUSE_CUISINE'], true)
+                ? ' · ' . request_terminal_resolution_line(
+                    $requestStatus === 'REFUSE_CUISINE' ? 'declinee' : 'annulee',
+                    $item['resolution_by_name'] ?? null,
+                    $requestStatus === 'REFUSE_CUISINE' ? 'kitchen' : 'cashier_server',
+                    (string) ($item['request_resolution_note'] ?? ''),
+                    (string) ($item['request_resolution_at'] ?? ''),
+                    $historyTimezone
+                )
+                : ''),
         'amount' => 0.0,
     ];
 }
@@ -200,6 +225,42 @@ foreach ($closedStockRequests as $request) {
         'details' => (($details !== []) ? implode(', ', $details) . ' · ' : '')
             . 'fournie ' . (string) ($request['quantity_supplied_total'] ?? $request['quantity_supplied'] ?? 0)
             . ' · reception ' . format_date_fr($request['received_at'] ?? null, $historyTimezone),
+        'amount' => 0.0,
+    ];
+}
+
+foreach ($endedStockRequests as $request) {
+    $requestItems = $kitchenStockRequestItemsByRequest[(int) $request['id']] ?? [];
+    $details = [];
+    foreach ($requestItems as $detailItem) {
+        $details[] = (string) ($detailItem['stock_item_name'] ?? 'Article') . ' ' . (string) ($detailItem['quantity_requested'] ?? 0);
+    }
+    $eventDate = (string) ($request['resolution_at'] ?: $request['updated_at'] ?: $request['created_at']);
+    $isDeclinedStock = (string) $request['status'] === 'REFUSE_STOCK';
+    $note = trim((string) ($request['resolution_note'] ?? ''));
+    $historyEntries[] = [
+        'type' => $isDeclinedStock ? 'Demande stock refusee' : 'Demande stock annulee',
+        'reference' => 'Demande #' . (string) $request['id'] . ' · ' . ((int) ($request['item_count'] ?? count($requestItems) ?: 1)) . ' produit(s)',
+        'status' => stock_request_status_label($request['status'] ?? null),
+        'date' => $eventDate,
+        'details' => ($details !== [] ? implode(', ', $details) . ' · ' : '')
+            . ($isDeclinedStock
+                ? ('Demande stock declinee : ' . ($note !== '' ? $note : '—') . ' · ' . request_terminal_resolution_line(
+                    'declinee',
+                    $request['resolution_by_name'] ?? null,
+                    'stock_manager',
+                    $note,
+                    (string) ($request['resolution_at'] ?? ''),
+                    $historyTimezone
+                ))
+                : request_terminal_resolution_line(
+                    'annulee',
+                    $request['resolution_by_name'] ?? null,
+                    'kitchen',
+                    $note,
+                    (string) ($request['resolution_at'] ?? ''),
+                    $historyTimezone
+                )),
         'amount' => 0.0,
     ];
 }
@@ -270,7 +331,7 @@ $serviceBadgeClass = static function (?string $status): string {
         'EN_PREPARATION', 'FOURNI_PARTIEL' => 'badge-progress',
         'PRET_A_SERVIR', 'FOURNI_TOTAL', 'REMIS_SERVEUR' => 'badge-ready',
         'CLOTURE', 'VENDU_PARTIEL', 'VENDU_TOTAL', 'VALIDE' => 'badge-closed',
-        'NON_FOURNI', 'REJETE' => 'badge-bad',
+        'NON_FOURNI', 'REJETE', 'ANNULE', 'REFUSE_CUISINE', 'REFUSE_STOCK' => 'badge-bad',
         default => 'badge-neutral',
     };
 };
@@ -281,6 +342,7 @@ $stockBadgeClass = static function (?string $status): string {
         'FOURNI_TOTAL', 'FOURNI_PARTIEL' => 'badge-ready',
         'NON_FOURNI' => 'badge-bad',
         'CLOTURE' => 'badge-closed',
+        'ANNULE', 'REFUSE_STOCK' => 'badge-bad',
         default => 'badge-neutral',
     };
 };
@@ -472,6 +534,40 @@ $stockBadgeClass = static function (?string $status): string {
         <span class="pill badge-neutral"><?= e((string) count($server_request_items)) ?> ligne(s) actives</span>
     </div>
 </section>
+
+<?php
+$declineServerRequestMeta = [];
+foreach (array_merge($waitingServerItems, $preparingServerItems) as $item) {
+    $rid = (int) ($item['request_id'] ?? 0);
+    if ($rid <= 0) {
+        continue;
+    }
+    if (!isset($declineServerRequestMeta[$rid])) {
+        $declineServerRequestMeta[$rid] = [
+            'service_reference' => (string) ($item['service_reference'] ?? ''),
+            'server_name' => (string) ($item['server_name'] ?? ''),
+        ];
+    }
+}
+?>
+<?php if ($declineServerRequestMeta !== [] && can_access('kitchen.request.fulfill')): ?>
+<section class="card" style="padding:22px; margin-top:24px;">
+    <details class="compact-card">
+        <summary><strong>Refuser toute la commande serveur (non disponible)</strong></summary>
+        <p class="muted" style="margin-top:12px;">Refus sur la commande entiere avec motif obligatoire. Le service voit le motif dans son historique — sans vente ni caisse.</p>
+        <?php foreach ($declineServerRequestMeta as $reqId => $meta): ?>
+            <div style="margin-top:18px; padding-top:16px; border-top:1px solid var(--line);">
+                <p style="margin:0 0 8px;"><strong>Commande #<?= e((string) $reqId) ?></strong> · <?= e($meta['server_name'] !== '' ? $meta['server_name'] : 'Serveur') ?> · ref. <?= e($meta['service_reference'] !== '' ? $meta['service_reference'] : '-') ?></p>
+                <form method="post" action="/cuisine/demandes-serveur/<?= e((string) $reqId) ?>/decliner">
+                    <label>Motif obligatoire</label>
+                    <textarea name="reason" required placeholder="Ex. rupture, plat indisponible ce service..."></textarea>
+                    <button type="submit" class="button-muted">Decliner / non disponible</button>
+                </form>
+            </div>
+        <?php endforeach; ?>
+    </details>
+</section>
+<?php endif; ?>
 
 <?php foreach ($serviceSections as $sectionTitle => $section): ?>
     <?php $groupedSectionItems = $groupItems($section['items'], static fn (array $item): string => (string) ($item['server_name'] ?? 'Sans serveur')); ?>
@@ -765,6 +861,21 @@ $stockBadgeClass = static function (?string $status): string {
                     </div>
 
                     <div style="margin-top:14px;">
+                        <?php
+                        $kUid = (int) (current_user()['id'] ?? 0);
+                        $canCancelStockReq = can_access('kitchen.stock.request')
+                            && $kUid > 0
+                            && (int) ($request['requested_by'] ?? 0) === $kUid
+                            && (string) ($request['status'] ?? '') === 'DEMANDE';
+                        ?>
+                        <?php if ($canCancelStockReq): ?>
+                            <form method="post" action="/cuisine/demandes-stock/<?= e((string) $request['id']) ?>/annuler" style="margin-bottom:14px; padding-bottom:14px; border-bottom:1px solid var(--line);">
+                                <label>Annuler cette demande avant traitement stock (motif obligatoire)</label>
+                                <textarea name="reason" required placeholder="Ex. besoin annule, erreur de quantite..."></textarea>
+                                <button type="submit" class="button-muted">Annuler la demande</button>
+                            </form>
+                        <?php endif; ?>
+
                         <?php if (in_array((string) $request['status'], ['FOURNI_TOTAL', 'FOURNI_PARTIEL', 'NON_FOURNI'], true) && can_access('kitchen.stock.request')): ?>
                             <form method="post" action="/cuisine/demandes-stock/<?= e((string) $request['id']) ?>/reception">
                                 <button type="submit">Confirmer la reception globale</button>

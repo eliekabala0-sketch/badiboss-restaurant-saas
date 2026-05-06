@@ -751,6 +751,25 @@ function signed_actor_line(
     return implode(' - ', $parts);
 }
 
+/**
+ * Ligne compacte pour historique : « Annulée / Déclinée par [nom rôle] — motif — date ».
+ */
+function request_terminal_resolution_line(
+    string $kind,
+    ?string $actorName,
+    ?string $roleCode,
+    string $motif,
+    ?string $at,
+    ?DateTimeZone $timezone = null
+): string {
+    $verb = $kind === 'declinee' ? 'Declinee' : 'Annulee';
+    $who = named_actor_label($actorName, $roleCode);
+    $motif = trim($motif);
+    $when = ($at !== null && trim((string) $at) !== '') ? format_date_fr($at, $timezone) : '';
+
+    return $verb . ' par ' . $who . ' — ' . ($motif !== '' ? $motif : '—') . ' — ' . ($when !== '' ? $when : '—');
+}
+
 function movement_type_label(?string $type): string
 {
     return match ($type) {
@@ -854,6 +873,9 @@ function service_flow_status_label(?string $status): string
         'FOURNI_TOTAL' => 'Prêt à servir',
         'FOURNI_PARTIEL' => 'En préparation',
         'NON_FOURNI' => 'Non disponible',
+        'ANNULE' => 'Annulée (service)',
+        'REFUSE_CUISINE' => 'Déclinée cuisine',
+        'REFUSE_STOCK' => 'Déclinée stock',
         default => validation_status_label($status),
     };
 }
@@ -867,6 +889,8 @@ function stock_request_status_label(?string $status): string
         'FOURNI_PARTIEL', 'PARTIELLEMENT_DISPONIBLE' => 'Fourni partiellement',
         'NON_FOURNI', 'INDISPONIBLE' => 'Non fourni',
         'CLOTURE' => 'Clôturé',
+        'ANNULE' => 'Annulée (cuisine)',
+        'REFUSE_STOCK' => 'Déclinée stock',
         default => validation_status_label($status),
     };
 }

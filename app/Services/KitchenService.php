@@ -172,6 +172,10 @@ final class KitchenService
     public function fulfillServerRequestItem(int $restaurantId, int $requestItemId, array $payload, array $actor): void
     {
         $item = $this->findServerRequestItemInRestaurant($requestItemId, $restaurantId);
+        if (in_array((string) ($item['parent_request_status'] ?? ''), ['ANNULE', 'REFUSE_CUISINE'], true)) {
+            throw new \RuntimeException('Cette demande ne peut plus etre modifiee.');
+        }
+
         $suppliedQuantity = (float) ($payload['supplied_quantity'] ?? 0);
         $workflowStage = (string) ($payload['workflow_stage'] ?? 'PRET_A_SERVIR');
 
@@ -563,7 +567,7 @@ final class KitchenService
     private function findServerRequestItemInRestaurant(int $requestItemId, int $restaurantId): array
     {
         $statement = $this->database->pdo()->prepare(
-            'SELECT sri.*, sr.restaurant_id,
+            'SELECT sri.*, sr.restaurant_id, sr.status AS parent_request_status,
                     mi.name AS menu_item_catalog_name,
                     mc.name AS menu_category_name,
                     mc.slug AS menu_category_slug
@@ -591,6 +595,16 @@ final class KitchenService
     private function refreshServerRequestTotals(int $requestId, int $actorId): void
     {
         $pdo = $this->database->pdo();
+        $headerRow = $pdo->prepare('SELECT status FROM server_requests WHERE id = :id LIMIT 1');
+        $headerRow->execute(['id' => $requestId]);
+        $header = $headerRow->fetch(PDO::FETCH_ASSOC);
+        if ($header === false) {
+            return;
+        }
+        if (in_array((string) ($header['status'] ?? ''), ['ANNULE', 'REFUSE_CUISINE'], true)) {
+            return;
+        }
+
         $statement = $pdo->prepare(
             'SELECT COALESCE(SUM(supplied_total), 0) AS total_supplied,
                     COUNT(*) AS total_items,

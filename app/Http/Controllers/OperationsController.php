@@ -446,6 +446,66 @@ final class OperationsController
         redirect($this->moduleUrl('/cuisine', $restaurantId));
     }
 
+    public function declineServerRequest(Request $request): void
+    {
+        $restaurantId = $this->resolveRestaurantId($request);
+        authorize_access('kitchen.request.fulfill');
+
+        try {
+            Container::getInstance()->get('salesService')->declineServerRequestByKitchen(
+                $restaurantId,
+                (int) $request->route('id'),
+                (string) $request->input('reason', ''),
+                current_user()
+            );
+            flash('success', 'Commande declinee. Le service voit le motif dans son historique.');
+        } catch (\Throwable $e) {
+            flash('error', $e->getMessage());
+        }
+
+        redirect($this->moduleUrl('/cuisine', $restaurantId));
+    }
+
+    public function cancelKitchenStockRequest(Request $request): void
+    {
+        $restaurantId = $this->resolveRestaurantId($request);
+        authorize_access('kitchen.stock.request');
+
+        try {
+            Container::getInstance()->get('stockService')->cancelKitchenStockRequestByKitchen(
+                $restaurantId,
+                (int) $request->route('id'),
+                (string) $request->input('reason', ''),
+                current_user()
+            );
+            flash('success', 'Demande stock annulee avant traitement.');
+        } catch (\Throwable $e) {
+            flash('error', $e->getMessage());
+        }
+
+        redirect($this->moduleUrl('/cuisine', $restaurantId));
+    }
+
+    public function declineKitchenStockRequest(Request $request): void
+    {
+        $restaurantId = $this->resolveRestaurantId($request);
+        authorize_access('stock.request.respond');
+
+        try {
+            Container::getInstance()->get('stockService')->declineKitchenStockRequestByStock(
+                $restaurantId,
+                (int) $request->route('id'),
+                (string) $request->input('reason', ''),
+                current_user()
+            );
+            flash('success', 'Demande cuisine declinee. La cuisine voit le motif dans son historique.');
+        } catch (\Throwable $e) {
+            flash('error', $e->getMessage());
+        }
+
+        redirect($this->stockUrl($restaurantId));
+    }
+
     public function sales(Request $request): void
     {
         $restaurantId = $this->resolveRestaurantId($request);
@@ -565,6 +625,26 @@ final class OperationsController
         ], current_user());
 
         flash('success', 'Demande serveur enregistree.');
+        redirect($this->moduleUrl('/ventes', $restaurantId));
+    }
+
+    public function cancelServerRequest(Request $request): void
+    {
+        $restaurantId = $this->resolveRestaurantId($request);
+        authorize_access('sales.request.create');
+
+        try {
+            Container::getInstance()->get('salesService')->cancelServerRequestByServer(
+                $restaurantId,
+                (int) $request->route('id'),
+                (string) $request->input('reason', ''),
+                current_user()
+            );
+            flash('success', 'Demande annulee avant prise en charge cuisine.');
+        } catch (\Throwable $e) {
+            flash('error', $e->getMessage());
+        }
+
         redirect($this->moduleUrl('/ventes', $restaurantId));
     }
 

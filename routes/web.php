@@ -79,6 +79,7 @@ $router->post('/stock/pertes', [OperationsController::class, 'createLoss'], [Aut
 $router->post('/stock/movements/{id}/correction-request', [OperationsController::class, 'requestStockMovementCorrection'], [AuthMiddleware::class, StockAccessMiddleware::class]);
 $router->post('/stock/corrections/sensitive', [OperationsController::class, 'requestSensitiveCorrection'], [AuthMiddleware::class, StockAccessMiddleware::class]);
 $router->post('/stock/demandes-cuisine/{id}/reponse', [OperationsController::class, 'respondKitchenStockRequest'], [AuthMiddleware::class, StockAccessMiddleware::class]);
+$router->post('/stock/demandes-cuisine/{id}/decliner', [OperationsController::class, 'declineKitchenStockRequest'], [AuthMiddleware::class, StockAccessMiddleware::class]);
 $router->post('/stock/demandes-cuisine/{id}/incident', [OperationsController::class, 'signalKitchenStockIncident'], [AuthMiddleware::class, StockAccessMiddleware::class]);
 $router->get('/cuisine', [OperationsController::class, 'kitchen'], [AuthMiddleware::class, KitchenAccessMiddleware::class]);
 $router->post('/cuisine/productions', [OperationsController::class, 'createKitchenProduction'], [AuthMiddleware::class, KitchenAccessMiddleware::class]);
@@ -86,12 +87,15 @@ $router->post('/cuisine/retours', [OperationsController::class, 'validateKitchen
 $router->post('/cuisine/incidents', [OperationsController::class, 'signalKitchenIncident'], [AuthMiddleware::class, KitchenAccessMiddleware::class]);
 $router->post('/cuisine/demandes-stock', [OperationsController::class, 'requestKitchenStock'], [AuthMiddleware::class, KitchenAccessMiddleware::class]);
 $router->post('/cuisine/demandes-stock/{id}/reception', [OperationsController::class, 'confirmKitchenStockReceipt'], [AuthMiddleware::class, KitchenAccessMiddleware::class]);
+$router->post('/cuisine/demandes-stock/{id}/annuler', [OperationsController::class, 'cancelKitchenStockRequest'], [AuthMiddleware::class, KitchenAccessMiddleware::class]);
+$router->post('/cuisine/demandes-serveur/{id}/decliner', [OperationsController::class, 'declineServerRequest'], [AuthMiddleware::class, KitchenAccessMiddleware::class]);
 $router->post('/cuisine/demandes-serveur/{id}/fourni', [OperationsController::class, 'fulfillServerRequestItem'], [AuthMiddleware::class, KitchenAccessMiddleware::class]);
 $router->get('/ventes', [OperationsController::class, 'sales'], [AuthMiddleware::class, SalesAccessMiddleware::class]);
 $router->get('/ventes/factures/{id}', [OperationsController::class, 'printSaleReceipt'], [AuthMiddleware::class, SalesAccessMiddleware::class]);
 $router->post('/ventes', [OperationsController::class, 'createSale'], [AuthMiddleware::class, SalesAccessMiddleware::class]);
 $router->post('/ventes/demandes', [OperationsController::class, 'createServerRequest'], [AuthMiddleware::class, SalesAccessMiddleware::class]);
 $router->post('/ventes/demandes/{id}/reception', [OperationsController::class, 'confirmServerRequestReceipt'], [AuthMiddleware::class, SalesAccessMiddleware::class]);
+$router->post('/ventes/demandes/{id}/annuler', [OperationsController::class, 'cancelServerRequest'], [AuthMiddleware::class, SalesAccessMiddleware::class]);
 $router->post('/ventes/demandes/{id}/cloture', [OperationsController::class, 'closeServerRequest'], [AuthMiddleware::class, SalesAccessMiddleware::class]);
 $router->post('/ventes/incidents', [OperationsController::class, 'signalSaleIncident'], [AuthMiddleware::class, SalesAccessMiddleware::class]);
 $router->post('/operations/cases/{id}/decision', [OperationsController::class, 'decideCase'], [AuthMiddleware::class]);

@@ -27,6 +27,7 @@ $serviceBadgeClass = static function (?string $status): string {
         'EN_PREPARATION', 'FOURNI_PARTIEL' => 'badge-progress',
         'PRET_A_SERVIR', 'FOURNI_TOTAL', 'REMIS_SERVEUR' => 'badge-ready',
         'CLOTURE', 'VENDU_PARTIEL', 'VENDU_TOTAL' => 'badge-closed',
+        'ANNULE', 'REFUSE_CUISINE' => 'badge-bad',
         default => 'badge-neutral',
     };
 };
@@ -53,8 +54,41 @@ $closedRequests = array_values(array_filter(
     $server_requests,
     static fn (array $request): bool => in_array((string) $request['status'], $closedStatuses, true)
 ));
+$cancelledOrDeclinedRequests = array_values(array_filter(
+    $server_requests,
+    static fn (array $request): bool => in_array((string) $request['status'], ['ANNULE', 'REFUSE_CUISINE'], true)
+));
 
 $historyEntries = [];
+foreach ($cancelledOrDeclinedRequests as $request) {
+    $eventDate = (string) ($request['resolution_at'] ?: $request['updated_at'] ?: $request['created_at']);
+    $isDeclined = (string) $request['status'] === 'REFUSE_CUISINE';
+    $note = trim((string) ($request['resolution_note'] ?? ''));
+    $historyEntries[] = [
+        'type' => 'Demande service',
+        'reference' => '#' . (string) $request['id'] . ' - ' . (string) ($request['service_reference'] ?: '-'),
+        'status' => service_flow_status_label($request['status']),
+        'date' => $eventDate,
+        'details' => $isDeclined
+            ? ('Commande declinee par la cuisine : ' . ($note !== '' ? $note : '—') . ' · ' . request_terminal_resolution_line(
+                'declinee',
+                $request['resolution_by_name'] ?? null,
+                'kitchen',
+                $note,
+                (string) ($request['resolution_at'] ?? ''),
+                $historyTimezone
+            ))
+            : ('Demande annulee avant preparation · ' . request_terminal_resolution_line(
+                'annulee',
+                $request['resolution_by_name'] ?? null,
+                'cashier_server',
+                $note,
+                (string) ($request['resolution_at'] ?? ''),
+                $historyTimezone
+            )),
+        'amount' => 0.0,
+    ];
+}
 foreach ($closedRequests as $request) {
     $eventDate = (string) ($request['closed_at'] ?: $request['updated_at'] ?: $request['created_at']);
     $historyEntries[] = [
@@ -850,6 +884,29 @@ foreach ($historyEntries as $entry) {
                     <?php if (in_array((string) $request['status'], ['PRET_A_SERVIR', 'FOURNI_PARTIEL', 'FOURNI_TOTAL'], true) && can_access('sales.request.close')): ?>
                         <form method="post" action="/ventes/demandes/<?= e((string) $request['id']) ?>/reception" style="margin-top:14px;">
                             <button type="submit">Confirmer la reception cote service</button>
+                        </form>
+                    <?php endif; ?>
+
+                    <?php
+                    $uid = (int) (current_user()['id'] ?? 0);
+                    $canCancelRequest = can_access('sales.request.create')
+                        && $uid > 0
+                        && (int) ($request['server_id'] ?? 0) === $uid
+                        && (string) ($request['status'] ?? '') === 'DEMANDE';
+                    if ($canCancelRequest) {
+                        foreach ($items as $cit) {
+                            if ((string) ($cit['status'] ?? '') !== 'DEMANDE' || !empty($cit['technical_confirmed_by'])) {
+                                $canCancelRequest = false;
+                                break;
+                            }
+                        }
+                    }
+                    ?>
+                    <?php if ($canCancelRequest): ?>
+                        <form method="post" action="/ventes/demandes/<?= e((string) $request['id']) ?>/annuler" style="margin-top:14px; padding-top:14px; border-top:1px solid var(--line);">
+                            <label>Annuler cette commande (motif obligatoire)</label>
+                            <textarea name="reason" required placeholder="Ex. table change d avis, erreur de saisie..."></textarea>
+                            <button type="submit" class="button-muted">Annuler avant prise en charge cuisine</button>
                         </form>
                     <?php endif; ?>
                 </article>

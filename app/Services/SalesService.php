@@ -82,11 +82,13 @@ final class SalesService
         $sql = 'SELECT sr.*,
                        u.full_name AS server_name,
                        ready_user.full_name AS ready_by_name,
-                       received_user.full_name AS received_by_name
+                       received_user.full_name AS received_by_name,
+                       resolution_user.full_name AS resolution_by_name
                 FROM server_requests sr
                 INNER JOIN users u ON u.id = sr.server_id
                 LEFT JOIN users ready_user ON ready_user.id = sr.ready_by
                 LEFT JOIN users received_user ON received_user.id = sr.received_by
+                LEFT JOIN users resolution_user ON resolution_user.id = sr.resolution_by
                 WHERE sr.restaurant_id = :restaurant_id';
         $params = ['restaurant_id' => $restaurantId];
 
@@ -112,17 +114,21 @@ final class SalesService
                        sr.created_at AS request_created_at,
                        sr.ready_at AS request_ready_at,
                        sr.received_at AS request_received_at,
+                       sr.resolution_note AS request_resolution_note,
+                       sr.resolution_at AS request_resolution_at,
                        u.full_name AS server_name,
                        mi.name AS menu_item_name,
                        mi.image_url AS menu_item_image_url,
                        prepared_user.full_name AS prepared_by_name,
-                       received_user.full_name AS received_by_name
+                       received_user.full_name AS received_by_name,
+                       resolution_actor.full_name AS resolution_by_name
                 FROM server_request_items sri
                 INNER JOIN server_requests sr ON sr.id = sri.request_id
                 INNER JOIN menu_items mi ON mi.id = sri.menu_item_id
                 INNER JOIN users u ON u.id = sr.server_id
                 LEFT JOIN users prepared_user ON prepared_user.id = sri.technical_confirmed_by
                 LEFT JOIN users received_user ON received_user.id = sri.received_by
+                LEFT JOIN users resolution_actor ON resolution_actor.id = sr.resolution_by
                 WHERE sr.restaurant_id = :restaurant_id';
         $params = ['restaurant_id' => $restaurantId];
 
@@ -317,6 +323,177 @@ final class SalesService
         return $count;
     }
 
+    public function cancelServerRequestByServer(int $restaurantId, int $requestId, string $reason, array $actor): void
+    {
+        $reason = trim($reason);
+        if ($reason === '') {
+            throw new \RuntimeException('Motif d annulation obligatoire.');
+        }
+
+        $request = $this->findServerRequest($requestId, $restaurantId);
+        if ($request === null) {
+            throw new \RuntimeException('Demande serveur introuvable.');
+        }
+
+        if ((int) $request['server_id'] !== (int) ($actor['id'] ?? 0)) {
+            throw new \RuntimeException('Seul le serveur demandeur peut annuler cette commande.');
+        }
+
+        if (!in_array((string) $request['status'], ['DEMANDE'], true)) {
+            throw new \RuntimeException('Annulation impossible : la cuisine a deja avance sur cette demande.');
+        }
+
+        $items = $this->listServerRequestItemsByRequest($requestId, $restaurantId);
+        foreach ($items as $item) {
+            if ((string) ($item['status'] ?? '') !== 'DEMANDE') {
+                throw new \RuntimeException('Annulation impossible : statut deja modifie sur au moins une ligne.');
+            }
+            if (!empty($item['technical_confirmed_by'])) {
+                throw new \RuntimeException('Annulation impossible : la cuisine a pris en charge au moins une ligne.');
+            }
+        }
+
+        $pdo = $this->database->pdo();
+        $pdo->beginTransaction();
+
+        try {
+            $updItems = $pdo->prepare(
+                'UPDATE server_request_items
+                 SET status = "ANNULE",
+                     supply_status = "NON_FOURNI",
+                     supplied_quantity = 0,
+                     supplied_total = 0,
+                     total_supplied_amount = 0,
+                     unavailable_quantity = requested_quantity,
+                     updated_at = NOW()
+                 WHERE request_id = :request_id'
+            );
+            $updItems->execute(['request_id' => $requestId]);
+
+            $updReq = $pdo->prepare(
+                'UPDATE server_requests
+                 SET status = "ANNULE",
+                     total_supplied_amount = 0,
+                     resolution_note = :resolution_note,
+                     resolution_by = :resolution_by,
+                     resolution_at = NOW(),
+                     updated_at = NOW()
+                 WHERE id = :id AND restaurant_id = :restaurant_id'
+            );
+            $updReq->execute([
+                'resolution_note' => $reason,
+                'resolution_by' => $actor['id'],
+                'id' => $requestId,
+                'restaurant_id' => $restaurantId,
+            ]);
+
+            $pdo->commit();
+        } catch (\Throwable $throwable) {
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+            throw $throwable;
+        }
+
+        Container::getInstance()->get('audit')->log([
+            'restaurant_id' => $restaurantId,
+            'user_id' => $actor['id'],
+            'actor_name' => $actor['full_name'],
+            'actor_role_code' => $actor['role_code'],
+            'module_name' => 'sales',
+            'action_name' => 'request_cancelled',
+            'entity_type' => 'server_requests',
+            'entity_id' => (string) $requestId,
+            'new_values' => ['status' => 'ANNULE', 'resolution_note' => $reason],
+            'justification' => 'Annulation serveur avant prise en charge cuisine',
+        ]);
+    }
+
+    public function declineServerRequestByKitchen(int $restaurantId, int $requestId, string $reason, array $actor): void
+    {
+        $reason = trim($reason);
+        if ($reason === '') {
+            throw new \RuntimeException('Motif de declinaison obligatoire.');
+        }
+
+        $role = (string) ($actor['role_code'] ?? '');
+        if (!in_array($role, ['kitchen', 'manager'], true)) {
+            throw new \RuntimeException('Seule la cuisine (ou le gerant) peut decliner une demande serveur.');
+        }
+
+        $request = $this->findServerRequest($requestId, $restaurantId);
+        if ($request === null) {
+            throw new \RuntimeException('Demande serveur introuvable.');
+        }
+
+        if (in_array((string) $request['status'], ['REMIS_SERVEUR', 'CLOTURE', 'ANNULE', 'REFUSE_CUISINE', 'VENDU_PARTIEL', 'VENDU_TOTAL'], true)) {
+            throw new \RuntimeException('Declinaison impossible sur cette demande.');
+        }
+
+        $items = $this->listServerRequestItemsByRequest($requestId, $restaurantId);
+        foreach ($items as $item) {
+            $st = (string) ($item['status'] ?? '');
+            if (in_array($st, ['PRET_A_SERVIR', 'REMIS_SERVEUR', 'CLOTURE', 'REFUSE_CUISINE', 'ANNULE'], true)) {
+                throw new \RuntimeException('Declinaison impossible : au moins une ligne est deja prete ou terminee.');
+            }
+        }
+
+        $pdo = $this->database->pdo();
+        $pdo->beginTransaction();
+
+        try {
+            $updItems = $pdo->prepare(
+                'UPDATE server_request_items
+                 SET status = "REFUSE_CUISINE",
+                     supply_status = "NON_FOURNI",
+                     supplied_quantity = 0,
+                     supplied_total = 0,
+                     total_supplied_amount = 0,
+                     unavailable_quantity = requested_quantity,
+                     updated_at = NOW()
+                 WHERE request_id = :request_id'
+            );
+            $updItems->execute(['request_id' => $requestId]);
+
+            $updReq = $pdo->prepare(
+                'UPDATE server_requests
+                 SET status = "REFUSE_CUISINE",
+                     total_supplied_amount = 0,
+                     resolution_note = :resolution_note,
+                     resolution_by = :resolution_by,
+                     resolution_at = NOW(),
+                     updated_at = NOW()
+                 WHERE id = :id AND restaurant_id = :restaurant_id'
+            );
+            $updReq->execute([
+                'resolution_note' => $reason,
+                'resolution_by' => $actor['id'],
+                'id' => $requestId,
+                'restaurant_id' => $restaurantId,
+            ]);
+
+            $pdo->commit();
+        } catch (\Throwable $throwable) {
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+            throw $throwable;
+        }
+
+        Container::getInstance()->get('audit')->log([
+            'restaurant_id' => $restaurantId,
+            'user_id' => $actor['id'],
+            'actor_name' => $actor['full_name'],
+            'actor_role_code' => $actor['role_code'],
+            'module_name' => 'sales',
+            'action_name' => 'request_declined',
+            'entity_type' => 'server_requests',
+            'entity_id' => (string) $requestId,
+            'new_values' => ['status' => 'REFUSE_CUISINE', 'resolution_note' => $reason],
+            'justification' => 'Commande declinee par la cuisine (non disponible)',
+        ]);
+    }
+
     private function closeServerRequest(int $restaurantId, int $requestId, array $payload, array $actor, bool $automatic): void
     {
         $request = $this->findServerRequest($requestId, $restaurantId);
@@ -333,6 +510,10 @@ final class SalesService
         if ($items === []) {
             throw new \RuntimeException('Aucun article a conclure.');
         }
+        if (in_array((string) $request['status'], ['ANNULE', 'REFUSE_CUISINE'], true)) {
+            throw new \RuntimeException('Cette demande a ete annulee ou refusee par la cuisine.');
+        }
+
         if (!in_array((string) $request['status'], ['REMIS_SERVEUR', 'VENDU_PARTIEL', 'VENDU_TOTAL'], true)) {
             throw new \RuntimeException('La demande doit d abord etre remise au serveur avant la cloture.');
         }
@@ -471,6 +652,10 @@ final class SalesService
         $request = $this->findServerRequest($requestId, $restaurantId);
         if ($request === null) {
             throw new \RuntimeException('Demande serveur introuvable.');
+        }
+
+        if (in_array((string) $request['status'], ['ANNULE', 'REFUSE_CUISINE'], true)) {
+            throw new \RuntimeException('Cette demande ne peut pas etre receptionnee.');
         }
 
         if ((int) $request['server_id'] !== (int) $actor['id'] && ($actor['role_code'] ?? null) !== 'manager') {

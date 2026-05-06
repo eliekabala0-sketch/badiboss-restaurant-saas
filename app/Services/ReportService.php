@@ -492,7 +492,8 @@ final class ReportService
              FROM server_requests sr
              INNER JOIN users u ON u.id = sr.server_id
              LEFT JOIN roles r ON r.id = u.role_id
-             WHERE sr.restaurant_id = :rid AND sr.created_at >= :s AND sr.created_at < :e'
+             WHERE sr.restaurant_id = :rid AND sr.created_at >= :s AND sr.created_at < :e
+               AND sr.status NOT IN ("ANNULE", "REFUSE_CUISINE")'
             . ($userFilter > 0 ? ' AND sr.server_id = :uidfil' : '')
             . ($roleFilter !== '' ? ' AND r.code = :rolec' : '')
             . ' GROUP BY sr.server_id, u.full_name, r.code',
@@ -694,7 +695,8 @@ final class ReportService
              FROM server_requests sr
              INNER JOIN users u ON u.id = sr.server_id
              LEFT JOIN roles r ON r.id = u.role_id
-             WHERE sr.restaurant_id = :rid AND sr.created_at >= :s AND sr.created_at < :e' . $extra . '
+             WHERE sr.restaurant_id = :rid AND sr.created_at >= :s AND sr.created_at < :e
+               AND sr.status NOT IN ("ANNULE", "REFUSE_CUISINE")' . $extra . '
              GROUP BY sr.server_id'
         );
         $statement->execute($params);

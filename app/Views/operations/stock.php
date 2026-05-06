@@ -129,6 +129,10 @@ $closedRequests = array_values(array_filter(
     $kitchen_stock_requests,
     static fn (array $request): bool => (string) $request['status'] === 'CLOTURE'
 ));
+$endedStockRequests = array_values(array_filter(
+    $kitchen_stock_requests,
+    static fn (array $request): bool => in_array((string) $request['status'], ['ANNULE', 'REFUSE_STOCK'], true)
+));
 $nonSuppliedReadyRequests = array_values(array_filter(
     $readyRequests,
     static fn (array $request): bool => (string) $request['status'] === 'NON_FOURNI'
@@ -178,6 +182,41 @@ foreach ($closedRequests as $request) {
             . (($details !== []) ? implode(', ', $details) . ' · ' : '')
             . 'fournie ' . (string) ($request['quantity_supplied_total'] ?? $request['quantity_supplied'] ?? 0)
             . ' · non fournie ' . (string) ($request['unavailable_quantity_total'] ?? $request['unavailable_quantity'] ?? 0),
+    ];
+}
+
+foreach ($endedStockRequests as $request) {
+    $requestItems = $kitchenStockRequestItemsByRequest[(int) $request['id']] ?? [];
+    $details = [];
+    foreach ($requestItems as $detailItem) {
+        $details[] = (string) ($detailItem['stock_item_name'] ?? 'Article') . ' ' . (string) ($detailItem['quantity_requested'] ?? 0);
+    }
+    $eventDate = (string) ($request['resolution_at'] ?: $request['updated_at'] ?: $request['created_at']);
+    $isDeclinedStock = (string) $request['status'] === 'REFUSE_STOCK';
+    $note = trim((string) ($request['resolution_note'] ?? ''));
+    $historyEntries[] = [
+        'type' => $isDeclinedStock ? 'Demande stock refusee' : 'Demande stock annulee',
+        'reference' => 'Demande #' . (string) $request['id'] . ' · ' . ((int) ($request['item_count'] ?? count($requestItems) ?: 1)) . ' produit(s)',
+        'status' => stock_request_status_label($request['status'] ?? null),
+        'date' => $eventDate,
+        'details' => ($details !== [] ? implode(', ', $details) . ' · ' : '')
+            . ($isDeclinedStock
+                ? ('Demande stock declinee : ' . ($note !== '' ? $note : '—') . ' · ' . request_terminal_resolution_line(
+                    'declinee',
+                    $request['resolution_by_name'] ?? null,
+                    'stock_manager',
+                    $note,
+                    (string) ($request['resolution_at'] ?? ''),
+                    $historyTimezone
+                ))
+                : request_terminal_resolution_line(
+                    'annulee',
+                    $request['resolution_by_name'] ?? null,
+                    'kitchen',
+                    $note,
+                    (string) ($request['resolution_at'] ?? ''),
+                    $historyTimezone
+                )),
     ];
 }
 
@@ -242,6 +281,7 @@ $stockBadgeClass = static function (?string $status): string {
         'FOURNI_TOTAL', 'FOURNI_PARTIEL' => 'badge-ready',
         'NON_FOURNI', 'REJETE' => 'badge-bad',
         'CLOTURE', 'VALIDE' => 'badge-closed',
+        'ANNULE', 'REFUSE_STOCK' => 'badge-bad',
         default => 'badge-neutral',
     };
 };
@@ -565,6 +605,17 @@ $priorityBadgeClass = static function (?string $priority): string {
                                         <button type="submit">Valider la remise globale</button>
                                     </div>
                                 </form>
+
+                                <?php if (in_array((string) $request['status'], ['DEMANDE', 'EN_COURS_TRAITEMENT'], true)): ?>
+                                    <details style="margin-top:14px;">
+                                        <summary style="cursor:pointer;"><strong>Decliner / non disponible (toute la demande)</strong></summary>
+                                        <form method="post" action="/stock/demandes-cuisine/<?= e((string) $request['id']) ?>/decliner" style="margin-top:10px;">
+                                            <label>Motif obligatoire</label>
+                                            <textarea name="reason" required placeholder="Ex. rupture, article introuvable..."></textarea>
+                                            <button type="submit" class="button-muted">Decliner la demande cuisine</button>
+                                        </form>
+                                    </details>
+                                <?php endif; ?>
                             <?php else: ?>
                                 <span class="muted">Lecture seule.</span>
                             <?php endif; ?>

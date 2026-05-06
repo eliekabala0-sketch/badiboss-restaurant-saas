@@ -861,12 +861,14 @@ final class StockService
                     si.unit_name,
                     rq.full_name AS requested_by_name,
                     rp.full_name AS responded_by_name,
-                    ru.full_name AS received_by_name
+                    ru.full_name AS received_by_name,
+                    res_actor.full_name AS resolution_by_name
              FROM kitchen_stock_requests ksr
              INNER JOIN stock_items si ON si.id = ksr.stock_item_id
              INNER JOIN users rq ON rq.id = ksr.requested_by
              LEFT JOIN users rp ON rp.id = ksr.responded_by
              LEFT JOIN users ru ON ru.id = ksr.received_by
+             LEFT JOIN users res_actor ON res_actor.id = ksr.resolution_by
              WHERE ksr.restaurant_id = :restaurant_id
              ORDER BY ksr.id DESC'
         );
@@ -1300,9 +1302,170 @@ final class StockService
         ]);
     }
 
+    public function cancelKitchenStockRequestByKitchen(int $restaurantId, int $requestId, string $reason, array $actor): void
+    {
+        $this->ensureKitchenStockRequestItemsTable();
+        $reason = trim($reason);
+        if ($reason === '') {
+            throw new \RuntimeException('Motif d annulation obligatoire.');
+        }
+
+        $request = $this->findKitchenStockRequestInRestaurant($requestId, $restaurantId);
+        if ((int) $request['requested_by'] !== (int) ($actor['id'] ?? 0)) {
+            throw new \RuntimeException('Seul le demandeur peut annuler cette demande stock.');
+        }
+        if ((string) $request['status'] !== 'DEMANDE') {
+            throw new \RuntimeException('Annulation impossible : le stock a deja traite ou pris en charge cette demande.');
+        }
+
+        $pdo = $this->database->pdo();
+        $pdo->beginTransaction();
+
+        try {
+            if ($this->tableExists('kitchen_stock_request_items')) {
+                $itemStmt = $pdo->prepare(
+                    'UPDATE kitchen_stock_request_items
+                     SET status = "ANNULE",
+                         quantity_supplied = 0,
+                         unavailable_quantity = quantity_requested,
+                         updated_at = NOW()
+                     WHERE request_id = :request_id AND restaurant_id = :restaurant_id'
+                );
+                $itemStmt->execute(['request_id' => $requestId, 'restaurant_id' => $restaurantId]);
+            }
+
+            $upd = $pdo->prepare(
+                'UPDATE kitchen_stock_requests
+                 SET status = "ANNULE",
+                     quantity_supplied = 0,
+                     unavailable_quantity = quantity_requested,
+                     resolution_note = :resolution_note,
+                     resolution_by = :resolution_by,
+                     resolution_at = NOW(),
+                     updated_at = NOW()
+                 WHERE id = :id AND restaurant_id = :restaurant_id'
+            );
+            $upd->execute([
+                'resolution_note' => $reason,
+                'resolution_by' => $actor['id'],
+                'id' => $requestId,
+                'restaurant_id' => $restaurantId,
+            ]);
+
+            $pdo->commit();
+        } catch (\Throwable $throwable) {
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+            throw $throwable;
+        }
+
+        Container::getInstance()->get('audit')->log([
+            'restaurant_id' => $restaurantId,
+            'user_id' => $actor['id'],
+            'actor_name' => $actor['full_name'],
+            'actor_role_code' => $actor['role_code'],
+            'module_name' => 'stock',
+            'action_name' => 'stock_request_cancelled',
+            'entity_type' => 'kitchen_stock_requests',
+            'entity_id' => (string) $requestId,
+            'new_values' => ['status' => 'ANNULE', 'resolution_note' => $reason],
+            'justification' => 'Annulation cuisine avant traitement stock',
+        ]);
+    }
+
+    public function declineKitchenStockRequestByStock(int $restaurantId, int $requestId, string $reason, array $actor): void
+    {
+        $this->ensureKitchenStockRequestItemsTable();
+        $reason = trim($reason);
+        if ($reason === '') {
+            throw new \RuntimeException('Motif de declinaison obligatoire.');
+        }
+
+        $role = (string) ($actor['role_code'] ?? '');
+        if (!in_array($role, ['stock_manager', 'manager'], true)) {
+            throw new \RuntimeException('Seul le stock (ou le gerant) peut decliner cette demande.');
+        }
+
+        $request = $this->findKitchenStockRequestInRestaurant($requestId, $restaurantId);
+        if (!in_array((string) $request['status'], ['DEMANDE', 'EN_COURS_TRAITEMENT'], true)) {
+            throw new \RuntimeException('Declinaison impossible : la demande est deja fournie ou cloturee.');
+        }
+
+        $requestItems = $this->kitchenStockRequestItemsForRequest($restaurantId, $requestId);
+        if ($requestItems !== []) {
+            foreach ($requestItems as $line) {
+                if ((float) ($line['quantity_supplied'] ?? 0) > 0.00001) {
+                    throw new \RuntimeException('Declinaison impossible : du stock a deja ete engage sur cette demande.');
+                }
+            }
+        } elseif ((float) ($request['quantity_supplied'] ?? 0) > 0.00001) {
+            throw new \RuntimeException('Declinaison impossible : une quantite a deja ete promise.');
+        }
+
+        $pdo = $this->database->pdo();
+        $pdo->beginTransaction();
+
+        try {
+            if ($requestItems !== []) {
+                $itemStmt = $pdo->prepare(
+                    'UPDATE kitchen_stock_request_items
+                     SET status = "REFUSE_STOCK",
+                         quantity_supplied = 0,
+                         unavailable_quantity = quantity_requested,
+                         updated_at = NOW()
+                     WHERE request_id = :request_id AND restaurant_id = :restaurant_id'
+                );
+                $itemStmt->execute(['request_id' => $requestId, 'restaurant_id' => $restaurantId]);
+            }
+
+            $upd = $pdo->prepare(
+                'UPDATE kitchen_stock_requests
+                 SET status = "REFUSE_STOCK",
+                     quantity_supplied = 0,
+                     unavailable_quantity = quantity_requested,
+                     resolution_note = :resolution_note,
+                     resolution_by = :resolution_by,
+                     resolution_at = NOW(),
+                     updated_at = NOW()
+                 WHERE id = :id AND restaurant_id = :restaurant_id'
+            );
+            $upd->execute([
+                'resolution_note' => $reason,
+                'resolution_by' => $actor['id'],
+                'id' => $requestId,
+                'restaurant_id' => $restaurantId,
+            ]);
+
+            $pdo->commit();
+        } catch (\Throwable $throwable) {
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+            throw $throwable;
+        }
+
+        Container::getInstance()->get('audit')->log([
+            'restaurant_id' => $restaurantId,
+            'user_id' => $actor['id'],
+            'actor_name' => $actor['full_name'],
+            'actor_role_code' => $actor['role_code'],
+            'module_name' => 'stock',
+            'action_name' => 'stock_request_declined',
+            'entity_type' => 'kitchen_stock_requests',
+            'entity_id' => (string) $requestId,
+            'new_values' => ['status' => 'REFUSE_STOCK', 'resolution_note' => $reason],
+            'justification' => 'Demande cuisine declinee par le stock (non disponible)',
+        ]);
+    }
+
     public function respondKitchenStockRequest(int $restaurantId, int $requestId, array $payload, array $actor): void
     {
         $request = $this->findKitchenStockRequestInRestaurant($requestId, $restaurantId);
+        if (in_array((string) $request['status'], ['ANNULE', 'REFUSE_STOCK', 'CLOTURE'], true)) {
+            throw new \RuntimeException('Cette demande stock est terminee ou fermee.');
+        }
+
         $requestItems = $this->kitchenStockRequestItemsForRequest($restaurantId, $requestId);
         if ($requestItems !== []) {
             $this->respondKitchenStockRequestBlock($restaurantId, $request, $requestItems, $payload, $actor);
@@ -1430,6 +1593,10 @@ final class StockService
     public function confirmKitchenStockReceipt(int $restaurantId, int $requestId, array $actor): void
     {
         $request = $this->findKitchenStockRequestInRestaurant($requestId, $restaurantId);
+        if (in_array((string) $request['status'], ['ANNULE', 'REFUSE_STOCK'], true)) {
+            throw new \RuntimeException('Cette demande stock a ete annulee ou declinee.');
+        }
+
         $requestItems = $this->kitchenStockRequestItemsForRequest($restaurantId, $requestId);
 
         if ($requestItems !== []) {
@@ -2317,6 +2484,9 @@ final class StockService
 
     private function resolveKitchenStockRequestStatus(array $items, string $fallback): string
     {
+        if (in_array($fallback, ['ANNULE', 'REFUSE_STOCK', 'CLOTURE'], true)) {
+            return $fallback;
+        }
         if ($items === []) {
             return $fallback;
         }
