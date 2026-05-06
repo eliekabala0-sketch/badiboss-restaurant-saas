@@ -270,6 +270,78 @@ $restaurantRegisterUrl = restaurant_generated_registration_url($restaurant);
     <?php endif; ?>
 </section>
 
+<?php
+$saleRemittancePending = $pending_manager_sale_remittances ?? [];
+$saleRemittanceHist = $sale_remittance_history ?? [];
+?>
+<?php if ($saleRemittancePending !== [] || $saleRemittanceHist !== []): ?>
+<section class="card" style="padding:24px; margin-top:24px;">
+    <h2 style="margin-top:0;">Remises caisse (ventes)</h2>
+    <p class="muted">File <strong>à décider par le gérant</strong> lorsque la caisse soumet un doute. L’historique est visible par le gérant et le propriétaire, sans double réception.</p>
+
+    <?php if ($saleRemittancePending !== []): ?>
+        <details class="compact-card no-print" data-autoclose-details style="margin-top:14px;">
+            <summary><strong>File gérant</strong> · <?= e((string) count($saleRemittancePending)) ?> en attente</summary>
+            <?php foreach ($saleRemittancePending as $pr): ?>
+                <article class="card" style="padding:16px; margin-top:14px; border-radius:14px;">
+                    <div class="topbar" style="margin-bottom:8px;">
+                        <strong>Transfert #<?= e((string) ($pr['id'] ?? '')) ?> · <?= e(format_money((float) ($pr['amount'] ?? 0), $restaurantCurrency)) ?></strong>
+                        <span class="pill badge-progress"><?= e(cash_transfer_status_label($pr['status'] ?? null)) ?></span>
+                    </div>
+                    <p class="muted" style="margin:0;">Vente #<?= e((string) ($pr['sale_id'] ?? '')) ?>
+                        <?php if (!empty($pr['service_reference'])): ?> · <?= e((string) $pr['service_reference']) ?><?php endif; ?>
+                        · serveur <?= e(named_actor_label($pr['sale_server_name'] ?? null, 'cashier_server')) ?>
+                        · de <?= e(named_actor_label($pr['from_user_name'] ?? null)) ?> vers <?= e(named_actor_label($pr['to_user_name'] ?? null)) ?>
+                    </p>
+                    <?php if (($user['role_code'] ?? '') === 'manager'): ?>
+                        <form method="post" action="/owner/caisse/remises-vente/<?= e((string) ($pr['id'] ?? '0')) ?>/decision" class="split no-print" style="margin-top:12px;" onsubmit="return confirm('Confirmer la décision gérant sur cette remise ?');">
+                            <div>
+                                <label>Décision</label>
+                                <select name="decision">
+                                    <option value="VALIDER">Valider réception (montant attendu intégralement reçu)</option>
+                                    <option value="REJETER">Rejeter la remise</option>
+                                </select>
+                            </div>
+                            <div style="grid-column:1 / -1;">
+                                <label>Motif (obligatoire)</label>
+                                <textarea name="reason" required></textarea>
+                            </div>
+                            <div style="grid-column:1 / -1;">
+                                <button type="submit">Enregistrer la décision</button>
+                            </div>
+                        </form>
+                    <?php else: ?>
+                        <p class="muted no-print" style="margin:12px 0 0;">Seul le gérant peut valider ou rejeter depuis cette file.</p>
+                    <?php endif; ?>
+                </article>
+            <?php endforeach; ?>
+        </details>
+    <?php endif; ?>
+
+    <?php if ($saleRemittanceHist !== []): ?>
+        <details class="compact-card" data-autoclose-details style="margin-top:14px;">
+            <summary><strong>Historique remises vente</strong> · <?= e((string) count($saleRemittanceHist)) ?> derniers mouvements</summary>
+            <div class="table-wrap" style="margin-top:12px;">
+                <table>
+                    <thead><tr><th>#</th><th>Vente</th><th>Montant</th><th>Statut</th><th>Date</th></tr></thead>
+                    <tbody>
+                    <?php foreach ($saleRemittanceHist as $h): ?>
+                        <tr>
+                            <td><?= e((string) ($h['id'] ?? '')) ?></td>
+                            <td>#<?= e((string) ($h['sale_id'] ?? '-')) ?><?php if (!empty($h['service_reference'])): ?><br><span class="muted"><?= e((string) $h['service_reference']) ?></span><?php endif; ?></td>
+                            <td><?= e(format_money((float) ($h['amount'] ?? 0), $restaurantCurrency)) ?></td>
+                            <td><?= e(cash_transfer_status_label($h['status'] ?? null)) ?></td>
+                            <td><?= e(format_date_fr($h['validated_at'] ?? $h['received_at'] ?? $h['requested_at'] ?? $h['created_at'] ?? null, $subscriptionTimezone)) ?></td>
+                        </tr>
+                    <?php endforeach; ?>
+                    </tbody>
+                </table>
+            </div>
+        </details>
+    <?php endif; ?>
+</section>
+<?php endif; ?>
+
 <section class="card" style="padding:24px; margin-top:24px;">
     <h2 style="margin-top:0;">Orientation rapide</h2>
     <div class="nav" style="margin-bottom:0;">

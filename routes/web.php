@@ -34,6 +34,8 @@ $router->post('/super-admin/reset/preview', [DashboardController::class, 'previe
 $router->post('/super-admin/reset/execute', [DashboardController::class, 'executeOperationalReset'], [AuthMiddleware::class, SuperAdminMiddleware::class]);
 $router->post('/super-admin/stock-reset/preview', [DashboardController::class, 'previewStockReset'], [AuthMiddleware::class, SuperAdminMiddleware::class]);
 $router->post('/super-admin/stock-reset/execute', [DashboardController::class, 'executeStockReset'], [AuthMiddleware::class, SuperAdminMiddleware::class]);
+$router->post('/super-admin/operations/lookup', [DashboardController::class, 'superAdminOperationLookup'], [AuthMiddleware::class, SuperAdminMiddleware::class]);
+$router->post('/super-admin/operations/force', [DashboardController::class, 'superAdminOperationForce'], [AuthMiddleware::class, SuperAdminMiddleware::class]);
 $router->get('/super-admin/restaurants', [RestaurantAdminController::class, 'index'], [AuthMiddleware::class, SuperAdminMiddleware::class]);
 $router->post('/super-admin/restaurants', [RestaurantAdminController::class, 'store'], [AuthMiddleware::class, SuperAdminMiddleware::class]);
 $router->get('/super-admin/restaurants/{id}', [RestaurantAdminController::class, 'show'], [AuthMiddleware::class, SuperAdminMiddleware::class]);
@@ -107,12 +109,15 @@ $router->get('/rapport', [OperationsController::class, 'report'], [AuthMiddlewar
 $router->get('/caisse', [OperationsController::class, 'cash'], [AuthMiddleware::class]);
 $router->post('/caisse/remises-serveur', [OperationsController::class, 'remitServerCash'], [AuthMiddleware::class]);
 $router->post('/caisse/transferts/{id}/reception-caisse', [OperationsController::class, 'receiveCashAtCashier'], [AuthMiddleware::class]);
+$router->post('/caisse/transferts/{id}/rejet-remise', [OperationsController::class, 'rejectSaleRemittanceAtCashier'], [AuthMiddleware::class]);
+$router->post('/caisse/transferts/{id}/soumission-gerant', [OperationsController::class, 'submitSaleRemittanceToManagerFromCashier'], [AuthMiddleware::class]);
 $router->post('/caisse/mouvements', [OperationsController::class, 'createCashMovement'], [AuthMiddleware::class]);
 $router->post('/caisse/remises-gerant', [OperationsController::class, 'transferCashToManager'], [AuthMiddleware::class]);
 $router->post('/caisse/transferts/{id}/reception-gerant', [OperationsController::class, 'receiveCashAtManager'], [AuthMiddleware::class]);
 $router->post('/caisse/remises-proprietaire', [OperationsController::class, 'transferCashToOwner'], [AuthMiddleware::class]);
 $router->post('/caisse/transferts/{id}/reception-proprietaire', [OperationsController::class, 'receiveCashAtOwner'], [AuthMiddleware::class]);
 $router->post('/owner/correction-requests/{id}/decision', [OperationsController::class, 'decideCorrectionRequest'], [AuthMiddleware::class, OwnerOrManagerMiddleware::class]);
+$router->post('/owner/caisse/remises-vente/{id}/decision', [OperationsController::class, 'decideManagerSaleRemittance'], [AuthMiddleware::class, OwnerOrManagerMiddleware::class]);
 $router->get('/portal/register', [TenantPortalController::class, 'showRegistration']);
 $router->post('/portal/register', [TenantPortalController::class, 'register']);
 $router->get('/portal/{slug}/register', [TenantPortalController::class, 'showRegistration']);

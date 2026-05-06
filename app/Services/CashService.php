@@ -129,14 +129,19 @@ final class CashService
     {
         return array_values(array_filter(
             $this->listSaleRemittanceTracking($restaurantId, $serverId),
-            static function (array $row): bool {
+            function (array $row): bool {
                 $saleStatus = (string) ($row['sale_status'] ?? '');
                 $transferId = (int) ($row['transfer_id'] ?? 0);
+                $transferStatus = (string) ($row['transfer_status'] ?? '');
                 $amount = (float) ($row['sale_total_amount'] ?? 0);
+                if (!in_array($saleStatus, ['VALIDE', 'CLOTURE', 'VENDU_TOTAL', 'VENDU_PARTIEL'], true) || $amount <= 0) {
+                    return false;
+                }
+                if ($transferId <= 0) {
+                    return true;
+                }
 
-                return in_array($saleStatus, ['VALIDE', 'CLOTURE', 'VENDU_TOTAL', 'VENDU_PARTIEL'], true)
-                    && $transferId <= 0
-                    && $amount > 0;
+                return !$this->isBlockingSaleRemittanceStatus($transferStatus);
             }
         ));
     }
@@ -194,6 +199,227 @@ final class CashService
         $statement->execute($params);
 
         return $statement->fetchAll(PDO::FETCH_ASSOC);
+    }
+
+    /**
+     * @return list<array<string, mixed>>
+     */
+    public function listPendingManagerSaleRemittances(int $restaurantId): array
+    {
+        $this->ensureSchema();
+        $statement = $this->database->pdo()->prepare(
+            'SELECT ct.*,
+                    fu.full_name AS from_user_name,
+                    tu.full_name AS to_user_name,
+                    s.id AS sale_id,
+                    s.total_amount AS sale_total_amount,
+                    s.status AS sale_status,
+                    sr.id AS server_request_id,
+                    sr.service_reference,
+                    su.full_name AS sale_server_name
+             FROM cash_transfers ct
+             LEFT JOIN users fu ON fu.id = ct.from_user_id
+             LEFT JOIN users tu ON tu.id = ct.to_user_id
+             LEFT JOIN sales s ON ct.source_type = "sale" AND s.id = ct.source_id
+             LEFT JOIN server_requests sr ON s.origin_type = "server_request" AND sr.id = s.origin_id
+             LEFT JOIN users su ON su.id = s.server_id
+             WHERE ct.restaurant_id = :restaurant_id
+               AND ct.source_type = "sale"
+               AND ct.status = "SOUMIS_GERANT"
+             ORDER BY ct.id ASC'
+        );
+        $statement->execute(['restaurant_id' => $restaurantId]);
+
+        return $statement->fetchAll(PDO::FETCH_ASSOC);
+    }
+
+    /**
+     * Historique compact des remises vente (tous statuts) pour pilotage gérant / propriétaire.
+     *
+     * @return list<array<string, mixed>>
+     */
+    public function listSaleRemittanceHistory(int $restaurantId, int $limit = 40): array
+    {
+        $this->ensureSchema();
+        $limit = max(1, min(120, $limit));
+        $statement = $this->database->pdo()->prepare(
+            'SELECT ct.*,
+                    fu.full_name AS from_user_name,
+                    tu.full_name AS to_user_name,
+                    ru.full_name AS received_by_name,
+                    vu.full_name AS validated_by_name,
+                    s.id AS sale_id,
+                    s.total_amount AS sale_total_amount,
+                    s.status AS sale_status,
+                    sr.id AS server_request_id,
+                    sr.service_reference,
+                    su.full_name AS sale_server_name
+             FROM cash_transfers ct
+             LEFT JOIN users fu ON fu.id = ct.from_user_id
+             LEFT JOIN users tu ON tu.id = ct.to_user_id
+             LEFT JOIN users ru ON ru.id = ct.received_by
+             LEFT JOIN users vu ON vu.id = ct.validated_by
+             LEFT JOIN sales s ON ct.source_type = "sale" AND s.id = ct.source_id
+             LEFT JOIN server_requests sr ON s.origin_type = "server_request" AND sr.id = s.origin_id
+             LEFT JOIN users su ON su.id = s.server_id
+             WHERE ct.restaurant_id = :restaurant_id
+               AND ct.source_type = "sale"
+             ORDER BY ct.id DESC
+             LIMIT ' . (string) $limit
+        );
+        $statement->execute(['restaurant_id' => $restaurantId]);
+
+        return $statement->fetchAll(PDO::FETCH_ASSOC);
+    }
+
+    public function rejectSaleRemittanceByCashier(int $restaurantId, int $transferId, string $reason, array $actor): void
+    {
+        $this->ensureSchema();
+        $reason = trim($reason);
+        if ($reason === '') {
+            throw new \RuntimeException('Motif de rejet obligatoire.');
+        }
+        $transfer = $this->findTransferInRestaurant($transferId, $restaurantId);
+        if ((string) ($transfer['source_type'] ?? '') !== 'sale' || (int) ($transfer['source_id'] ?? 0) <= 0) {
+            throw new \RuntimeException('Cette action ne concerne que les remises liees a une vente.');
+        }
+        if ((string) $transfer['status'] !== 'REMIS_A_CAISSE') {
+            throw new \RuntimeException('Seule une remise en attente de caisse peut etre rejetee ainsi.');
+        }
+        $snapshot = $this->buildCashTransferOperationSnapshot($restaurantId, $transfer);
+        $stmt = $this->database->pdo()->prepare(
+            'UPDATE cash_transfers
+             SET status = "REMISE_REJETEE_CAISSE",
+                 discrepancy_note = :reason,
+                 validated_by = :validated_by,
+                 validated_at = NOW(),
+                 updated_at = NOW()
+             WHERE id = :id AND restaurant_id = :restaurant_id AND status = "REMIS_A_CAISSE"'
+        );
+        $stmt->execute([
+            'reason' => $reason,
+            'validated_by' => $actor['id'],
+            'id' => $transferId,
+            'restaurant_id' => $restaurantId,
+        ]);
+        if ($stmt->rowCount() < 1) {
+            throw new \RuntimeException('Rejet impossible (statut change ou transfert introuvable).');
+        }
+        $this->audit($restaurantId, $actor, 'cash_remise_rejetee_caisse', 'cash_transfers', $transferId, [
+            'old_status' => 'REMIS_A_CAISSE',
+            'new_status' => 'REMISE_REJETEE_CAISSE',
+            'operation' => $snapshot,
+            'reason' => $reason,
+        ], 'Rejet remise serveur par la caisse');
+    }
+
+    public function submitSaleRemittanceToManager(int $restaurantId, int $transferId, string $reason, array $actor): void
+    {
+        $this->ensureSchema();
+        $reason = trim($reason);
+        if ($reason === '') {
+            throw new \RuntimeException('Motif de soumission obligatoire.');
+        }
+        $transfer = $this->findTransferInRestaurant($transferId, $restaurantId);
+        if ((string) ($transfer['source_type'] ?? '') !== 'sale') {
+            throw new \RuntimeException('Soumission reservee aux remises vente.');
+        }
+        if ((string) $transfer['status'] !== 'REMIS_A_CAISSE') {
+            throw new \RuntimeException('Soumission impossible sur ce statut.');
+        }
+        $snapshot = $this->buildCashTransferOperationSnapshot($restaurantId, $transfer);
+        $stmt = $this->database->pdo()->prepare(
+            'UPDATE cash_transfers
+             SET status = "SOUMIS_GERANT",
+                 note = TRIM(CONCAT(IFNULL(note, ""), " [Soumission gérant caisse] ", :reason)),
+                 validated_by = :validated_by,
+                 validated_at = NOW(),
+                 updated_at = NOW()
+             WHERE id = :id AND restaurant_id = :restaurant_id AND status = "REMIS_A_CAISSE"'
+        );
+        $stmt->execute([
+            'reason' => $reason,
+            'validated_by' => $actor['id'],
+            'id' => $transferId,
+            'restaurant_id' => $restaurantId,
+        ]);
+        if ($stmt->rowCount() < 1) {
+            throw new \RuntimeException('Soumission impossible (conflit de statut).');
+        }
+        $this->audit($restaurantId, $actor, 'cash_remise_soumise_gerant', 'cash_transfers', $transferId, [
+            'old_status' => 'REMIS_A_CAISSE',
+            'new_status' => 'SOUMIS_GERANT',
+            'operation' => $snapshot,
+            'reason' => $reason,
+        ], 'Remise soumise au gerant pour decision');
+    }
+
+    public function managerDecideSaleRemittance(int $restaurantId, int $transferId, string $decision, string $reason, array $actor): void
+    {
+        $this->ensureSchema();
+        $reason = trim($reason);
+        if ($reason === '') {
+            throw new \RuntimeException('Motif obligatoire pour la decision gerant.');
+        }
+        $decision = strtoupper(trim($decision));
+        if (!in_array($decision, ['VALIDER', 'REJETER'], true)) {
+            throw new \RuntimeException('Decision gerant invalide.');
+        }
+        $transfer = $this->findTransferInRestaurant($transferId, $restaurantId);
+        if ((string) $transfer['status'] !== 'SOUMIS_GERANT') {
+            throw new \RuntimeException('Aucune soumission gerant en attente sur ce transfert.');
+        }
+        $snapshot = $this->buildCashTransferOperationSnapshot($restaurantId, $transfer);
+        if ($decision === 'VALIDER') {
+            $stmt = $this->database->pdo()->prepare(
+                'UPDATE cash_transfers
+                 SET status = "RECU_CAISSE",
+                     amount_received = amount,
+                     received_by = :received_by,
+                     received_at = NOW(),
+                     note = TRIM(CONCAT(IFNULL(note, ""), " [Validation gérant] ", :reason)),
+                     updated_at = NOW()
+                 WHERE id = :id AND restaurant_id = :restaurant_id AND status = "SOUMIS_GERANT"'
+            );
+            $stmt->execute([
+                'received_by' => $actor['id'],
+                'reason' => $reason,
+                'id' => $transferId,
+                'restaurant_id' => $restaurantId,
+            ]);
+            if ($stmt->rowCount() < 1) {
+                throw new \RuntimeException('Validation gerant impossible.');
+            }
+            $this->audit($restaurantId, $actor, 'cash_remise_validee_gerant', 'cash_transfers', $transferId, [
+                'old_status' => 'SOUMIS_GERANT',
+                'new_status' => 'RECU_CAISSE',
+                'operation' => $snapshot,
+                'reason' => $reason,
+            ], 'Validation gerant d une remise soumise par la caisse');
+            return;
+        }
+
+        $stmt = $this->database->pdo()->prepare(
+            'UPDATE cash_transfers
+             SET status = "REMISE_REJETEE_GERANT",
+                 discrepancy_note = :reason,
+                 updated_at = NOW()
+             WHERE id = :id AND restaurant_id = :restaurant_id AND status = "SOUMIS_GERANT"'
+        );
+        $stmt->execute([
+            'reason' => $reason,
+            'id' => $transferId,
+            'restaurant_id' => $restaurantId,
+        ]);
+        if ($stmt->rowCount() < 1) {
+            throw new \RuntimeException('Rejet gerant impossible.');
+        }
+        $this->audit($restaurantId, $actor, 'cash_remise_rejetee_gerant', 'cash_transfers', $transferId, [
+            'old_status' => 'SOUMIS_GERANT',
+            'new_status' => 'REMISE_REJETEE_GERANT',
+            'operation' => $snapshot,
+            'reason' => $reason,
+        ], 'Rejet gerant d une remise soumise par la caisse');
     }
 
     public function receiveByCashier(int $restaurantId, int $transferId, array $payload, array $actor): void
@@ -411,7 +637,7 @@ final class CashService
             $status = (string) ($transfer['status'] ?? '');
             $amount = (float) ($transfer['amount'] ?? 0);
             $amountReceived = (float) ($transfer['amount_received'] ?? $amount);
-            if (in_array($status, ['REMIS_A_CAISSE', 'RECU_CAISSE', 'ECART_SIGNALE', 'REMIS_A_GERANT', 'RECU_GERANT', 'REMIS_A_PROPRIETAIRE', 'RECU_PROPRIETAIRE'], true)) {
+            if (in_array($status, ['REMIS_A_CAISSE', 'SOUMIS_GERANT', 'RECU_CAISSE', 'ECART_SIGNALE', 'REMIS_A_GERANT', 'RECU_GERANT', 'REMIS_A_PROPRIETAIRE', 'RECU_PROPRIETAIRE'], true)) {
                 $totalRemittedToCash += $amount;
             }
             if (in_array($status, ['RECU_CAISSE', 'REMIS_A_GERANT', 'RECU_GERANT', 'REMIS_A_PROPRIETAIRE', 'RECU_PROPRIETAIRE', 'ECART_SIGNALE'], true)) {
@@ -581,21 +807,110 @@ final class CashService
     private function assertSaleNotAlreadyRemitted(int $saleId, int $restaurantId): void
     {
         $statement = $this->database->pdo()->prepare(
-            'SELECT id
+            'SELECT status
              FROM cash_transfers
              WHERE restaurant_id = :restaurant_id
                AND source_type = "sale"
                AND source_id = :sale_id
+             ORDER BY id DESC
              LIMIT 1'
         );
         $statement->execute([
             'restaurant_id' => $restaurantId,
             'sale_id' => $saleId,
         ]);
-
-        if ($statement->fetchColumn() !== false) {
-            throw new \RuntimeException('Cette vente a deja ete remise a la caisse.');
+        $status = $statement->fetchColumn();
+        if ($status !== false && $this->isBlockingSaleRemittanceStatus((string) $status)) {
+            throw new \RuntimeException('Cette vente a deja une remise en cours ou validee.');
         }
+    }
+
+    private function isBlockingSaleRemittanceStatus(string $status): bool
+    {
+        return in_array($status, [
+            'REMIS_A_CAISSE',
+            'SOUMIS_GERANT',
+            'RECU_CAISSE',
+            'ECART_SIGNALE',
+        ], true);
+    }
+
+    /**
+     * @param array<string, mixed> $transfer Row cash_transfers (+ optional joined names from listTransfers)
+     * @return array<string, mixed>
+     */
+    private function buildCashTransferOperationSnapshot(int $restaurantId, array $transfer): array
+    {
+        $saleId = 0;
+        if ((string) ($transfer['source_type'] ?? '') === 'sale') {
+            $saleId = (int) ($transfer['source_id'] ?? 0);
+        }
+
+        $snapshot = [
+            'cash_transfer_id' => (int) ($transfer['id'] ?? 0),
+            'reference' => 'CT-' . (string) ((int) ($transfer['id'] ?? 0)),
+            'source_type' => (string) ($transfer['source_type'] ?? ''),
+            'source_id' => (int) ($transfer['source_id'] ?? 0),
+            'status_at_action' => (string) ($transfer['status'] ?? ''),
+            'amount' => (float) ($transfer['amount'] ?? 0),
+            'currency' => (string) ($transfer['currency'] ?? restaurant_currency($restaurantId)),
+            'from_user_id' => $transfer['from_user_id'] !== null && $transfer['from_user_id'] !== '' ? (int) $transfer['from_user_id'] : null,
+            'to_user_id' => $transfer['to_user_id'] !== null && $transfer['to_user_id'] !== '' ? (int) $transfer['to_user_id'] : null,
+            'from_user_name' => $transfer['from_user_name'] ?? null,
+            'to_user_name' => $transfer['to_user_name'] ?? null,
+            'requested_at' => $transfer['requested_at'] ?? null,
+            'created_at' => $transfer['created_at'] ?? null,
+            'sale' => null,
+            'sale_lines' => [],
+        ];
+
+        if ($saleId <= 0) {
+            return $snapshot;
+        }
+
+        $sale = $this->findSaleInRestaurant($saleId, $restaurantId);
+        $ref = 'Vente #' . $saleId;
+        if ((string) ($sale['origin_type'] ?? '') === 'server_request' && (int) ($sale['origin_id'] ?? 0) > 0) {
+            $srId = (int) $sale['origin_id'];
+            $srStmt = $this->database->pdo()->prepare(
+                'SELECT id, service_reference, status FROM server_requests WHERE id = :id AND restaurant_id = :restaurant_id LIMIT 1'
+            );
+            $srStmt->execute(['id' => $srId, 'restaurant_id' => $restaurantId]);
+            $sr = $srStmt->fetch(PDO::FETCH_ASSOC);
+            if ($sr !== false) {
+                $ref .= ' · demande #' . $srId . ' ' . trim((string) ($sr['service_reference'] ?? ''));
+            }
+        }
+
+        $itemsStatement = $this->database->pdo()->prepare(
+            'SELECT si.id, si.menu_item_id, si.quantity, si.unit_price, si.status, mi.name AS menu_item_name
+             FROM sale_items si
+             INNER JOIN menu_items mi ON mi.id = si.menu_item_id
+             WHERE si.sale_id = :sale_id
+             ORDER BY si.id ASC'
+        );
+        $itemsStatement->execute(['sale_id' => $saleId]);
+        $lines = $itemsStatement->fetchAll(PDO::FETCH_ASSOC);
+
+        $snapshot['reference'] = trim($ref);
+        $snapshot['sale'] = [
+            'sale_id' => $saleId,
+            'total_amount' => (float) ($sale['total_amount'] ?? 0),
+            'status' => (string) ($sale['status'] ?? ''),
+            'origin_type' => (string) ($sale['origin_type'] ?? ''),
+            'origin_id' => (int) ($sale['origin_id'] ?? 0),
+        ];
+        $snapshot['sale_lines'] = array_map(static function (array $row): array {
+            return [
+                'sale_item_id' => (int) ($row['id'] ?? 0),
+                'menu_item_name' => (string) ($row['menu_item_name'] ?? ''),
+                'quantity' => (float) ($row['quantity'] ?? 0),
+                'unit_price' => (float) ($row['unit_price'] ?? 0),
+                'line_status' => (string) ($row['status'] ?? ''),
+            ];
+        }, $lines);
+
+        return $snapshot;
     }
 
     private function resolveCashierRecipient(int $restaurantId, int $toUserId): int

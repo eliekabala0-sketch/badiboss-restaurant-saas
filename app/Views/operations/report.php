@@ -131,6 +131,21 @@ $execSummary = $report['executive_summary'] ?? ['by_server' => [], 'by_article' 
 <section class="card" style="padding:22px; margin-bottom:24px;">
     <details class="compact-card" data-autoclose-details>
     <summary><strong>Afficher les filtres</strong></summary>
+    <?php
+    $ridQsa = ((current_user()['scope'] ?? null) === 'super_admin' && !empty($restaurant['id']))
+        ? '&restaurant_id=' . rawurlencode((string) (int) $restaurant['id'])
+        : '';
+    ?>
+    <details class="compact-card" style="margin-top:12px;" data-autoclose-details>
+        <summary><strong>Raccourcis période (ventes / rapport global)</strong></summary>
+        <p class="muted" style="margin-top:10px;">Aujourd’hui, hier, semaine ou mois calendaire (fuseau restaurant) sans ressaisir la date.</p>
+        <div class="nav" style="flex-wrap:wrap; margin-top:10px;">
+            <a href="/rapport?report_preset=today<?= e($ridQsa) ?>">Aujourd’hui</a>
+            <a href="/rapport?report_preset=yesterday<?= e($ridQsa) ?>">Hier</a>
+            <a href="/rapport?report_preset=week<?= e($ridQsa) ?>">Semaine en cours</a>
+            <a href="/rapport?report_preset=month<?= e($ridQsa) ?>">Mois en cours</a>
+        </div>
+    </details>
     <form method="get" action="/rapport" style="margin-top:14px;">
         <?php if ((current_user()['scope'] ?? null) === 'super_admin'): ?>
             <input type="hidden" name="restaurant_id" value="<?= e((string) $restaurant['id']) ?>">

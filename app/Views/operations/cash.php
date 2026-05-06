@@ -219,6 +219,18 @@ $cashiers = $cash['cashiers'] ?? [];
                                 <textarea name="discrepancy_note" placeholder="Justification si ecart"></textarea>
                                 <button type="submit">Confirmer caisse</button>
                             </form>
+                            <?php if (can_access('cash.receive.cashier') && (string) ($transfer['source_type'] ?? '') === 'sale'): ?>
+                                <form method="post" action="/caisse/transferts/<?= e((string) $transfer['id']) ?>/soumission-gerant" style="margin-top:12px;" onsubmit="return confirm('Soumettre cette remise au gérant ? Le comptage physique restera en attente de sa décision.');">
+                                    <label class="muted">Motif soumission gérant</label>
+                                    <textarea name="reason" required placeholder="Contexte obligatoire pour le gérant"></textarea>
+                                    <button type="submit">Soumettre au gérant</button>
+                                </form>
+                                <form method="post" action="/caisse/transferts/<?= e((string) $transfer['id']) ?>/rejet-remise" style="margin-top:12px;" onsubmit="return confirm('Rejeter définitivement cette remise côté caisse ? Le serveur pourra refaire une remise après correction.');">
+                                    <label class="muted">Motif rejet caisse</label>
+                                    <textarea name="reason" required placeholder="Motif obligatoire"></textarea>
+                                    <button type="submit">Rejeter la remise</button>
+                                </form>
+                            <?php endif; ?>
                         <?php elseif (($transfer['status'] ?? '') === 'REMIS_A_GERANT'): ?>
                             <form method="post" action="/caisse/transferts/<?= e((string) $transfer['id']) ?>/reception-gerant">
                                 <input name="amount_received" value="<?= e((string) ($transfer['amount'] ?? 0)) ?>">

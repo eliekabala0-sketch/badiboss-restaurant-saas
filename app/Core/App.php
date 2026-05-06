@@ -21,6 +21,7 @@ use App\Services\RestaurantAdminService;
 use App\Services\RoleAdminService;
 use App\Services\SalesService;
 use App\Services\StockService;
+use App\Services\SuperAdminOperationsService;
 use App\Services\SubscriptionService;
 use App\Services\TenantProvisioningService;
 use App\Services\TenantResolverService;
@@ -117,6 +118,7 @@ final class App
         $container->set('reportService', new ReportService($database));
         $container->set('operationalResetService', new OperationalResetService($database));
         $container->set('stockResetService', new StockResetService($database));
+        $container->set('superAdminOperationsService', new SuperAdminOperationsService($database));
 
         try {
             $this->router->dispatch($request);

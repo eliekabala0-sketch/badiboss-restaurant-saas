@@ -134,6 +134,50 @@ final class DashboardController
         }
     }
 
+    public function superAdminOperationLookup(Request $request): void
+    {
+        authorize_access('platform.admin.view');
+
+        $restaurantId = (int) $request->input('restaurant_id', 0);
+        $kind = trim((string) $request->input('kind', ''));
+        $entityId = (int) $request->input('entity_id', 0);
+        $lookup = null;
+        if ($restaurantId > 0 && $entityId > 0 && $kind !== '') {
+            $lookup = Container::getInstance()->get('superAdminOperationsService')->lookup($restaurantId, $kind, $entityId);
+            if ($lookup === null) {
+                flash('error', 'Entite introuvable ou type invalide.');
+            } else {
+                flash('success', 'Fiche operation chargee (super admin).');
+            }
+        }
+
+        view('super-admin/dashboard', $this->superAdminDashboardPayload(null, null, null, null, null, $lookup));
+        audit_access('dashboard', null, 'screens', 'super-admin-ops-lookup', 'Recherche operation super admin');
+    }
+
+    public function superAdminOperationForce(Request $request): void
+    {
+        authorize_access('platform.admin.view');
+
+        try {
+            Container::getInstance()->get('superAdminOperationsService')->forceSetStatus(
+                (int) $request->input('restaurant_id', 0),
+                trim((string) $request->input('kind', '')),
+                (int) $request->input('entity_id', 0),
+                trim((string) $request->input('target_status', '')),
+                (string) $request->input('reason', ''),
+                (string) $request->input('confirmation_phrase', ''),
+                current_user() ?? []
+            );
+            flash('success', 'Changement de statut super admin enregistre (voir journal audit).');
+        } catch (\RuntimeException $exception) {
+            flash('error', ui_safe_message($exception->getMessage()));
+        }
+
+        view('super-admin/dashboard', $this->superAdminDashboardPayload(null, null, null, null, null, null));
+        audit_access('dashboard', null, 'screens', 'super-admin-ops-force', 'Force statut operation super admin');
+    }
+
     public function owner(Request $request): void
     {
         authorize_access('tenant.dashboard.view');
@@ -146,11 +190,15 @@ final class DashboardController
 
         $canAccessReports = can_access('reports.view');
 
+        $cashSvc = Container::getInstance()->get('cashService');
+
         view('owner/dashboard', [
             'title' => 'Tableau de bord restaurant',
             'user' => $_SESSION['user'],
             'restaurant' => $restaurant,
             'subscription' => $subscription,
+            'pending_manager_sale_remittances' => $cashSvc->listPendingManagerSaleRemittances($restaurantId),
+            'sale_remittance_history' => $cashSvc->listSaleRemittanceHistory($restaurantId, 45),
             'correction_requests_pending' => Container::getInstance()->get('correctionService')->listPendingForRestaurant($restaurantId),
             'correction_requests_recent' => Container::getInstance()->get('correctionService')->listRecentForRestaurant($restaurantId, 12),
             'manager_queue_cases' => $incidentService->listManagerDecisionQueue($restaurantId),
@@ -178,6 +226,7 @@ final class DashboardController
         ?string $inlineError = null,
         ?array $stockResetPreview = null,
         ?array $stockResetReport = null,
+        ?array $superAdminOpsLookup = null,
     ): array {
         $pdo = Container::getInstance()->get('db')->pdo();
 
@@ -229,6 +278,8 @@ final class DashboardController
             'stock_reset_preview' => $stockResetPreview,
             'stock_reset_report' => $stockResetReport,
             'stock_reset_history' => $stockResetHistory,
+            'super_admin_ops_lookup' => $superAdminOpsLookup,
+            'super_admin_ops_statuses' => Container::getInstance()->get('superAdminOperationsService')->allowedStatusesByKind(),
             'user' => $_SESSION['user'],
             'flash_success' => flash('success'),
             'flash_error' => $inlineError ?? flash('error'),

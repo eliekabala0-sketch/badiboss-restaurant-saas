@@ -812,6 +812,72 @@ final class OperationsController
         redirect($this->moduleUrl('/caisse', $restaurantId));
     }
 
+    public function rejectSaleRemittanceAtCashier(Request $request): void
+    {
+        $restaurantId = $this->resolveRestaurantId($request);
+        authorize_access('cash.receive.cashier');
+
+        try {
+            Container::getInstance()->get('cashService')->rejectSaleRemittanceByCashier(
+                $restaurantId,
+                (int) $request->route('id'),
+                (string) $request->input('reason', ''),
+                current_user()
+            );
+            flash('success', 'Remise rejetee par la caisse (tracee avec motif).');
+        } catch (\Throwable $e) {
+            flash('error', ui_safe_message($e->getMessage()));
+        }
+
+        redirect($this->moduleUrl('/caisse', $restaurantId));
+    }
+
+    public function submitSaleRemittanceToManagerFromCashier(Request $request): void
+    {
+        $restaurantId = $this->resolveRestaurantId($request);
+        authorize_access('cash.receive.cashier');
+
+        try {
+            Container::getInstance()->get('cashService')->submitSaleRemittanceToManager(
+                $restaurantId,
+                (int) $request->route('id'),
+                (string) $request->input('reason', ''),
+                current_user()
+            );
+            flash('success', 'Remise soumise au gerant pour decision.');
+        } catch (\Throwable $e) {
+            flash('error', ui_safe_message($e->getMessage()));
+        }
+
+        redirect($this->moduleUrl('/caisse', $restaurantId));
+    }
+
+    public function decideManagerSaleRemittance(Request $request): void
+    {
+        $restaurantId = $this->resolveRestaurantId($request);
+        $actor = current_user();
+        if (($actor['role_code'] ?? null) !== 'manager') {
+            flash('error', 'Seul le gerant peut trancher cette file.');
+            redirect($this->moduleUrl('/owner', $restaurantId));
+        }
+        authorize_access('cash.receive.manager');
+
+        try {
+            Container::getInstance()->get('cashService')->managerDecideSaleRemittance(
+                $restaurantId,
+                (int) $request->route('id'),
+                (string) $request->input('decision', ''),
+                (string) $request->input('reason', ''),
+                $actor
+            );
+            flash('success', 'Decision gerant enregistree sur la remise.');
+        } catch (\Throwable $e) {
+            flash('error', ui_safe_message($e->getMessage()));
+        }
+
+        redirect($this->moduleUrl('/owner', $restaurantId));
+    }
+
     public function createCashMovement(Request $request): void
     {
         $restaurantId = $this->resolveRestaurantId($request);
@@ -897,8 +963,33 @@ final class OperationsController
         authorize_access('reports.view');
 
         Container::getInstance()->get('salesService')->reconcileOverdueReturnsToAutomaticSales($restaurantId);
+        $reportPreset = trim((string) ($request->query['report_preset'] ?? ''));
         $date = (string) ($request->query['date'] ?? Container::getInstance()->get('reportService')->todayForRestaurant($restaurantId));
         $period = (string) ($request->query['period'] ?? 'daily');
+        $todayYmd = Container::getInstance()->get('reportService')->todayForRestaurant($restaurantId);
+        if (in_array($reportPreset, ['today', 'yesterday', 'week', 'month'], true)) {
+            $restaurantRow = Container::getInstance()->get('restaurantAdmin')->findRestaurant($restaurantId);
+            $tzName = (string) ($restaurantRow['timezone'] ?? config('app.timezone', 'Africa/Lagos'));
+            try {
+                $tz = new \DateTimeZone($tzName);
+            } catch (\Throwable) {
+                $tz = new \DateTimeZone((string) config('app.timezone', 'Africa/Lagos'));
+            }
+
+            if ($reportPreset === 'today') {
+                $date = $todayYmd;
+                $period = 'daily';
+            } elseif ($reportPreset === 'yesterday') {
+                $date = (new \DateTimeImmutable($todayYmd . ' 00:00:00', $tz))->modify('-1 day')->format('Y-m-d');
+                $period = 'daily';
+            } elseif ($reportPreset === 'week') {
+                $date = $todayYmd;
+                $period = 'weekly';
+            } elseif ($reportPreset === 'month') {
+                $date = $todayYmd;
+                $period = 'monthly';
+            }
+        }
         if (!in_array($period, ['daily', 'weekly', 'monthly'], true)) {
             $period = 'daily';
         }

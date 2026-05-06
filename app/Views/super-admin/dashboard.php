@@ -99,6 +99,86 @@ $stockDoneReportLabels = [
         </div>
     </section>
 
+    <details class="card fold-card" <?= !empty($super_admin_ops_lookup) ? 'open' : '' ?>>
+        <summary>
+            <div>
+                <strong>Dépannage opérations</strong>
+                <div class="muted">Recherche par restaurant et changement de statut encadré — confirmation <code>FORCER</code>, motif et audit <code>super_admin_force_*</code>.</div>
+            </div>
+        </summary>
+        <div class="fold-body">
+            <?php
+            $opsLookup = $super_admin_ops_lookup ?? null;
+            $opsStatuses = $super_admin_ops_statuses ?? [];
+            ?>
+            <form method="post" action="/super-admin/operations/lookup" class="split" style="margin-bottom:18px;">
+                <div>
+                    <label>Restaurant</label>
+                    <select name="restaurant_id" required>
+                        <option value="">—</option>
+                        <?php foreach ($restaurants as $r): ?>
+                            <option value="<?= e((string) $r['id']) ?>"><?= e($r['name']) ?> (#<?= e((string) $r['id']) ?>)</option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+                <div>
+                    <label>Type</label>
+                    <select name="kind" required>
+                        <option value="sale">Vente</option>
+                        <option value="cash_remittance">Remise caisse (transfert vente)</option>
+                        <option value="server_request">Demande serveur → cuisine</option>
+                        <option value="kitchen_stock_request">Demande cuisine → stock</option>
+                    </select>
+                </div>
+                <div>
+                    <label>ID entité</label>
+                    <input type="number" name="entity_id" min="1" required>
+                </div>
+                <div style="align-self:end;"><button type="submit">Charger la fiche</button></div>
+            </form>
+
+            <?php if ($opsLookup !== null): ?>
+                <article class="card" style="padding:16px; margin-bottom:16px;">
+                    <p class="muted" style="margin-top:0;">Statut actuel : <strong><?= e((string) ($opsLookup['status'] ?? '')) ?></strong> · <?= e((string) ($opsLookup['kind'] ?? '')) ?></p>
+                    <?php if (($opsLookup['lines'] ?? []) !== []): ?>
+                        <details style="margin-top:10px;">
+                            <summary>Lignes (<?= e((string) count($opsLookup['lines'])) ?>)</summary>
+                            <pre style="white-space:pre-wrap; font-size:12px; max-height:240px; overflow:auto;"><?= e(json_encode($opsLookup['lines'], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE)) ?></pre>
+                        </details>
+                    <?php endif; ?>
+                </article>
+
+                <form method="post" action="/super-admin/operations/force" class="split" onsubmit="return confirm('Confirmer le changement de statut super administrateur ?');">
+                    <input type="hidden" name="restaurant_id" value="<?= e((string) ($opsLookup['row']['restaurant_id'] ?? '')) ?>">
+                    <input type="hidden" name="kind" value="<?= e((string) ($opsLookup['kind'] ?? '')) ?>">
+                    <input type="hidden" name="entity_id" value="<?= e((string) ($opsLookup['row']['id'] ?? '')) ?>">
+                    <div>
+                        <label>Nouveau statut (liste cadrée)</label>
+                        <select name="target_status" required>
+                            <?php
+                            $k = (string) ($opsLookup['kind'] ?? '');
+                            foreach (($opsStatuses[$k] ?? []) as $stOpt):
+                            ?>
+                                <option value="<?= e($stOpt) ?>"><?= e($stOpt) ?></option>
+                            <?php endforeach; ?>
+                        </select>
+                    </div>
+                    <div style="grid-column:1 / -1;">
+                        <label>Motif obligatoire</label>
+                        <textarea name="reason" required></textarea>
+                    </div>
+                    <div style="grid-column:1 / -1;">
+                        <label>Confirmation exacte</label>
+                        <input name="confirmation_phrase" placeholder="FORCER" required autocomplete="off">
+                    </div>
+                    <div style="grid-column:1 / -1;">
+                        <button type="submit">Appliquer le statut</button>
+                    </div>
+                </form>
+            <?php endif; ?>
+        </div>
+    </details>
+
     <details class="card fold-card" <?= (!empty($stock_reset_preview) || !empty($stock_reset_report)) ? 'open' : '' ?>>
         <summary>
             <div>
