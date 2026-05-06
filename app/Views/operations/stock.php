@@ -15,6 +15,14 @@ $stockItemIdsForFilter = $stock_item_ids_for_filter ?? null;
 $stock_movement_display_limit = 150;
 $movements_display = $movements_display ?? $movements;
 $stock_movement_history = array_slice($movements_display, 0, $stock_movement_display_limit);
+?>
+<style>
+@media (max-width: 900px) {
+    .stock-touch-actions { display: flex; flex-direction: column; gap: 8px; }
+    .stock-touch-actions button { min-height: 48px; font-size: 1.02rem; width: 100%; }
+}
+</style>
+<?php
 
 $itemsActive = array_values(array_filter(
     $items,
@@ -521,7 +529,7 @@ $priorityBadgeClass = static function (?string $priority): string {
             <div style="padding:0 22px 22px;" class="section-stack">
                 <?php foreach ($section['requests'] as $index => $request): ?>
                     <?php $requestItems = $kitchenStockRequestItemsByRequest[(int) $request['id']] ?? []; ?>
-                    <details class="<?= $index >= $activePreviewLimit ? 'history-extra' : '' ?>" data-history-group="<?= e($section['dom_id']) ?>" <?= $index >= $activePreviewLimit ? 'style="display:none;"' : '' ?> style="border-top:1px solid var(--line); padding-top:16px;">
+                    <details class="<?= $index >= $activePreviewLimit ? 'history-extra' : '' ?>" data-history-group="<?= e($section['dom_id']) ?>" <?= $index === 0 ? 'open' : '' ?> <?= $index >= $activePreviewLimit ? 'style="display:none;"' : '' ?> style="border-top:1px solid var(--line); padding-top:16px;">
                         <summary style="cursor:pointer; list-style:none; display:flex; justify-content:space-between; gap:12px; align-items:flex-start;">
                             <div>
                                 <strong>Demande #<?= e((string) $request['id']) ?></strong>
@@ -615,7 +623,7 @@ $priorityBadgeClass = static function (?string $priority): string {
                                     </div>
                                     <label>Note globale stock</label>
                                     <textarea name="note"><?= e((string) ($request['response_note'] ?: $request['note'])) ?></textarea>
-                                    <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:10px;">
+                                    <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:10px;" class="stock-touch-actions">
                                         <button type="submit" name="workflow_stage" value="EN_COURS_TRAITEMENT">Prendre en charge</button>
                                         <button type="submit">Valider la remise globale</button>
                                     </div>

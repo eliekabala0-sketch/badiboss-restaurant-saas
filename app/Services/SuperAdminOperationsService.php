@@ -13,8 +13,6 @@ use PDO;
  */
 final class SuperAdminOperationsService
 {
-    private const CONFIRM_PHRASE = 'FORCER';
-
     public function __construct(private readonly Database $database)
     {
     }
@@ -65,15 +63,15 @@ final class SuperAdminOperationsService
         int $id,
         string $targetStatus,
         string $reason,
-        string $confirmationPhrase,
+        bool $confirmAck,
         array $actor,
     ): void {
         $reason = trim($reason);
         if ($reason === '') {
             throw new \RuntimeException('Motif obligatoire.');
         }
-        if (trim($confirmationPhrase) !== self::CONFIRM_PHRASE) {
-            throw new \RuntimeException('Confirmation incorrecte : saisir exactement ' . self::CONFIRM_PHRASE . '.');
+        if (!$confirmAck) {
+            throw new \RuntimeException('Cochez la case de confirmation pour appliquer le depannage.');
         }
 
         $allowed = $this->allowedStatusesByKind()[$kind] ?? null;

@@ -103,7 +103,7 @@ $stockDoneReportLabels = [
         <summary>
             <div>
                 <strong>Dépannage opérations</strong>
-                <div class="muted">Recherche par restaurant et changement de statut encadré — confirmation <code>FORCER</code>, motif et audit <code>super_admin_force_*</code>.</div>
+                <div class="muted">Choix du restaurant, chargement de la fiche, puis statut + motif. Une case à cocher remplace la saisie <code>FORCER</code> — audit conservé.</div>
             </div>
         </summary>
         <div class="fold-body">
@@ -148,7 +148,7 @@ $stockDoneReportLabels = [
                     <?php endif; ?>
                 </article>
 
-                <form method="post" action="/super-admin/operations/force" class="split" onsubmit="return confirm('Confirmer le changement de statut super administrateur ?');">
+                <form method="post" action="/super-admin/operations/force" class="split">
                     <input type="hidden" name="restaurant_id" value="<?= e((string) ($opsLookup['row']['restaurant_id'] ?? '')) ?>">
                     <input type="hidden" name="kind" value="<?= e((string) ($opsLookup['kind'] ?? '')) ?>">
                     <input type="hidden" name="entity_id" value="<?= e((string) ($opsLookup['row']['id'] ?? '')) ?>">
@@ -164,15 +164,18 @@ $stockDoneReportLabels = [
                         </select>
                     </div>
                     <div style="grid-column:1 / -1;">
-                        <label>Motif obligatoire</label>
-                        <textarea name="reason" required></textarea>
+                        <label>Motif (court)</label>
+                        <textarea name="reason" required placeholder="Ex. déblocage file service" rows="2"></textarea>
                     </div>
                     <div style="grid-column:1 / -1;">
-                        <label>Confirmation exacte</label>
-                        <input name="confirmation_phrase" placeholder="FORCER" required autocomplete="off">
+                        <label style="display:flex; align-items:flex-start; gap:10px; font-weight:600;">
+                            <input type="checkbox" name="confirm_ack" value="1" required style="margin-top:4px;">
+                            <span>Je confirme ce dépannage sur ce restaurant uniquement.</span>
+                        </label>
                     </div>
                     <div style="grid-column:1 / -1;">
-                        <button type="submit">Appliquer le statut</button>
+                        <p class="muted" style="margin:0 0 8px;">Vente : <code>VALIDE</code> valide la vente, <code>CLOTURE</code> clôture sans repasser par le flux normal. Choisir le statut dans la liste ci-dessus.</p>
+                        <button type="submit" style="min-height:44px;">Appliquer le statut</button>
                     </div>
                 </form>
             <?php endif; ?>

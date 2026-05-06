@@ -166,7 +166,7 @@ final class DashboardController
                 (int) $request->input('entity_id', 0),
                 trim((string) $request->input('target_status', '')),
                 (string) $request->input('reason', ''),
-                (string) $request->input('confirmation_phrase', ''),
+                (bool) $request->input('confirm_ack'),
                 current_user() ?? []
             );
             flash('success', 'Changement de statut super admin enregistre (voir journal audit).');

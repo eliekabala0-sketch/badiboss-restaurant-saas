@@ -171,62 +171,224 @@ final class KitchenService
 
     public function fulfillServerRequestItem(int $restaurantId, int $requestItemId, array $payload, array $actor): void
     {
-        $item = $this->findServerRequestItemInRestaurant($requestItemId, $restaurantId);
-        if (in_array((string) ($item['parent_request_status'] ?? ''), ['ANNULE', 'REFUSE_CUISINE'], true)) {
-            throw new \RuntimeException('Cette demande ne peut plus etre modifiee.');
-        }
+        $pdo = $this->database->pdo();
+        $pdo->beginTransaction();
+        try {
+            $item = $this->findServerRequestItemInRestaurant($requestItemId, $restaurantId, true);
+            if (in_array((string) ($item['parent_request_status'] ?? ''), ['ANNULE', 'REFUSE_CUISINE'], true)) {
+                throw new \RuntimeException('Cette demande ne peut plus etre modifiee.');
+            }
 
-        $suppliedQuantity = (float) ($payload['supplied_quantity'] ?? 0);
-        $workflowStage = (string) ($payload['workflow_stage'] ?? 'PRET_A_SERVIR');
+            $requestedQuantity = (float) $item['requested_quantity'];
+            $workflowStage = (string) ($payload['workflow_stage'] ?? 'PRET_A_SERVIR');
+            if (!in_array($workflowStage, ['EN_PREPARATION', 'PRET_A_SERVIR'], true)) {
+                throw new \RuntimeException('Etape de preparation invalide.');
+            }
 
-        if ($suppliedQuantity < 0) {
-            throw new \RuntimeException('Quantite fournie invalide.');
-        }
-        if ($suppliedQuantity > (float) $item['requested_quantity']) {
-            throw new \RuntimeException('Quantite fournie superieure a la demande.');
-        }
-        if (!in_array($workflowStage, ['EN_PREPARATION', 'PRET_A_SERVIR'], true)) {
-            throw new \RuntimeException('Etape de preparation invalide.');
-        }
+            /** @var float Quantité déjà enregistrée comme servie (ne pas confondre avec « en préparation »). */
+            $prevSupplied = (float) ($item['supplied_quantity'] ?? 0);
+            $formSupplied = (float) ($payload['supplied_quantity'] ?? 0);
 
-        $requestedQuantity = (float) $item['requested_quantity'];
-        $categoryName = (string) ($item['menu_category_name'] ?? '');
-        $categorySlug = (string) ($item['menu_category_slug'] ?? '');
-        $isBeverage = menu_line_is_beverage($categoryName, $categorySlug);
-        if ($workflowStage === 'PRET_A_SERVIR') {
-            if ($isBeverage) {
-                if ($suppliedQuantity <= 0) {
-                    // handled below as NON_FOURNI
-                } else {
+            if ($workflowStage === 'EN_PREPARATION') {
+                if ((string) ($item['status'] ?? '') !== 'DEMANDE') {
+                    throw new \RuntimeException('Prise en charge deja effectuee sur cette ligne.');
+                }
+                $statement = $pdo->prepare(
+                    'UPDATE server_request_items
+                     SET status = "EN_PREPARATION",
+                         supply_status = "EN_PREPARATION",
+                         technical_confirmed_by = :technical_confirmed_by,
+                         updated_at = NOW()
+                     WHERE id = :id'
+                );
+                $statement->execute([
+                    'technical_confirmed_by' => $actor['id'],
+                    'id' => $requestItemId,
+                ]);
+                $this->refreshServerRequestTotals((int) $item['request_id'], (int) $actor['id']);
+                $pdo->commit();
+                error_log('[badiboss] kitchen fulfill EN_PREPARATION item=' . $requestItemId . ' request=' . (string) ($item['request_id'] ?? ''));
+
+                Container::getInstance()->get('audit')->log([
+                    'restaurant_id' => $restaurantId,
+                    'user_id' => $actor['id'],
+                    'actor_name' => $actor['full_name'],
+                    'actor_role_code' => $actor['role_code'],
+                    'module_name' => 'kitchen',
+                    'action_name' => 'server_request_item_fulfilled',
+                    'entity_type' => 'server_request_items',
+                    'entity_id' => (string) $requestItemId,
+                    'new_values' => [
+                        'workflow_stage' => $workflowStage,
+                        'supplied_quantity_unchanged' => $prevSupplied,
+                    ],
+                    'justification' => 'Demande prise en preparation par la cuisine',
+                ]);
+
+                return;
+            }
+
+            $suppliedQuantity = $formSupplied;
+            if ($suppliedQuantity < 0) {
+                throw new \RuntimeException('Quantite fournie invalide.');
+            }
+            if ($suppliedQuantity > $requestedQuantity + 0.00001) {
+                throw new \RuntimeException('Quantite fournie superieure a la demande.');
+            }
+            if ($suppliedQuantity + 0.00001 < $prevSupplied) {
+                throw new \RuntimeException('Impossible de reduire une quantite deja servie depuis cette page.');
+            }
+
+            $deltaSupply = max(0.0, $suppliedQuantity - $prevSupplied);
+            $categoryName = (string) ($item['menu_category_name'] ?? '');
+            $categorySlug = (string) ($item['menu_category_slug'] ?? '');
+            $isBeverage = menu_line_is_beverage($categoryName, $categorySlug);
+
+            if ($deltaSupply > 0.00001) {
+                if ($isBeverage) {
                     $stockService = Container::getInstance()->get('stockService');
-                    $match = $stockService->findKitchenInventoryMatchForMenuItem($restaurantId, (int) $item['menu_item_id'], $suppliedQuantity);
+                    $match = $stockService->findKitchenInventoryMatchForMenuItem($restaurantId, (int) $item['menu_item_id'], $deltaSupply);
                     if ($match === null) {
-                        throw new \RuntimeException('Boisson indisponible en cuisine, demandez au stock.');
+                        throw new \RuntimeException('Boisson indisponible en cuisine pour ce complement, demandez au stock.');
                     }
                     $stockService->consumeKitchenBeverageForServerItem(
                         $restaurantId,
                         (int) $match['stock_item_id'],
-                        $suppliedQuantity,
+                        $deltaSupply,
                         $actor,
                         $requestItemId,
                         (int) $item['menu_item_id']
                     );
+                } else {
+                    $this->reservePreparedQuantity((int) $item['menu_item_id'], $restaurantId, $deltaSupply);
                 }
-            } else {
-                $this->reservePreparedQuantity((int) $item['menu_item_id'], $restaurantId, $suppliedQuantity);
+                error_log('[badiboss] kitchen fulfill PRET delta=' . $deltaSupply . ' total=' . $suppliedQuantity . ' item=' . $requestItemId);
             }
+
+            $unavailableQuantity = max($requestedQuantity - $suppliedQuantity, 0);
+            $suppliedTotal = $suppliedQuantity * (float) $item['unit_price'];
+            $itemStatus = match (true) {
+                $suppliedQuantity <= 0 => 'NON_FOURNI',
+                default => 'PRET_A_SERVIR',
+            };
+            $supplyStatus = match (true) {
+                $suppliedQuantity <= 0 => 'NON_FOURNI',
+                abs($suppliedQuantity - $requestedQuantity) < 0.0001 => 'FOURNI_TOTAL',
+                default => 'FOURNI_PARTIEL',
+            };
+
+            $statement = $pdo->prepare(
+                'UPDATE server_request_items
+                 SET supplied_quantity = :supplied_quantity,
+                     unavailable_quantity = :unavailable_quantity,
+                     supplied_total = :supplied_total,
+                     total_supplied_amount = :total_supplied_amount,
+                     technical_confirmed_by = :technical_confirmed_by,
+                     prepared_at = NOW(),
+                     status = :status,
+                     supply_status = :supply_status,
+                     updated_at = NOW()
+                 WHERE id = :id'
+            );
+            $statement->execute([
+                'supplied_quantity' => $suppliedQuantity,
+                'unavailable_quantity' => $unavailableQuantity,
+                'supplied_total' => $suppliedTotal,
+                'total_supplied_amount' => $suppliedTotal,
+                'technical_confirmed_by' => $actor['id'],
+                'status' => $itemStatus,
+                'supply_status' => $supplyStatus,
+                'id' => $requestItemId,
+            ]);
+
+            $this->refreshServerRequestTotals((int) $item['request_id'], (int) $actor['id']);
+            $pdo->commit();
+
+            Container::getInstance()->get('audit')->log([
+                'restaurant_id' => $restaurantId,
+                'user_id' => $actor['id'],
+                'actor_name' => $actor['full_name'],
+                'actor_role_code' => $actor['role_code'],
+                'module_name' => 'kitchen',
+                'action_name' => 'server_request_item_fulfilled',
+                'entity_type' => 'server_request_items',
+                'entity_id' => (string) $requestItemId,
+                'new_values' => [
+                    'workflow_stage' => $workflowStage,
+                    'supplied_quantity' => $suppliedQuantity,
+                    'supplied_delta' => $deltaSupply,
+                    'unavailable_quantity' => $unavailableQuantity,
+                ],
+                'justification' => 'Demande marquee prete a servir par la cuisine',
+            ]);
+        } catch (\Throwable $throwable) {
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+            throw $throwable;
         }
-        $unavailableQuantity = max($requestedQuantity - $suppliedQuantity, 0);
-        $suppliedTotal = $suppliedQuantity * (float) $item['unit_price'];
-        $itemStatus = match (true) {
-            $suppliedQuantity <= 0 && $workflowStage === 'PRET_A_SERVIR' => 'NON_FOURNI',
-            default => $workflowStage,
-        };
-        $supplyStatus = match (true) {
-            $suppliedQuantity <= 0 => 'NON_FOURNI',
-            abs($suppliedQuantity - $requestedQuantity) < 0.0001 => $workflowStage === 'PRET_A_SERVIR' ? 'FOURNI_TOTAL' : 'EN_PREPARATION',
-            default => $workflowStage === 'PRET_A_SERVIR' ? 'FOURNI_PARTIEL' : 'EN_PREPARATION',
-        };
+    }
+
+    /**
+     * Lors de la commande serveur : servir automatiquement les boissons dès que le stock cuisine le permet (sans passage cuisine).
+     * Retourne false si aucune action (pas boisson, pas de stock, déjà traité).
+     */
+    public function autoFulfillBeverageServerLine(int $restaurantId, int $requestItemId, array $actor): bool
+    {
+        try {
+            $item = $this->findServerRequestItemInRestaurant($requestItemId, $restaurantId);
+        } catch (\Throwable) {
+            return false;
+        }
+
+        if (in_array((string) ($item['parent_request_status'] ?? ''), ['ANNULE', 'REFUSE_CUISINE'], true)) {
+            return false;
+        }
+
+        if (!menu_line_is_beverage((string) ($item['menu_category_name'] ?? ''), (string) ($item['menu_category_slug'] ?? ''))) {
+            return false;
+        }
+
+        if ((string) ($item['status'] ?? '') !== 'DEMANDE') {
+            return false;
+        }
+
+        $requested = (float) ($item['requested_quantity'] ?? 0);
+        if ($requested <= 0) {
+            return false;
+        }
+
+        $stockService = Container::getInstance()->get('stockService');
+        $probeQty = min(1.0, $requested);
+        $match = $stockService->findKitchenInventoryMatchForMenuItem($restaurantId, (int) $item['menu_item_id'], $probeQty);
+        if ($match === null) {
+            return false;
+        }
+
+        $avail = (float) ($match['quantity_available'] ?? 0);
+        $serveQty = min($requested, $avail);
+        if ($serveQty < 0.00001) {
+            return false;
+        }
+
+        try {
+            $stockService->consumeKitchenBeverageForServerItem(
+                $restaurantId,
+                (int) $match['stock_item_id'],
+                $serveQty,
+                $actor,
+                $requestItemId,
+                (int) $item['menu_item_id']
+            );
+        } catch (\Throwable $e) {
+            error_log('[badiboss] autoFulfillBeverage consume failed item=' . $requestItemId . ' ' . $e->getMessage());
+
+            return false;
+        }
+
+        $unavailableQuantity = max($requested - $serveQty, 0);
+        $suppliedTotal = $serveQty * (float) ($item['unit_price'] ?? 0);
+        $supplyStatus = $unavailableQuantity > 0.0001 ? 'FOURNI_PARTIEL' : 'FOURNI_TOTAL';
 
         $statement = $this->database->pdo()->prepare(
             'UPDATE server_request_items
@@ -235,44 +397,26 @@ final class KitchenService
                  supplied_total = :supplied_total,
                  total_supplied_amount = :total_supplied_amount,
                  technical_confirmed_by = :technical_confirmed_by,
-                 prepared_at = CASE WHEN :workflow_stage = "PRET_A_SERVIR" THEN NOW() ELSE prepared_at END,
-                 status = :status,
+                 prepared_at = NOW(),
+                 status = "PRET_A_SERVIR",
                  supply_status = :supply_status,
                  updated_at = NOW()
              WHERE id = :id'
         );
         $statement->execute([
-            'supplied_quantity' => $suppliedQuantity,
+            'supplied_quantity' => $serveQty,
             'unavailable_quantity' => $unavailableQuantity,
             'supplied_total' => $suppliedTotal,
             'total_supplied_amount' => $suppliedTotal,
             'technical_confirmed_by' => $actor['id'],
-            'workflow_stage' => $workflowStage,
-            'status' => $itemStatus,
             'supply_status' => $supplyStatus,
             'id' => $requestItemId,
         ]);
 
         $this->refreshServerRequestTotals((int) $item['request_id'], (int) $actor['id']);
+        error_log('[badiboss] kitchen auto_beverage item=' . $requestItemId . ' served=' . $serveQty . ' of ' . $requested);
 
-        Container::getInstance()->get('audit')->log([
-            'restaurant_id' => $restaurantId,
-            'user_id' => $actor['id'],
-            'actor_name' => $actor['full_name'],
-            'actor_role_code' => $actor['role_code'],
-            'module_name' => 'kitchen',
-            'action_name' => 'server_request_item_fulfilled',
-            'entity_type' => 'server_request_items',
-            'entity_id' => (string) $requestItemId,
-            'new_values' => [
-                'workflow_stage' => $workflowStage,
-                'supplied_quantity' => $suppliedQuantity,
-                'unavailable_quantity' => $unavailableQuantity,
-            ],
-            'justification' => $workflowStage === 'PRET_A_SERVIR'
-                ? 'Demande marquee prete a servir par la cuisine'
-                : 'Demande prise en preparation par la cuisine',
-        ]);
+        return true;
     }
 
     public function validateReturnRequest(int $restaurantId, array $payload, array $actor): void
@@ -564,10 +708,9 @@ final class KitchenService
         return $row;
     }
 
-    private function findServerRequestItemInRestaurant(int $requestItemId, int $restaurantId): array
+    private function findServerRequestItemInRestaurant(int $requestItemId, int $restaurantId, bool $forUpdate = false): array
     {
-        $statement = $this->database->pdo()->prepare(
-            'SELECT sri.*, sr.restaurant_id, sr.status AS parent_request_status,
+        $sql = 'SELECT sri.*, sr.restaurant_id, sr.status AS parent_request_status,
                     mi.name AS menu_item_catalog_name,
                     mc.name AS menu_category_name,
                     mc.slug AS menu_category_slug
@@ -577,8 +720,11 @@ final class KitchenService
              LEFT JOIN menu_categories mc ON mc.id = mi.category_id
              WHERE sri.id = :id
                AND sr.restaurant_id = :restaurant_id
-             LIMIT 1'
-        );
+             LIMIT 1';
+        if ($forUpdate) {
+            $sql .= ' FOR UPDATE';
+        }
+        $statement = $this->database->pdo()->prepare($sql);
         $statement->execute([
             'id' => $requestItemId,
             'restaurant_id' => $restaurantId,

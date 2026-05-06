@@ -1228,6 +1228,9 @@ final class StockService
             return null;
         }
 
+        $minQuantity = max(0.0, $minQuantity);
+        $epsilon = 0.00001;
+
         $statement = $this->database->pdo()->prepare(
             'SELECT ki.id AS kitchen_inventory_id,
                     ki.quantity_available,
@@ -1237,20 +1240,61 @@ final class StockService
              FROM kitchen_inventory ki
              INNER JOIN stock_items si ON si.id = ki.stock_item_id AND si.restaurant_id = ki.restaurant_id
              WHERE ki.restaurant_id = :restaurant_id
-               AND ki.quantity_available >= :min_qty
+               AND ki.quantity_available > 0
              ORDER BY ki.quantity_available DESC'
         );
         $statement->execute([
             'restaurant_id' => $restaurantId,
-            'min_qty' => $minQuantity,
         ]);
-        while ($row = $statement->fetch(PDO::FETCH_ASSOC)) {
-            if (self::normalizeStockItemName((string) ($row['stock_item_name'] ?? '')) === $target) {
-                return $row;
-            }
+        $rows = $statement->fetchAll(PDO::FETCH_ASSOC);
+        if ($rows === []) {
+            return null;
         }
 
-        return null;
+        $candidates = [];
+        foreach ($rows as $row) {
+            $stockNorm = self::normalizeStockItemName((string) ($row['stock_item_name'] ?? ''));
+            if ($stockNorm === '') {
+                continue;
+            }
+            $score = 0;
+            if ($stockNorm === $target) {
+                $score = 1000;
+            } elseif (strlen($target) >= 3 && str_contains($stockNorm, $target)) {
+                $score = 500 + strlen($target);
+            } elseif (strlen($stockNorm) >= 3 && str_contains($target, $stockNorm)) {
+                $score = 400 + strlen($stockNorm);
+            }
+            if ($score === 0) {
+                continue;
+            }
+            $avail = (float) ($row['quantity_available'] ?? 0);
+            if ($avail + $epsilon < $minQuantity) {
+                continue;
+            }
+            $row['_match_score'] = $score;
+            $candidates[] = $row;
+        }
+
+        if ($candidates === []) {
+            return null;
+        }
+
+        usort(
+            $candidates,
+            static function (array $a, array $b): int {
+                $s = ($b['_match_score'] ?? 0) <=> ($a['_match_score'] ?? 0);
+                if ($s !== 0) {
+                    return $s;
+                }
+
+                return (float) ($b['quantity_available'] ?? 0) <=> (float) ($a['quantity_available'] ?? 0);
+            }
+        );
+        $best = $candidates[0];
+        unset($best['_match_score']);
+
+        return $best;
     }
 
     public function consumeKitchenBeverageForServerItem(
@@ -1273,11 +1317,14 @@ final class StockService
         ]];
 
         $pdo = $this->database->pdo();
-        $pdo->beginTransaction();
+        $ownTransaction = !$pdo->inTransaction();
+        if ($ownTransaction) {
+            $pdo->beginTransaction();
+        }
 
         try {
             $inventory = $this->findKitchenInventoryItem($restaurantId, $stockItemId);
-            if ($inventory === null || (float) ($inventory['quantity_available'] ?? 0) < $quantity) {
+            if ($inventory === null || (float) ($inventory['quantity_available'] ?? 0) + 0.00001 < $quantity) {
                 throw new \RuntimeException('Boisson indisponible en cuisine, demandez au stock.');
             }
 
@@ -1308,9 +1355,11 @@ final class StockService
                 'note' => 'Consommation stock cuisine — boisson, menu #' . $menuItemId,
             ]);
 
-            $pdo->commit();
+            if ($ownTransaction) {
+                $pdo->commit();
+            }
         } catch (\Throwable $throwable) {
-            if ($pdo->inTransaction()) {
+            if ($ownTransaction && $pdo->inTransaction()) {
                 $pdo->rollBack();
             }
             throw $throwable;

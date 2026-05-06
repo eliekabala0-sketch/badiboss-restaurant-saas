@@ -627,7 +627,19 @@ function menu_line_is_beverage(?string $categoryName, ?string $categorySlug): bo
         return true;
     }
 
-    return str_contains($n, 'boisson') || str_contains($s, 'boisson');
+    if (
+        in_array($s, ['drink', 'drinks', 'beverage', 'beverages', 'soft', 'softs'], true)
+        || str_contains($n, 'boisson')
+        || str_contains($s, 'boisson')
+        || str_contains($n, 'boissons')
+        || str_contains($s, 'boissons')
+        || str_contains($n, 'beverage')
+        || str_contains($s, 'beverage')
+    ) {
+        return true;
+    }
+
+    return false;
 }
 
 function restaurant_currency(array|int|string|null $restaurant = null): string

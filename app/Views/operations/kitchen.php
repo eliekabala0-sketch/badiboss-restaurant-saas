@@ -13,6 +13,47 @@ $serverRequestHistoryItems = $server_request_history_items ?? [];
 $kitchenStockRequestItemsByRequest = $kitchen_stock_request_items_by_request ?? [];
 $kitchen_evolution = $kitchen_evolution ?? [];
 
+?>
+<style>
+/* Cuisine / stock magasin — lecture confortable au téléphone */
+@media (max-width: 900px) {
+    .kitchen-service-mobile-table table thead { display: none; }
+    .kitchen-service-mobile-table table,
+    .kitchen-service-mobile-table tbody,
+    .kitchen-service-mobile-table tr,
+    .kitchen-service-mobile-table td {
+        display: block;
+        width: 100%;
+    }
+    .kitchen-service-mobile-table tr {
+        border: 1px solid var(--line, #ddd);
+        border-radius: 14px;
+        margin-bottom: 14px;
+        padding: 12px 14px;
+        background: rgba(255,255,255,0.02);
+    }
+    .kitchen-service-mobile-table td {
+        border: none;
+        padding: 6px 0;
+    }
+    .kitchen-service-mobile-table td::before {
+        content: attr(data-label);
+        display: block;
+        font-size: 0.78rem;
+        color: var(--muted, #888);
+        margin-bottom: 2px;
+    }
+    .kitchen-touch-actions button,
+    .kitchen-touch-actions .button-muted {
+        width: 100%;
+        min-height: 48px;
+        font-size: 1.05rem;
+        margin-top: 8px;
+    }
+}
+</style>
+<?php
+
 $normalizeServiceItemStatus = static function (array $item): string {
     $status = (string) ($item['status'] ?: $item['request_status']);
 
@@ -645,7 +686,7 @@ foreach (array_merge($waitingServerItems, $preparingServerItems) as $item) {
                             <span class="pill badge-neutral"><?= e((string) count($serverItems)) ?></span>
                         </div>
 
-                        <div class="table-wrap">
+                        <div class="table-wrap kitchen-service-mobile-table">
                             <table>
                                 <thead>
                                 <tr>
@@ -665,42 +706,50 @@ foreach (array_merge($waitingServerItems, $preparingServerItems) as $item) {
                                 <?php foreach ($serverItems as $index => $item): ?>
                                     <?php
                                     $lineIsBeverage = menu_line_is_beverage($item['menu_category_name'] ?? null, $item['menu_category_slug'] ?? null);
+                                    $reqQ = (float) ($item['requested_quantity'] ?? 0);
+                                    $supQ = (float) ($item['supplied_quantity'] ?? 0);
+                                    $beverageRienAFaire = $lineIsBeverage
+                                        && (string) ($item['status'] ?? '') === 'PRET_A_SERVIR'
+                                        && abs($reqQ - $supQ) < 0.0001;
+                                    $defaultSuppliedInput = $supQ > 0 ? $supQ : $reqQ;
                                     ?>
                                     <tr class="<?= $index >= $activePreviewLimit ? 'history-extra' : '' ?>" data-history-group="<?= e($serverGroupId) ?>" <?= $index >= $activePreviewLimit ? 'style="display:none;"' : '' ?>>
-                                        <td><?= e(format_date_fr($item['request_created_at'] ?? $item['created_at'], $historyTimezone)) ?></td>
-                                        <td><?= e((string) ($item['service_reference'] ?: '-')) ?></td>
-                                        <td><strong><?= e($item['menu_item_name'] ?? '-') ?></strong></td>
-                                        <td><?= e((string) $item['requested_quantity']) ?></td>
-                                        <td><?= e((string) $item['supplied_quantity']) ?></td>
-                                        <td><?= e((string) $item['unavailable_quantity']) ?></td>
-                                        <td><span class="pill <?= e($serviceBadgeClass($item['status'] ?: $item['request_status'])) ?>"><?= e(service_flow_status_label($item['status'] ?: $item['request_status'])) ?></span></td>
-                                        <td style="min-width:210px;">
+                                        <td data-label="Heure"><?= e(format_date_fr($item['request_created_at'] ?? $item['created_at'], $historyTimezone)) ?></td>
+                                        <td data-label="Table / service"><?= e((string) ($item['service_reference'] ?: '-')) ?></td>
+                                        <td data-label="Produit"><strong><?= e($item['menu_item_name'] ?? '-') ?></strong></td>
+                                        <td data-label="Demandé"><?= e((string) $item['requested_quantity']) ?></td>
+                                        <td data-label="Préparé / servi"><?= e((string) $item['supplied_quantity']) ?></td>
+                                        <td data-label="Indisponible"><?= e((string) $item['unavailable_quantity']) ?></td>
+                                        <td data-label="Statut"><span class="pill <?= e($serviceBadgeClass($item['status'] ?: $item['request_status'])) ?>"><?= e(service_flow_status_label($item['status'] ?: $item['request_status'])) ?></span></td>
+                                        <td data-label="Trace" style="min-width:210px;">
                                             <div><strong>Demande :</strong> <?= e(signed_actor_line('Demande', ($item['requested_by_name'] ?? '') !== '' ? $item['requested_by_name'] : ($item['server_name'] ?? '-'), 'cashier_server', $item['request_created_at'] ?? $item['created_at'] ?? null, $restaurant, $historyTimezone)) ?></div>
                                             <div><strong>Pris :</strong> <?= e(signed_actor_line('Pris en charge', $item['prepared_by_name'] ?: null, 'kitchen', $item['prepared_at'] ?? null, $restaurant, $historyTimezone)) ?></div>
                                             <div><strong>Pret :</strong> <?= e(signed_actor_line('Pret', $item['ready_by_name'] ?: null, 'kitchen', $item['request_ready_at'] ?? $item['ready_at'] ?? null, $restaurant, $historyTimezone)) ?></div>
                                             <div><strong>Recu :</strong> <?= e(signed_actor_line('Recu', $item['received_by_name'] ?: null, 'cashier_server', $item['request_received_at'] ?? $item['received_at'] ?? null, $restaurant, $historyTimezone)) ?></div>
                                         </td>
-                                        <td style="min-width:180px;"><?= e((string) ($item['request_note'] ?: '-')) ?></td>
-                                        <td style="min-width:220px;">
+                                        <td data-label="Note" style="min-width:180px;"><?= e((string) ($item['request_note'] ?: '-')) ?></td>
+                                        <td data-label="Actions" style="min-width:220px;">
                                             <?php if (can_access('kitchen.request.fulfill')): ?>
-                                                <?php if ($lineIsBeverage): ?>
-                                                    <p class="muted" style="margin:0 0 8px;">Boisson : débit stock cuisine au « prêt ». Pas de plat préparé à déclarer.</p>
+                                                <?php if ($beverageRienAFaire): ?>
+                                                    <p class="flash-ok" style="margin:0; padding:10px 12px; border-radius:12px;">Boisson prête — rien à faire en cuisine (stock débité automatiquement).</p>
+                                                <?php elseif ($lineIsBeverage): ?>
+                                                    <p class="muted" style="margin:0 0 8px;">Compléter la quantité servie si besoin, puis valider.</p>
+                                                    <div class="kitchen-touch-actions">
                                                     <form method="post" action="/cuisine/demandes-serveur/<?= e((string) $item['id']) ?>/fourni">
                                                         <label>Quantité servie</label>
-                                                        <div class="quantity-stepper" data-quantity-stepper><button type="button" data-stepper-minus>-</button><input name="supplied_quantity" value="<?= e((string) ((float) $item['supplied_quantity'] > 0 ? (float) $item['supplied_quantity'] : (float) $item['requested_quantity'])) ?>" min="0" step="1"><button type="button" data-stepper-plus>+</button></div>
-                                                        <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:10px;">
-                                                            <button type="submit" name="workflow_stage" value="PRET_A_SERVIR">Marquer prêt (boisson)</button>
-                                                        </div>
+                                                        <div class="quantity-stepper" data-quantity-stepper><button type="button" data-stepper-minus>-</button><input name="supplied_quantity" value="<?= e((string) $defaultSuppliedInput) ?>" min="0" step="1"><button type="button" data-stepper-plus>+</button></div>
+                                                        <button type="submit" name="workflow_stage" value="PRET_A_SERVIR">Valider boisson (prêt)</button>
                                                     </form>
-                                                <?php else: ?>
-                                                <form method="post" action="/cuisine/demandes-serveur/<?= e((string) $item['id']) ?>/fourni">
-                                                    <label>Quantite preparee</label>
-                                                    <div class="quantity-stepper" data-quantity-stepper><button type="button" data-stepper-minus>-</button><input name="supplied_quantity" value="<?= e((string) ((float) $item['supplied_quantity'] > 0 ? (float) $item['supplied_quantity'] : (float) $item['requested_quantity'])) ?>" min="0" step="1"><button type="button" data-stepper-plus>+</button></div>
-                                                    <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:10px;">
-                                                        <button type="submit" name="workflow_stage" value="EN_PREPARATION">Prendre en charge</button>
-                                                        <button type="submit" name="workflow_stage" value="PRET_A_SERVIR">Marquer pret</button>
                                                     </div>
+                                                <?php else: ?>
+                                                <div class="kitchen-touch-actions">
+                                                <form method="post" action="/cuisine/demandes-serveur/<?= e((string) $item['id']) ?>/fourni">
+                                                    <label>Quantité préparée / servie</label>
+                                                    <div class="quantity-stepper" data-quantity-stepper><button type="button" data-stepper-minus>-</button><input name="supplied_quantity" value="<?= e((string) $defaultSuppliedInput) ?>" min="0" step="1"><button type="button" data-stepper-plus>+</button></div>
+                                                    <button type="submit" name="workflow_stage" value="EN_PREPARATION">Prendre en charge</button>
+                                                    <button type="submit" name="workflow_stage" value="PRET_A_SERVIR" class="button-muted">Marquer prêt</button>
                                                 </form>
+                                                </div>
                                                 <?php endif; ?>
                                             <?php else: ?>
                                                 <span class="muted">Lecture seule.</span>
@@ -857,7 +906,7 @@ foreach (array_merge($waitingServerItems, $preparingServerItems) as $item) {
         <div style="padding:0 22px 22px;" class="section-stack">
             <?php foreach ($activeStockRequests as $index => $request): ?>
                 <?php $requestItems = $kitchenStockRequestItemsByRequest[(int) $request['id']] ?? []; ?>
-                <details class="<?= $index >= $activePreviewLimit ? 'history-extra' : '' ?>" data-history-group="kitchen_active_stock" <?= $index >= $activePreviewLimit ? 'style="display:none;"' : '' ?> style="border-top:1px solid var(--line); padding-top:16px;">
+                <details class="<?= $index >= $activePreviewLimit ? 'history-extra' : '' ?>" data-history-group="kitchen_active_stock" <?= $index === 0 ? 'open' : '' ?> <?= $index >= $activePreviewLimit ? 'style="display:none;"' : '' ?> style="border-top:1px solid var(--line); padding-top:16px;">
                     <summary style="cursor:pointer; list-style:none; display:flex; justify-content:space-between; gap:12px; align-items:flex-start;">
                         <div>
                             <strong>Demande #<?= e((string) $request['id']) ?></strong>

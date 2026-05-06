@@ -204,7 +204,7 @@ final class SalesService
             $totalRequested = 0.0;
             $normalizedItems = [];
             foreach ($items as $item) {
-                $menuItem = $this->findMenuItemInRestaurant((int) $item['menu_item_id'], $restaurantId);
+                $menuItem = $this->findMenuItemWithCategoryInRestaurant((int) $item['menu_item_id'], $restaurantId);
                 $quantity = (float) $item['requested_quantity'];
                 if ($quantity <= 0) {
                     throw new \RuntimeException('Quantite demandee invalide.');
@@ -220,6 +220,8 @@ final class SalesService
                     'unit_price' => $unitPrice,
                     'requested_total' => $requestedTotal,
                     'note' => trim((string) ($item['note'] ?? '')),
+                    'menu_category_name' => $menuItem['menu_category_name'] ?? null,
+                    'menu_category_slug' => $menuItem['menu_category_slug'] ?? null,
                 ];
             }
 
@@ -271,6 +273,25 @@ final class SalesService
                 'new_values' => $payload,
                 'justification' => 'Demande chiffree du serveur depuis le menu',
             ]);
+
+            $lineIdsStmt = $this->database->pdo()->prepare(
+                'SELECT id FROM server_request_items WHERE request_id = :rid ORDER BY id ASC'
+            );
+            $lineIdsStmt->execute(['rid' => $requestId]);
+            $lineIds = array_map(static fn ($v): int => (int) $v, $lineIdsStmt->fetchAll(PDO::FETCH_COLUMN) ?: []);
+            $kitchenService = Container::getInstance()->get('kitchenService');
+            foreach ($normalizedItems as $idx => $norm) {
+                if (!menu_line_is_beverage(
+                    isset($norm['menu_category_name']) ? (string) $norm['menu_category_name'] : '',
+                    isset($norm['menu_category_slug']) ? (string) $norm['menu_category_slug'] : '',
+                )) {
+                    continue;
+                }
+                $lid = $lineIds[$idx] ?? 0;
+                if ($lid > 0) {
+                    $kitchenService->autoFulfillBeverageServerLine($restaurantId, $lid, $actor);
+                }
+            }
         } catch (\Throwable $throwable) {
             if ($pdo->inTransaction()) {
                 $pdo->rollBack();
@@ -1165,6 +1186,30 @@ final class SalesService
             'SELECT *
              FROM menu_items
              WHERE id = :id AND restaurant_id = :restaurant_id
+             LIMIT 1'
+        );
+        $statement->execute([
+            'id' => $menuItemId,
+            'restaurant_id' => $restaurantId,
+        ]);
+        $item = $statement->fetch(PDO::FETCH_ASSOC);
+        if ($item === false) {
+            throw new \RuntimeException('Article menu hors perimetre restaurant.');
+        }
+
+        return $item;
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function findMenuItemWithCategoryInRestaurant(int $menuItemId, int $restaurantId): array
+    {
+        $statement = $this->database->pdo()->prepare(
+            'SELECT mi.*, mc.name AS menu_category_name, mc.slug AS menu_category_slug
+             FROM menu_items mi
+             LEFT JOIN menu_categories mc ON mc.id = mi.category_id
+             WHERE mi.id = :id AND mi.restaurant_id = :restaurant_id
              LIMIT 1'
         );
         $statement->execute([
