@@ -8,6 +8,58 @@
 <?php if (!empty($flash_success ?? null)): ?><div class="flash-ok"><?= e($flash_success) ?></div><?php endif; ?>
 <?php if (!empty($flash_error ?? null)): ?><div class="flash-bad"><?= e($flash_error) ?></div><?php endif; ?>
 
+<?php
+$stockFilters = $stock_reset_preview['filters'] ?? [];
+$stockPeriodPreset = $stockFilters['stock_period_preset'] ?? ($_POST['stock_period_preset'] ?? 'today');
+$stockOptionsSelected = isset($stockFilters['stock_options']) && is_array($stockFilters['stock_options'])
+    ? $stockFilters['stock_options']
+    : (array) ($_POST['stock_options'] ?? []);
+$stockCheckboxDefs = [
+    'qty_magasin_zero' => 'Remettre les quantités magasin à zéro (les articles restent)',
+    'mouvements_magasin' => 'Effacer les mouvements stock magasin sur la période',
+    'qty_cuisine_zero' => 'Remettre les quantités cuisine à zéro (les lignes restent)',
+    'mouvements_cuisine' => 'Effacer les mouvements liés à la cuisine sur la période',
+    'inventaire_cuisine_lignes' => 'Effacer les lignes d’inventaire cuisine sur la période',
+    'pertes' => 'Effacer les pertes matière sur la période',
+    'corrections_stock' => 'Effacer les demandes de correction stock sur la période',
+    'demandes_cuisine_stock' => 'Effacer les demandes cuisine vers stock sur la période',
+];
+$stockPreviewCountLabels = [
+    'articles_magasin_pour_zero' => 'Articles magasin concernés (quantité → 0)',
+    'lignes_cuisine_pour_zero' => 'Lignes cuisine concernées (quantité → 0)',
+    'mouvements_magasin' => 'Mouvements magasin à effacer',
+    'mouvements_magasin_exclus_production' => 'Mouvements magasin non effaçables (production en cours)',
+    'mouvements_cuisine' => 'Mouvements cuisine à effacer',
+    'pertes' => 'Pertes à effacer',
+    'corrections_stock' => 'Corrections stock à effacer',
+    'demandes_cuisine_stock' => 'Demandes cuisine vers stock à effacer',
+    'demandes_cuisine_stock_lignes' => 'Lignes de ces demandes',
+    'inventaire_cuisine_lignes' => 'Lignes inventaire cuisine à effacer',
+];
+$stockDoneLabels = [
+    'kitchen_stock_request_items' => 'lignes demandes',
+    'kitchen_stock_requests' => 'demandes cuisine-stock',
+    'correction_requests' => 'corrections',
+    'losses' => 'pertes',
+    'stock_movements_cuisine' => 'mouv. cuisine',
+    'stock_movements_magasin' => 'mouv. magasin',
+    'kitchen_inventory_period' => 'lignes inventaire cuisine',
+    'stock_items_qty_zeroed' => 'qty magasin → 0',
+    'kitchen_inventory_qty_zeroed' => 'qty cuisine → 0',
+];
+$stockDoneReportLabels = [
+    'kitchen_stock_request_items' => 'Lignes de demandes cuisine → stock effacées',
+    'kitchen_stock_requests' => 'Demandes cuisine → stock effacées',
+    'correction_requests' => 'Corrections stock effacées',
+    'losses' => 'Pertes effacées',
+    'stock_movements_cuisine' => 'Mouvements cuisine effacés',
+    'stock_movements_magasin' => 'Mouvements magasin effacés',
+    'kitchen_inventory_period' => 'Lignes inventaire cuisine effacées',
+    'stock_items_qty_zeroed' => 'Articles magasin remis à quantité 0',
+    'kitchen_inventory_qty_zeroed' => 'Lignes cuisine remises à quantité 0',
+];
+?>
+
 <?php $resetFilters = $reset_preview['filters'] ?? []; ?>
 <?php $selectedTypes = $resetFilters['data_types'] ?? []; ?>
 <?php $resetOptions = [
@@ -47,9 +99,185 @@
         </div>
     </section>
 
-    <section class="card" style="padding:22px;">
-        <h2 style="margin-top:0;">Reinitialisation controlee</h2>
-        <p class="muted">Reserve au super administrateur. Toujours previsualiser avant toute action et confirmer avec le texte exact.</p>
+    <details class="card fold-card" <?= (!empty($stock_reset_preview) || !empty($stock_reset_report)) ? 'open' : '' ?>>
+        <summary>
+            <div>
+                <strong>Réinitialisation stock</strong>
+                <div class="muted">Magasin, cuisine, mouvements et demandes — un restaurant à la fois. Aperçu obligatoire.</div>
+            </div>
+        </summary>
+        <div class="fold-body">
+            <form method="post" action="/super-admin/stock-reset/preview">
+                <div class="split">
+                    <div>
+                        <label>Restaurant</label>
+                        <select name="restaurant_id" required data-stock-reset-restaurant>
+                            <option value="">Choisir un restaurant</option>
+                            <?php $stockRidSel = (string) ($stockFilters['restaurant_id'] ?? ''); ?>
+                            <?php foreach ($restaurants as $restaurant): ?>
+                                <option value="<?= e((string) $restaurant['id']) ?>" <?= $stockRidSel !== '' && $stockRidSel === (string) $restaurant['id'] ? 'selected' : '' ?>><?= e($restaurant['name']) ?></option>
+                            <?php endforeach; ?>
+                        </select>
+                    </div>
+                    <div>
+                        <label>Période</label>
+                        <select name="stock_period_preset" data-stock-period>
+                            <option value="today" <?= $stockPeriodPreset === 'today' ? 'selected' : '' ?>>Aujourd’hui</option>
+                            <option value="yesterday" <?= $stockPeriodPreset === 'yesterday' ? 'selected' : '' ?>>Hier</option>
+                            <option value="week" <?= $stockPeriodPreset === 'week' ? 'selected' : '' ?>>Semaine</option>
+                            <option value="month" <?= $stockPeriodPreset === 'month' ? 'selected' : '' ?>>Mois</option>
+                            <option value="custom" <?= $stockPeriodPreset === 'custom' ? 'selected' : '' ?>>Plage personnalisée</option>
+                        </select>
+                    </div>
+                    <div data-stock-period-field="week">
+                        <label>Semaine (n’importe quel jour)</label>
+                        <input type="date" name="stock_week_value" value="<?= e((string) ($stockFilters['stock_week_value'] ?? ($_POST['stock_week_value'] ?? ''))) ?>">
+                    </div>
+                    <div data-stock-period-field="month">
+                        <label>Mois</label>
+                        <input type="month" name="stock_month_value" value="<?= e((string) ($stockFilters['stock_month_value'] ?? ($_POST['stock_month_value'] ?? ''))) ?>">
+                    </div>
+                    <div data-stock-period-field="custom">
+                        <label>Date début</label>
+                        <input type="date" name="stock_date_from" value="<?= e((string) ($stockFilters['stock_date_from'] ?? ($_POST['stock_date_from'] ?? ''))) ?>">
+                    </div>
+                    <div data-stock-period-field="custom">
+                        <label>Date fin</label>
+                        <input type="date" name="stock_date_to" value="<?= e((string) ($stockFilters['stock_date_to'] ?? ($_POST['stock_date_to'] ?? ''))) ?>">
+                    </div>
+                </div>
+
+                <label>Ce que vous voulez faire</label>
+                <div class="inline-list">
+                    <?php foreach ($stockCheckboxDefs as $optKey => $optLabel): ?>
+                        <label><input type="checkbox" name="stock_options[]" value="<?= e($optKey) ?>" style="width:auto;margin-right:8px;" <?= in_array($optKey, $stockOptionsSelected, true) ? 'checked' : '' ?>><?= e($optLabel) ?></label>
+                    <?php endforeach; ?>
+                </div>
+
+                <div style="margin-top:16px;">
+                    <button type="submit" class="button-primary" style="min-height:48px;font-size:1.05em;">Voir l’estimation</button>
+                </div>
+            </form>
+
+            <?php if (!empty($stock_reset_preview)): ?>
+                <?php $spCounts = $stock_reset_preview['counts'] ?? []; ?>
+                <div class="card" style="padding:18px; margin-top:18px;">
+                    <h3 style="margin-top:0;">Estimation avant validation</h3>
+                    <p class="muted">Restaurant : <strong><?= e($stock_reset_preview['restaurant']['name'] ?? '-') ?></strong> · <?= e($stock_reset_preview['period']['label'] ?? '-') ?></p>
+                    <?php if ((int) ($spCounts['mouvements_magasin_exclus_production'] ?? 0) > 0): ?>
+                        <p class="muted"><strong>Attention :</strong> <?= e((string) (int) $spCounts['mouvements_magasin_exclus_production']) ?> mouvement(s) magasin ne peuvent pas être effacés tant qu’ils sont liés à une production cuisine.</p>
+                    <?php endif; ?>
+                    <ul style="margin:12px 0 0; padding-left:1.2em;">
+                        <?php foreach ($spCounts as $ckey => $cval): ?>
+                            <?php if ((int) $cval <= 0) { continue; } ?>
+                            <?php if (!isset($stockPreviewCountLabels[$ckey])) { continue; } ?>
+                            <li><strong><?= e((string) $cval) ?></strong> — <?= e($stockPreviewCountLabels[$ckey]) ?></li>
+                        <?php endforeach; ?>
+                    </ul>
+
+                    <form method="post" action="/super-admin/stock-reset/execute" style="margin-top:18px;">
+                        <input type="hidden" name="restaurant_id" value="<?= e((string) ($stock_reset_preview['filters']['restaurant_id'] ?? '')) ?>">
+                        <input type="hidden" name="stock_period_preset" value="<?= e((string) ($stock_reset_preview['filters']['stock_period_preset'] ?? 'today')) ?>">
+                        <input type="hidden" name="stock_week_value" value="<?= e((string) ($stock_reset_preview['filters']['stock_week_value'] ?? '')) ?>">
+                        <input type="hidden" name="stock_month_value" value="<?= e((string) ($stock_reset_preview['filters']['stock_month_value'] ?? '')) ?>">
+                        <input type="hidden" name="stock_date_from" value="<?= e((string) ($stock_reset_preview['filters']['stock_date_from'] ?? '')) ?>">
+                        <input type="hidden" name="stock_date_to" value="<?= e((string) ($stock_reset_preview['filters']['stock_date_to'] ?? '')) ?>">
+                        <?php foreach (($stock_reset_preview['filters']['stock_options'] ?? []) as $so): ?>
+                            <input type="hidden" name="stock_options[]" value="<?= e((string) $so) ?>">
+                        <?php endforeach; ?>
+                        <label>Motif (obligatoire)</label>
+                        <textarea name="reset_reason" required rows="3"></textarea>
+                        <label>Confirmation forte</label>
+                        <input name="confirmation_text" required placeholder="REINITIALISER STOCK <?= e((string) ($stock_reset_preview['filters']['restaurant_id'] ?? '')) ?>" autocomplete="off">
+                        <p class="muted" style="margin:8px 0 16px;">Saisir exactement : <code style="word-break:break-all;">REINITIALISER STOCK <?= e((string) ($stock_reset_preview['filters']['restaurant_id'] ?? '')) ?></code></p>
+                        <button type="submit" style="min-height:52px;font-size:1.08em;">Valider la réinitialisation stock</button>
+                    </form>
+                </div>
+            <?php endif; ?>
+
+            <?php if (!empty($stock_reset_report)): ?>
+                <div class="card" style="padding:18px; margin-top:18px;">
+                    <h3 style="margin-top:0;">Réinitialisation stock terminée</h3>
+                    <p class="muted">Restaurant : <?= e($stock_reset_report['preview']['restaurant']['name'] ?? '-') ?> · <?= e($stock_reset_report['preview']['period']['label'] ?? '-') ?></p>
+                    <p class="muted">Motif : <?= e((string) ($stock_reset_report['reason'] ?? '-')) ?></p>
+                    <ul style="margin:12px 0 0; padding-left:1.2em;">
+                        <?php foreach (($stock_reset_report['done'] ?? []) as $dk => $dv): ?>
+                            <?php if ((int) $dv <= 0) { continue; } ?>
+                            <li><strong><?= e((string) $dv) ?></strong> — <?= e((string) ($stockDoneReportLabels[$dk] ?? $dk)) ?></li>
+                        <?php endforeach; ?>
+                    </ul>
+                    <p class="muted" style="margin-bottom:0;">Trace conservée : <strong>super_admin_stock_reset</strong> (journal d’audit).</p>
+                </div>
+            <?php endif; ?>
+
+            <?php $hist = $stock_reset_history ?? []; ?>
+            <?php if ($hist !== []): ?>
+                <details class="card" style="margin-top:18px;padding:0;overflow:hidden;">
+                    <summary style="cursor:pointer;padding:14px 16px;list-style:none;">Historique des réinitialisations stock</summary>
+                    <div style="padding:0 16px 16px;">
+                        <div class="table-wrap">
+                            <table>
+                                <thead>
+                                <tr>
+                                    <th>Date</th>
+                                    <th>Restaurant</th>
+                                    <th>Par</th>
+                                    <th>Période</th>
+                                    <th>Motif</th>
+                                    <th>Quantités</th>
+                                </tr>
+                                </thead>
+                                <tbody>
+                                <?php foreach ($hist as $hrow): ?>
+                                    <?php
+                                    $nv = $hrow['new_values_json'] ?? null;
+                                    if (is_string($nv)) {
+                                        $nv = json_decode($nv, true) ?: [];
+                                    }
+                                    if (!is_array($nv)) {
+                                        $nv = [];
+                                    }
+                                    $pdone = $nv['done'] ?? [];
+                                    $sumParts = [];
+                                    foreach ($pdone as $pk => $pv) {
+                                        $pv = (int) $pv;
+                                        if ($pv > 0) {
+                                            $sumParts[] = $pv . ' ' . (string) ($stockDoneLabels[$pk] ?? $pk);
+                                        }
+                                    }
+                                    $sumLine = $sumParts !== [] ? implode(' · ', $sumParts) : '—';
+                                    $motif = trim((string) ($hrow['justification'] ?? ''));
+                                    if (mb_strlen($motif) > 80) {
+                                        $motif = mb_substr($motif, 0, 77) . '…';
+                                    }
+                                    ?>
+                                    <tr>
+                                        <td style="white-space:nowrap;"><?= e((string) ($hrow['created_at'] ?? '')) ?></td>
+                                        <td><?= e((string) ($hrow['restaurant_name'] ?? ('#' . (string) ($hrow['restaurant_id'] ?? '')))) ?></td>
+                                        <td><?= e((string) ($hrow['actor_name'] ?? '-')) ?></td>
+                                        <td><?= e((string) (($nv['period']['label'] ?? null) ?: '-')) ?></td>
+                                        <td><?= e($motif !== '' ? $motif : '—') ?></td>
+                                        <td><?= e(mb_strlen($sumLine) > 120 ? mb_substr($sumLine, 0, 117) . '…' : $sumLine) ?></td>
+                                    </tr>
+                                <?php endforeach; ?>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </details>
+            <?php endif; ?>
+        </div>
+    </details>
+
+    <details class="card fold-card" <?= (!empty($reset_preview) || !empty($reset_report)) ? 'open' : '' ?>>
+        <summary>
+            <div>
+                <strong>Réinitialisation élargie (autres modules)</strong>
+                <div class="muted">Ventes, caisse, commandes… — utiliser seulement si nécessaire.</div>
+            </div>
+        </summary>
+        <div class="fold-body">
+        <p class="muted">Toujours prévisualiser puis confirmer avec le texte exact demandé.</p>
         <form method="post" action="/super-admin/reset/preview">
             <div class="split">
                 <div>
@@ -207,7 +435,8 @@
                 <p class="muted" style="margin-bottom:0;">Audit cree : <strong>super_admin_data_reset</strong></p>
             </div>
         <?php endif; ?>
-    </section>
+        </div>
+    </details>
 
     <details class="card fold-card" open>
         <summary>
@@ -304,5 +533,17 @@
     syncUsers();
     syncScope();
     syncPeriod();
+
+    const stockPeriodSelect = document.querySelector('[data-stock-period]');
+    const syncStockPeriod = () => {
+        const mode = stockPeriodSelect ? stockPeriodSelect.value : 'today';
+        document.querySelectorAll('[data-stock-period-field]').forEach((node) => {
+            const fields = node.getAttribute('data-stock-period-field') || '';
+            const show = fields.split(',').map((s) => s.trim()).includes(mode);
+            node.style.display = show ? '' : 'none';
+        });
+    };
+    stockPeriodSelect && stockPeriodSelect.addEventListener('change', syncStockPeriod);
+    syncStockPeriod();
 })();
 </script>

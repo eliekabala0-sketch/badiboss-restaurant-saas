@@ -61,6 +61,28 @@ final class DashboardController
         }
     }
 
+    public function previewStockReset(Request $request): void
+    {
+        authorize_access('platform.admin.view');
+
+        try {
+            $preview = Container::getInstance()->get('stockResetService')->preview([
+                'restaurant_id' => $request->input('restaurant_id'),
+                'stock_period_preset' => $request->input('stock_period_preset', 'today'),
+                'stock_week_value' => $request->input('stock_week_value', ''),
+                'stock_month_value' => $request->input('stock_month_value', ''),
+                'stock_date_from' => $request->input('stock_date_from', ''),
+                'stock_date_to' => $request->input('stock_date_to', ''),
+                'stock_options' => $request->input('stock_options', []),
+            ]);
+
+            view('super-admin/dashboard', $this->superAdminDashboardPayload(null, null, null, $preview, null));
+            return;
+        } catch (\RuntimeException $exception) {
+            view('super-admin/dashboard', $this->superAdminDashboardPayload(null, null, ui_safe_message($exception->getMessage())));
+        }
+    }
+
     public function executeOperationalReset(Request $request): void
     {
         authorize_access('platform.admin.view');
@@ -82,6 +104,30 @@ final class DashboardController
             ], current_user() ?? []);
 
             view('super-admin/dashboard', $this->superAdminDashboardPayload($result['preview'], $result));
+            return;
+        } catch (\RuntimeException $exception) {
+            view('super-admin/dashboard', $this->superAdminDashboardPayload(null, null, ui_safe_message($exception->getMessage())));
+        }
+    }
+
+    public function executeStockReset(Request $request): void
+    {
+        authorize_access('platform.admin.view');
+
+        try {
+            $result = Container::getInstance()->get('stockResetService')->execute([
+                'restaurant_id' => $request->input('restaurant_id'),
+                'stock_period_preset' => $request->input('stock_period_preset', 'today'),
+                'stock_week_value' => $request->input('stock_week_value', ''),
+                'stock_month_value' => $request->input('stock_month_value', ''),
+                'stock_date_from' => $request->input('stock_date_from', ''),
+                'stock_date_to' => $request->input('stock_date_to', ''),
+                'stock_options' => $request->input('stock_options', []),
+                'confirmation_text' => $request->input('confirmation_text', ''),
+                'reset_reason' => $request->input('reset_reason', ''),
+            ], current_user() ?? []);
+
+            view('super-admin/dashboard', $this->superAdminDashboardPayload(null, null, null, $result['preview'], $result));
             return;
         } catch (\RuntimeException $exception) {
             view('super-admin/dashboard', $this->superAdminDashboardPayload(null, null, ui_safe_message($exception->getMessage())));
@@ -126,8 +172,13 @@ final class DashboardController
         audit_access('dashboard', $restaurantId, 'screens', 'owner-dashboard', 'Consultation tableau de bord restaurant');
     }
 
-    private function superAdminDashboardPayload(?array $resetPreview = null, ?array $resetReport = null, ?string $inlineError = null): array
-    {
+    private function superAdminDashboardPayload(
+        ?array $resetPreview = null,
+        ?array $resetReport = null,
+        ?string $inlineError = null,
+        ?array $stockResetPreview = null,
+        ?array $stockResetReport = null,
+    ): array {
         $pdo = Container::getInstance()->get('db')->pdo();
 
         $stats = [
@@ -155,6 +206,18 @@ final class DashboardController
              ORDER BY full_name ASC'
         )->fetchAll(PDO::FETCH_ASSOC);
 
+        $historyStmt = $pdo->prepare(
+            'SELECT al.id, al.restaurant_id, al.user_id, al.actor_name, al.created_at, al.justification, al.new_values_json,
+                    r.name AS restaurant_name
+             FROM audit_logs al
+             LEFT JOIN restaurants r ON r.id = al.restaurant_id
+             WHERE al.action_name = :action
+             ORDER BY al.created_at DESC
+             LIMIT 50'
+        );
+        $historyStmt->execute(['action' => 'super_admin_stock_reset']);
+        $stockResetHistory = $historyStmt->fetchAll(PDO::FETCH_ASSOC);
+
         return [
             'title' => 'Super administration',
             'stats' => $stats,
@@ -163,6 +226,9 @@ final class DashboardController
             'restaurant_users' => $restaurantUsers,
             'reset_preview' => $resetPreview,
             'reset_report' => $resetReport,
+            'stock_reset_preview' => $stockResetPreview,
+            'stock_reset_report' => $stockResetReport,
+            'stock_reset_history' => $stockResetHistory,
             'user' => $_SESSION['user'],
             'flash_success' => flash('success'),
             'flash_error' => $inlineError ?? flash('error'),

@@ -14,6 +14,7 @@ use App\Services\IncidentService;
 use App\Services\KitchenService;
 use App\Services\MenuAdminService;
 use App\Services\OperationalResetService;
+use App\Services\StockResetService;
 use App\Services\PlatformSettingsService;
 use App\Services\ReportService;
 use App\Services\RestaurantAdminService;
@@ -115,6 +116,7 @@ final class App
         $container->set('cashService', new CashService($database));
         $container->set('reportService', new ReportService($database));
         $container->set('operationalResetService', new OperationalResetService($database));
+        $container->set('stockResetService', new StockResetService($database));
 
         try {
             $this->router->dispatch($request);

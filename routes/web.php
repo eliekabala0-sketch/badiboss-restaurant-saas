@@ -32,6 +32,8 @@ $router->get('/logout', [AuthController::class, 'logout'], [AuthMiddleware::clas
 $router->get('/super-admin', [DashboardController::class, 'superAdmin'], [AuthMiddleware::class, SuperAdminMiddleware::class]);
 $router->post('/super-admin/reset/preview', [DashboardController::class, 'previewOperationalReset'], [AuthMiddleware::class, SuperAdminMiddleware::class]);
 $router->post('/super-admin/reset/execute', [DashboardController::class, 'executeOperationalReset'], [AuthMiddleware::class, SuperAdminMiddleware::class]);
+$router->post('/super-admin/stock-reset/preview', [DashboardController::class, 'previewStockReset'], [AuthMiddleware::class, SuperAdminMiddleware::class]);
+$router->post('/super-admin/stock-reset/execute', [DashboardController::class, 'executeStockReset'], [AuthMiddleware::class, SuperAdminMiddleware::class]);
 $router->get('/super-admin/restaurants', [RestaurantAdminController::class, 'index'], [AuthMiddleware::class, SuperAdminMiddleware::class]);
 $router->post('/super-admin/restaurants', [RestaurantAdminController::class, 'store'], [AuthMiddleware::class, SuperAdminMiddleware::class]);
 $router->get('/super-admin/restaurants/{id}', [RestaurantAdminController::class, 'show'], [AuthMiddleware::class, SuperAdminMiddleware::class]);
