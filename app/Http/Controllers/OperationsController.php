@@ -107,6 +107,26 @@ final class OperationsController
         redirect($this->stockUrl($restaurantId));
     }
 
+    public function archiveStockItem(Request $request): void
+    {
+        $restaurantId = $this->resolveRestaurantId($request);
+        authorize_access('stock.item.edit');
+
+        try {
+            Container::getInstance()->get('stockService')->archiveStockItem(
+                $restaurantId,
+                (int) $request->route('id'),
+                (string) $request->input('archive_reason', ''),
+                current_user()
+            );
+            flash('success', 'Article archive. Il reste visible dans l historique mais plus dans les formulaires actifs.');
+        } catch (\RuntimeException $exception) {
+            flash('error', ui_safe_message($exception->getMessage()));
+        }
+
+        redirect($this->stockUrl($restaurantId));
+    }
+
     public function addStockEntry(Request $request): void
     {
         $restaurantId = $this->resolveRestaurantId($request);
@@ -315,7 +335,10 @@ final class OperationsController
             'server_request_history_items' => Container::getInstance()->get('salesService')->listServerRequestItems($restaurantId),
             'kitchen_stock_requests' => $kitchenStockBlocks['requests'],
             'kitchen_stock_request_items_by_request' => $kitchenStockBlocks['items_by_request'],
-            'stock_items' => Container::getInstance()->get('stockService')->listItems($restaurantId),
+            'stock_items' => array_values(array_filter(
+                Container::getInstance()->get('stockService')->listItems($restaurantId),
+                static fn (array $row): bool => empty($row['archived_at'])
+            )),
             'kitchen_inventory' => Container::getInstance()->get('stockService')->listKitchenInventoryDashboard($restaurantId),
             'kitchen_evolution' => Container::getInstance()->get('stockService')->listKitchenEvolution($restaurantId),
             'menu_categories' => Container::getInstance()->get('menuAdmin')->listCategories($restaurantId),
@@ -921,7 +944,10 @@ final class OperationsController
             'report_users' => $reportUsers,
             'report_role_codes' => array_keys($reportRoleCodes),
             'report_menu_items' => Container::getInstance()->get('menuAdmin')->listPublicItems($restaurantId),
-            'report_stock_items' => Container::getInstance()->get('stockService')->listItems($restaurantId),
+            'report_stock_items' => array_values(array_filter(
+                Container::getInstance()->get('stockService')->listItems($restaurantId),
+                static fn (array $row): bool => empty($row['archived_at'])
+            )),
             'report' => Container::getInstance()->get('reportService')->dailyReport($restaurantId, $date, $period, $viewFilters),
         ]);
 

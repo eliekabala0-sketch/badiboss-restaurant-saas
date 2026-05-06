@@ -34,9 +34,19 @@ final class ReportService
 
         $activity = $this->activityIndex($restaurantId, $startAt, $endAt, []);
 
+        $autoClosedToday = $this->autoClosedServerRequestAudits($restaurantId, $startAt, $endAt);
+        $execToday = $this->executiveSummaryRollup($restaurantId, $startAt, $endAt, $label, $empty, $sales, $activity);
+
+        [$weekStart, $weekEnd, $weekLabel] = $this->periodBounds($selectedDate, 'weekly', $timezone);
+        $salesWeek = $this->salesDetailByServerProduct($restaurantId, $weekStart, $weekEnd, false, 0, $empty);
+        $activityWeek = $this->activityIndex($restaurantId, $weekStart, $weekEnd, []);
+        $autoClosedWeek = $this->autoClosedServerRequestAudits($restaurantId, $weekStart, $weekEnd);
+        $execWeek = $this->executiveSummaryRollup($restaurantId, $weekStart, $weekEnd, $weekLabel, $empty, $salesWeek, $activityWeek);
+
         return [
             'date' => $selectedDate->format('Y-m-d'),
             'period_label' => $label,
+            'week_period_label' => $weekLabel,
             'sales_grand_total' => (float) ($sales['grand_total'] ?? 0),
             'sales_server_count' => count($sales['servers'] ?? []),
             'kitchen_grand_qty' => (float) ($kitchen['grand_total_qty'] ?? 0),
@@ -45,6 +55,11 @@ final class ReportService
             'stock_grand_movements' => (int) ($stock['grand_total_movements'] ?? 0),
             'stock_people_count' => count($stock['people'] ?? []),
             'activity_index' => $activity,
+            'auto_closed_count_today' => count($autoClosedToday),
+            'auto_closed_count_week' => count($autoClosedWeek),
+            'vente_exec_summary_today' => $execToday,
+            'vente_exec_summary_week' => $execWeek,
+            'sales_grand_total_week' => (float) ($salesWeek['grand_total'] ?? 0),
         ];
     }
 
@@ -54,7 +69,7 @@ final class ReportService
         $selectedDate = $this->normalizeDate($date, $timezone);
         [$startAt, $endAt, $label] = $this->periodBounds($selectedDate, $period, $timezone);
         $displayEndAt = $endAt->sub(new DateInterval('PT1S'));
-        $currentStock = (float) $this->scalar('SELECT COALESCE(SUM(quantity_in_stock), 0) FROM stock_items WHERE restaurant_id = :restaurant_id', ['restaurant_id' => $restaurantId]);
+        $currentStock = Container::getInstance()->get('stockService')->sumActiveStockQuantity($restaurantId);
         $closedOnly = (bool) ($viewFilters['closed_sales_only'] ?? false);
         $userId = (int) ($viewFilters['user_id'] ?? 0);
         $salesByServer = $this->salesByServer($restaurantId, $startAt, $endAt, $closedOnly, $userId);
@@ -66,7 +81,41 @@ final class ReportService
         $summary['general_report'] = ['total_product_value' => (float) $summary['kitchen_report']['value_produced'], 'total_sold_value' => $salesTotal, 'real_material_cost_value' => (float) $summary['kitchen_report']['real_material_cost_of_sales'], 'total_losses_value' => (float) $summary['stock_report']['stock_losses_value'] + (float) $summary['kitchen_report']['kitchen_losses_value'] + (float) $summary['server_report']['server_loss_value'] + (float) $summary['financial_losses'], 'stock_loss_value' => (float) $summary['stock_report']['stock_losses_value'], 'kitchen_loss_value' => (float) $summary['kitchen_report']['kitchen_losses_value'], 'server_loss_value' => (float) $summary['server_report']['server_loss_value']];
         $summary['estimated_profit'] = $salesTotal - (float) $summary['kitchen_report']['real_material_cost_of_sales'] - (float) $summary['stock_report']['stock_losses_value'] - (float) $summary['kitchen_report']['kitchen_losses_value'] - (float) $summary['server_report']['server_loss_value'] - (float) $summary['financial_losses'];
         $summary['general_report']['estimated_gross_profit'] = (float) $summary['estimated_profit'];
+        $summary['auto_closed_operations'] = $this->autoClosedServerRequestAudits($restaurantId, $startAt, $endAt);
         return $summary;
+    }
+
+    /**
+     * Journal : clôtures automatiques (passage minuit, conversions, etc.) sur la même plage que le rapport.
+     *
+     * @return list<array<string, mixed>>
+     */
+    public function autoClosedServerRequestAudits(int $restaurantId, DateTimeImmutable $startAt, DateTimeImmutable $endAt): array
+    {
+        $actions = [
+            'server_request_auto_closed_as_sale',
+            'automatic_sale_after_24h',
+            'cash_cashier_auto_received',
+            'kitchen_stock_request_expired_midnight',
+            'kitchen_stock_request_auto_received',
+        ];
+        $inList = implode(',', array_fill(0, count($actions), '?'));
+        $statement = $this->database->pdo()->prepare(
+            "SELECT id, created_at, actor_name, actor_role_code, entity_id, action_name, new_values_json, justification
+             FROM audit_logs
+             WHERE restaurant_id = ?
+               AND action_name IN ($inList)
+               AND created_at >= ? AND created_at < ?
+             ORDER BY id DESC
+             LIMIT 120"
+        );
+        $params = array_merge([$restaurantId], $actions, [
+            $startAt->format('Y-m-d H:i:s'),
+            $endAt->format('Y-m-d H:i:s'),
+        ]);
+        $statement->execute($params);
+
+        return $statement->fetchAll(PDO::FETCH_ASSOC);
     }
     private function reportTimezone(int $restaurantId): DateTimeZone
     {
@@ -232,7 +281,7 @@ final class ReportService
         return ['quantity' => (float) ($row['total_quantity'] ?? 0), 'value' => (float) ($row['total_value'] ?? 0)];
     }
     private function sumProduction(int $restaurantId, DateTimeImmutable $startAt, DateTimeImmutable $endAt): float { return (float) $this->scalar('SELECT COALESCE(SUM(quantity_produced), 0) FROM kitchen_production WHERE restaurant_id = :restaurant_id AND created_at >= :start_at AND created_at < :end_at', ['restaurant_id' => $restaurantId, 'start_at' => $startAt->format('Y-m-d H:i:s'), 'end_at' => $endAt->format('Y-m-d H:i:s')]); }
-    private function currentStockValue(int $restaurantId): float { return (float) $this->scalar('SELECT COALESCE(SUM(quantity_in_stock * estimated_unit_cost), 0) FROM stock_items WHERE restaurant_id = :restaurant_id', ['restaurant_id' => $restaurantId]); }
+    private function currentStockValue(int $restaurantId): float { return Container::getInstance()->get('stockService')->sumActiveStockValue($restaurantId); }
     private function kitchenStockRequestSummary(int $restaurantId, DateTimeImmutable $startAt, DateTimeImmutable $endAt): array
     {
         $statement = $this->database->pdo()->prepare('SELECT SUM(CASE WHEN planning_status = "urgence" THEN 1 ELSE 0 END) AS urgent_requests, SUM(CASE WHEN planning_status = "a_prevoir" THEN 1 ELSE 0 END) AS planned_requests, SUM(CASE WHEN status = "INDISPONIBLE" THEN 1 ELSE 0 END) AS ruptures FROM kitchen_stock_requests WHERE restaurant_id = :restaurant_id AND created_at >= :start_at AND created_at < :end_at');

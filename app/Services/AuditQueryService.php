@@ -42,6 +42,20 @@ final class AuditQueryService
             $sql .= ' AND DATE(a.created_at) <= :date_to';
             $params['date_to'] = $filters['date_to'];
         }
+        if (!empty($filters['action_name'])) {
+            $sql .= ' AND a.action_name = :action_name';
+            $params['action_name'] = (string) $filters['action_name'];
+        }
+        $q = trim((string) ($filters['q'] ?? ''));
+        if ($q !== '') {
+            $sql .= ' AND (
+                a.entity_id LIKE :q
+                OR a.justification LIKE :q
+                OR a.new_values_json LIKE :q
+                OR a.actor_name LIKE :q
+            )';
+            $params['q'] = '%' . $q . '%';
+        }
 
         $sql .= ' ORDER BY a.id DESC LIMIT 200';
         $statement = $this->database->pdo()->prepare($sql);

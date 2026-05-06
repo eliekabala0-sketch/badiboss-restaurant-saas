@@ -16,6 +16,15 @@ $stock_movement_display_limit = 150;
 $movements_display = $movements_display ?? $movements;
 $stock_movement_history = array_slice($movements_display, 0, $stock_movement_display_limit);
 
+$itemsActive = array_values(array_filter(
+    $items,
+    static fn (array $it): bool => empty($it['archived_at'])
+));
+$itemsArchived = array_values(array_filter(
+    $items,
+    static fn (array $it): bool => !empty($it['archived_at'])
+));
+
 $itemsForLevels = $items;
 if ($stockItemIdsForFilter !== null) {
     if ($stockItemIdsForFilter === []) {
@@ -28,6 +37,11 @@ if ($stockItemIdsForFilter !== null) {
         ));
     }
 }
+
+$itemsForLevels = array_values(array_filter(
+    $itemsForLevels,
+    static fn (array $it): bool => empty($it['archived_at'])
+));
 
 $movementHistoryGroups = [];
 foreach ($stock_movement_history as $m) {
@@ -397,7 +411,7 @@ $priorityBadgeClass = static function (?string $priority): string {
             <form method="post" action="/stock/entries">
                 <label>Article</label>
                 <select name="stock_item_id">
-                    <?php foreach ($items as $item): ?>
+                    <?php foreach ($itemsActive as $item): ?>
                         <option value="<?= e((string) $item['id']) ?>"><?= e($item['name']) ?> (<?= e($item['unit_name']) ?>)</option>
                     <?php endforeach; ?>
                 </select>
@@ -421,7 +435,7 @@ $priorityBadgeClass = static function (?string $priority): string {
             <form method="post" action="/stock/pertes">
                 <label>Article</label>
                 <select name="stock_item_id">
-                    <?php foreach ($items as $item): ?>
+                    <?php foreach ($itemsActive as $item): ?>
                         <option value="<?= e((string) $item['id']) ?>"><?= e($item['name']) ?></option>
                     <?php endforeach; ?>
                 </select>
@@ -463,7 +477,7 @@ $priorityBadgeClass = static function (?string $priority): string {
                     <label>Article existant (optionnel)</label>
                     <select name="stock_item_id">
                         <option value="">— Utiliser le nom libre ci-dessous —</option>
-                        <?php foreach ($items as $item): ?>
+                        <?php foreach ($itemsActive as $item): ?>
                             <option value="<?= e((string) $item['id']) ?>"><?= e($item['name']) ?> (<?= e($item['unit_name']) ?>)</option>
                         <?php endforeach; ?>
                     </select>
@@ -793,6 +807,12 @@ $priorityBadgeClass = static function (?string $priority): string {
                                         <a href="#stock_modifications" class="button-muted">Historique des modifications</a>
                                     </div>
                                 </form>
+                                <form method="post" action="/stock/items/<?= e((string) $item['id']) ?>/archive" style="margin-top:16px; padding-top:14px; border-top:1px dashed var(--line);">
+                                    <label><strong>Archiver cet article</strong> (aucune suppression des données ; masqué des saisies actives si sans blocage en cours)</label>
+                                    <p class="muted" style="margin:8px 0;">Motif obligatoire pour l audit. Si des mouvements ou demandes en cours bloquent, le message d erreur indique quoi régler avant.</p>
+                                    <textarea name="archive_reason" required placeholder="Ex. produit remplacé, fin de gamme, fusion avec un autre article..."></textarea>
+                                    <button type="submit" class="button-muted" style="margin-top:8px;" onclick="return confirm('Archiver cet article de stock pour ce restaurant ?');">Archiver</button>
+                                </form>
                             </details>
                         <?php else: ?>
                             <span class="muted">Lecture seule</span>
@@ -808,6 +828,34 @@ $priorityBadgeClass = static function (?string $priority): string {
     </div>
     </details>
 </section>
+
+<?php if ($itemsArchived !== []): ?>
+<section class="card" style="margin-top:24px;">
+    <details class="compact-card" style="padding:0;">
+        <summary style="cursor:pointer; list-style:none; padding:22px 22px 18px;">
+            <h2 style="margin:0; display:inline;">Articles archivés</h2>
+            <span class="muted"> · <?= e((string) count($itemsArchived)) ?> (lecture seule — historique conserve les mouvements)</span>
+        </summary>
+        <div class="table-wrap" style="padding:0 22px 22px;">
+            <table>
+                <thead>
+                <tr><th>Article</th><th>Stock figé</th><th>Archivé le</th><th>Motif</th></tr>
+                </thead>
+                <tbody>
+                <?php foreach ($itemsArchived as $arch): ?>
+                    <tr>
+                        <td><strong><?= e((string) ($arch['name'] ?? '')) ?></strong><br><span class="muted"><?= e((string) ($arch['unit_name'] ?? '')) ?></span></td>
+                        <td><?= e((string) ($arch['quantity_in_stock'] ?? 0)) ?></td>
+                        <td><?= e(format_date_fr($arch['archived_at'] ?? null, $historyTimezone)) ?></td>
+                        <td class="muted"><?= e((string) ($arch['archive_reason'] ?? '-')) ?></td>
+                    </tr>
+                <?php endforeach; ?>
+                </tbody>
+            </table>
+        </div>
+    </details>
+</section>
+<?php endif; ?>
 
 <section class="card" style="padding:24px; margin-top:24px;" id="historique_mouvements_magasin">
     <h2 style="margin-top:0;">Historique mouvements magasin</h2>

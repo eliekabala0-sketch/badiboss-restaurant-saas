@@ -10,6 +10,8 @@
         <div><label>Restaurant</label><select name="restaurant_id"><option value="">Tous</option><?php foreach ($restaurants as $restaurant): ?><option value="<?= e((string) $restaurant['id']) ?>" <?= (string) $filters['restaurant_id'] === (string) $restaurant['id'] ? 'selected' : '' ?>><?= e($restaurant['name']) ?></option><?php endforeach; ?></select></div>
         <div><label>Utilisateur</label><select name="user_id"><option value="">Tous</option><?php foreach ($users as $user): ?><option value="<?= e((string) $user['id']) ?>" <?= (string) $filters['user_id'] === (string) $user['id'] ? 'selected' : '' ?>><?= e($user['full_name']) ?></option><?php endforeach; ?></select></div>
         <div><label>Module</label><input name="module_name" value="<?= e((string) $filters['module_name']) ?>"></div>
+        <div><label>Code action (audit)</label><input name="action_name" value="<?= e((string) ($filters['action_name'] ?? '')) ?>" placeholder="ex. sale_created"></div>
+        <div style="grid-column:1 / -1;"><label>Recherche globale (référence, motif, JSON, acteur)</label><input name="q" value="<?= e((string) ($filters['q'] ?? '')) ?>" placeholder="ID entité, montant, nom…"></div>
         <div><label>Date de début</label><input type="date" name="date_from" value="<?= e((string) $filters['date_from']) ?>"></div>
         <div><label>Date fin</label><input type="date" name="date_to" value="<?= e((string) $filters['date_to']) ?>"></div>
         <div style="align-self:end;"><button type="submit">Filtrer</button></div>

@@ -53,6 +53,9 @@ final class RailwayDbTools
             ['name' => 'category_label', 'sql' => 'ALTER TABLE stock_items ADD COLUMN category_label VARCHAR(120) NULL AFTER unit_name'],
             ['name' => 'item_note', 'sql' => 'ALTER TABLE stock_items ADD COLUMN item_note TEXT NULL AFTER estimated_unit_cost'],
             ['name' => 'updated_at', 'sql' => 'ALTER TABLE stock_items ADD COLUMN updated_at DATETIME NULL AFTER created_at'],
+            ['name' => 'archived_at', 'sql' => 'ALTER TABLE stock_items ADD COLUMN archived_at DATETIME NULL AFTER updated_at'],
+            ['name' => 'archived_by', 'sql' => 'ALTER TABLE stock_items ADD COLUMN archived_by BIGINT UNSIGNED NULL AFTER archived_at'],
+            ['name' => 'archive_reason', 'sql' => 'ALTER TABLE stock_items ADD COLUMN archive_reason TEXT NULL AFTER archived_by'],
         ],
     ];
 

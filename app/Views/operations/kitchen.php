@@ -552,7 +552,7 @@ foreach (array_merge($waitingServerItems, $preparingServerItems) as $item) {
 ?>
 <?php if ($declineServerRequestMeta !== [] && can_access('kitchen.request.fulfill')): ?>
 <section class="card" style="padding:22px; margin-top:24px;">
-    <details class="compact-card">
+    <details class="compact-card" open data-autoclose-details>
         <summary><strong>Refuser toute la commande serveur (non disponible)</strong></summary>
         <p class="muted" style="margin-top:12px;">Refus sur la commande entiere avec motif obligatoire. Le service voit le motif dans son historique — sans vente ni caisse.</p>
         <?php foreach ($declineServerRequestMeta as $reqId => $meta): ?>

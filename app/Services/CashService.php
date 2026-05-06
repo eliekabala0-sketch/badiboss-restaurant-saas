@@ -6,6 +6,8 @@ namespace App\Services;
 
 use App\Core\Container;
 use App\Core\Database;
+use DateTimeImmutable;
+use DateTimeZone;
 use PDO;
 
 final class CashService
@@ -648,6 +650,71 @@ final class CashService
         }
 
         return $value;
+    }
+
+    /**
+     * Remises vente en attente de caisse depuis la veille : réception automatique comme montant intégral encaissé (sans double traitement).
+     */
+    public function reconcileOverdueCashierReceipts(int $restaurantId): int
+    {
+        $this->ensureSchema();
+        $restaurant = Container::getInstance()->get('restaurantAdmin')->findRestaurant($restaurantId);
+        $timezoneName = (string) ($restaurant['timezone'] ?? config('app.timezone', 'Africa/Lagos'));
+        try {
+            $tz = new DateTimeZone($timezoneName);
+        } catch (\Throwable) {
+            $tz = new DateTimeZone((string) config('app.timezone', 'Africa/Lagos'));
+        }
+        $todayStart = (new DateTimeImmutable('now', $tz))->setTime(0, 0, 0)->format('Y-m-d H:i:s');
+
+        $statement = $this->database->pdo()->prepare(
+            'SELECT id, amount
+             FROM cash_transfers
+             WHERE restaurant_id = :tenant
+               AND source_type = "sale"
+               AND status = "REMIS_A_CAISSE"
+               AND COALESCE(requested_at, created_at) < :today_start'
+        );
+        $statement->execute(['tenant' => $restaurantId, 'today_start' => $todayStart]);
+        $systemActor = [
+            'id' => null,
+            'full_name' => 'Système',
+            'role_code' => 'system',
+        ];
+        $count = 0;
+        foreach ($statement->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            $tid = (int) ($row['id'] ?? 0);
+            $amount = $this->normalizeAmount($row['amount'] ?? 0);
+            if ($tid <= 0) {
+                continue;
+            }
+            $upd = $this->database->pdo()->prepare(
+                'UPDATE cash_transfers
+                 SET amount_received = :amount_received,
+                     received_by = NULL,
+                     received_at = NOW(),
+                     status = "RECU_CAISSE",
+                     discrepancy_amount = 0,
+                     discrepancy_note = NULL,
+                     updated_at = NOW()
+                 WHERE id = :id AND restaurant_id = :tenant AND status = "REMIS_A_CAISSE"'
+            );
+            $upd->execute([
+                'amount_received' => $amount,
+                'id' => $tid,
+                'tenant' => $restaurantId,
+            ]);
+            if ($upd->rowCount() < 1) {
+                continue;
+            }
+            $this->audit($restaurantId, $systemActor, 'cash_cashier_auto_received', 'cash_transfers', $tid, [
+                'amount_received' => $amount,
+                'automatic' => true,
+            ], 'Reception caisse automatique au changement de jour (minuit, fuseau restaurant)');
+            $count++;
+        }
+
+        return $count;
     }
 
     private function audit(int $restaurantId, array $actor, string $action, string $entityType, int $entityId, array $newValues, string $justification): void

@@ -489,9 +489,83 @@ final class SalesService
             'action_name' => 'request_declined',
             'entity_type' => 'server_requests',
             'entity_id' => (string) $requestId,
-            'new_values' => ['status' => 'REFUSE_CUISINE', 'resolution_note' => $reason],
+            'new_values' => [
+                'status' => 'REFUSE_CUISINE',
+                'resolution_note' => $reason,
+                'rejected_by' => [
+                    'user_id' => $actor['id'] ?? null,
+                    'full_name' => $actor['full_name'] ?? '',
+                    'role_code' => $actor['role_code'] ?? '',
+                ],
+                'operation' => $this->buildServerRequestOperationSnapshot(
+                    $request,
+                    $this->serverRequestLineRowsForAudit($restaurantId, $requestId)
+                ),
+            ],
             'justification' => 'Commande declinee par la cuisine (non disponible)',
         ]);
+    }
+
+    /**
+     * @param list<array<string, mixed>> $lines
+     *
+     * @return array<string, mixed>
+     */
+    private function buildServerRequestOperationSnapshot(?array $request, array $lines): array
+    {
+        if ($request === null) {
+            return [];
+        }
+        $serverName = '';
+        $sid = (int) ($request['server_id'] ?? 0);
+        if ($sid > 0) {
+            $st = $this->database->pdo()->prepare('SELECT full_name FROM users WHERE id = :id LIMIT 1');
+            $st->execute(['id' => $sid]);
+            $serverName = (string) ($st->fetchColumn() ?: '');
+        }
+        $lineOut = [];
+        foreach ($lines as $ln) {
+            $lineOut[] = [
+                'menu_item_id' => (int) ($ln['menu_item_id'] ?? 0),
+                'menu_item_name' => (string) ($ln['menu_item_name'] ?? ''),
+                'requested_quantity' => (float) ($ln['requested_quantity'] ?? 0),
+                'unit_price' => (float) ($ln['unit_price'] ?? 0),
+                'requested_total' => (float) ($ln['requested_total'] ?? 0),
+                'supplied_quantity' => (float) ($ln['supplied_quantity'] ?? 0),
+                'line_status' => (string) ($ln['status'] ?? ''),
+            ];
+        }
+
+        return [
+            'server_request_id' => (int) ($request['id'] ?? 0),
+            'service_reference' => (string) ($request['service_reference'] ?? ''),
+            'created_at' => $request['created_at'] ?? null,
+            'request_status_at_event' => (string) ($request['status'] ?? ''),
+            'requesting_server' => ['user_id' => $sid, 'full_name' => $serverName],
+            'amounts' => [
+                'total_requested' => (float) ($request['total_requested_amount'] ?? 0),
+                'total_supplied' => (float) ($request['total_supplied_amount'] ?? 0),
+            ],
+            'lines' => $lineOut,
+        ];
+    }
+
+    /**
+     * @return list<array<string, mixed>>
+     */
+    private function serverRequestLineRowsForAudit(int $restaurantId, int $requestId): array
+    {
+        $statement = $this->database->pdo()->prepare(
+            'SELECT sri.*, mi.name AS menu_item_name
+             FROM server_request_items sri
+             INNER JOIN server_requests sr ON sr.id = sri.request_id
+             INNER JOIN menu_items mi ON mi.id = sri.menu_item_id
+             WHERE sri.request_id = :request_id AND sr.restaurant_id = :restaurant_id
+             ORDER BY sri.id ASC'
+        );
+        $statement->execute(['request_id' => $requestId, 'restaurant_id' => $restaurantId]);
+
+        return $statement->fetchAll(PDO::FETCH_ASSOC);
     }
 
     private function closeServerRequest(int $restaurantId, int $requestId, array $payload, array $actor, bool $automatic): void
@@ -510,6 +584,10 @@ final class SalesService
         if ($items === []) {
             throw new \RuntimeException('Aucun article a conclure.');
         }
+        $operationSnapshot = $this->buildServerRequestOperationSnapshot(
+            $request,
+            $this->serverRequestLineRowsForAudit($restaurantId, $requestId)
+        );
         if (in_array((string) $request['status'], ['ANNULE', 'REFUSE_CUISINE'], true)) {
             throw new \RuntimeException('Cette demande a ete annulee ou refusee par la cuisine.');
         }
@@ -634,7 +712,10 @@ final class SalesService
                 'action_name' => $automatic ? 'server_request_auto_closed_as_sale' : 'server_request_closed_as_sale',
                 'entity_type' => 'server_requests',
                 'entity_id' => (string) $requestId,
-                'new_values' => array_merge($payload, ['automatic' => $automatic]),
+                'new_values' => array_merge($payload, [
+                    'automatic' => $automatic,
+                    'operation' => $operationSnapshot,
+                ]),
                 'justification' => $automatic
                     ? 'Cloture automatique d une remise serveur depassee'
                     : 'Cloture demande serveur en vente reelle',
@@ -838,7 +919,10 @@ final class SalesService
     public function reconcileOverdueReturnsToAutomaticSales(int $restaurantId): int
     {
         $count = $this->reconcileOverdueServerClosures($restaurantId);
+        $count += Container::getInstance()->get('cashService')->reconcileOverdueCashierReceipts($restaurantId);
         $stockService = Container::getInstance()->get('stockService');
+        $count += $stockService->reconcileExpiredKitchenStockRequests($restaurantId);
+        $count += $stockService->reconcileAutoKitchenStockReceipts($restaurantId);
         $overdue = $stockService->reconcileOverdueKitchenIssues($restaurantId);
 
         foreach ($overdue as $row) {

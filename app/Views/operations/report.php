@@ -200,6 +200,51 @@ $execSummary = $report['executive_summary'] ?? ['by_server' => [], 'by_article' 
     <p class="muted" style="margin-bottom:0;"><?= e($report['period_label'] ?? '') ?> · du <?= e(format_date_fr($report['range_start'] ?? null, $reportTimezone)) ?> au <?= e(format_date_fr($report['range_end'] ?? null, $reportTimezone)) ?> · Fuseau <?= e($report['timezone'] ?? $reportTimezone->getName()) ?></p>
 </section>
 
+<?php $autoClosed = $report['auto_closed_operations'] ?? []; ?>
+<section class="card" style="padding:22px; margin-bottom:24px;">
+    <details class="compact-card" data-autoclose-details>
+        <summary><strong>Opérations clôturées automatiquement</strong><?php if ($autoClosed !== []): ?> · <?= e((string) count($autoClosed)) ?> événement(s)<?php endif; ?></summary>
+        <p class="muted" style="margin-top:12px;">Clôtures vente/remise au changement de jour, réceptions ou expirations pilotées par le système (fuseau restaurant). Détail cliquable vers l’entité audit.</p>
+        <?php if ($autoClosed === []): ?>
+            <p class="muted" style="margin-bottom:0;">Aucune opération auto-clôturée sur cette période.</p>
+        <?php else: ?>
+            <div class="table-wrap" style="margin-top:14px;">
+                <table>
+                    <thead>
+                    <tr><th>Date</th><th>Acteur</th><th>Type</th><th>Réf.</th><th>Motif / détail</th></tr>
+                    </thead>
+                    <tbody>
+                    <?php foreach ($autoClosed as $acr): ?>
+                        <?php
+                        $nv = [];
+                        if (!empty($acr['new_values_json'])) {
+                            $tmp = json_decode((string) $acr['new_values_json'], true);
+                            $nv = is_array($tmp) ? $tmp : [];
+                        }
+                        $amtHint = '';
+                        if (isset($nv['operation']['amounts']['total_supplied'])) {
+                            $amtHint = format_money((float) $nv['operation']['amounts']['total_supplied'], $restaurantCurrency);
+                        } elseif (isset($nv['amount_received'])) {
+                            $amtHint = format_money((float) $nv['amount_received'], $restaurantCurrency);
+                        } elseif (isset($nv['total_amount'])) {
+                            $amtHint = format_money((float) $nv['total_amount'], $restaurantCurrency);
+                        }
+                        ?>
+                        <tr>
+                            <td><?= e(format_date_fr($acr['created_at'] ?? null, $reportTimezone)) ?></td>
+                            <td><?= e((string) ($acr['actor_name'] ?? '')) ?><br><span class="muted"><?= e((string) ($acr['actor_role_code'] ?? '')) ?></span></td>
+                            <td><?= e(report_audit_action_label((string) ($acr['action_name'] ?? ''))) ?></td>
+                            <td><span class="muted"><?= e((string) ($acr['entity_id'] ?? '-')) ?></span><?php if ($amtHint !== ''): ?><br><?= e($amtHint) ?><?php endif; ?></td>
+                            <td style="max-width:320px;"><?= e((string) ($acr['justification'] ?? '')) ?><?php if ($nv !== []): ?><details style="margin-top:8px;"><summary class="muted" style="cursor:pointer;">JSON technique</summary><pre style="white-space:pre-wrap;font-size:11px;margin:8px 0 0;"><?= e(json_encode($nv, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE)) ?></pre></details><?php endif; ?></td>
+                        </tr>
+                    <?php endforeach; ?>
+                    </tbody>
+                </table>
+            </div>
+        <?php endif; ?>
+    </details>
+</section>
+
 <section class="card" style="padding:22px; margin-bottom:24px;">
     <h2 style="margin-top:0;">Par personne</h2>
     <p class="muted">Répartition sur la période sélectionnée (les filtres utilisateur / rôle s’appliquent aux blocs cuisine, stock et caisse ; les ventes par serveur suivent aussi le filtre « ventes clôturées »).</p>

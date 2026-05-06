@@ -16,6 +16,8 @@ final class AuditAdminController
             'restaurant_id' => $request->query['restaurant_id'] ?? '',
             'user_id' => $request->query['user_id'] ?? '',
             'module_name' => $request->query['module_name'] ?? '',
+            'action_name' => $request->query['action_name'] ?? '',
+            'q' => $request->query['q'] ?? '',
             'date_from' => $request->query['date_from'] ?? '',
             'date_to' => $request->query['date_to'] ?? '',
         ];

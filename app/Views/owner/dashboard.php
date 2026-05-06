@@ -78,6 +78,29 @@ $decisionBadgeClass = static function (?string $status): string {
         </ul>
         <p style="margin:14px 0 0;"><a href="/rapport" class="button-muted">Ouvrir le rapport complet</a></p>
     </details>
+    <details class="compact-card" data-autoclose-details style="margin-top:14px;">
+        <summary><strong>Opérations auto-clôturées aujourd’hui</strong> · <?= e((string) (int) ($report_detail_summary['auto_closed_count_today'] ?? 0)) ?></summary>
+        <p class="muted" style="margin-top:12px;">Événements système (minuit, conversions) sur la journée calendaire du restaurant. Détail et filtres dans le rapport.</p>
+        <p style="margin:12px 0 0;"><a href="/rapport" class="button-muted">Voir le journal dans Rapport</a></p>
+    </details>
+    <details class="compact-card" data-autoclose-details style="margin-top:14px;">
+        <summary><strong>Résumé ventes aujourd’hui</strong> · <?= e(format_money((float) (($report_detail_summary['vente_exec_summary_today']['totals']['grand_amount'] ?? 0)), $restaurantCurrency)) ?></summary>
+        <?php $vt = $report_detail_summary['vente_exec_summary_today']['totals'] ?? []; ?>
+        <ul style="line-height:1.75; margin:12px 0 0; padding-left:20px;">
+            <li><strong>Articles (unités)</strong> : <?= e((string) ($vt['articles_units'] ?? 0)) ?></li>
+            <li><strong>Serveurs (lignes rapport)</strong> : <?= e((string) count($report_detail_summary['vente_exec_summary_today']['by_server'] ?? [])) ?></li>
+        </ul>
+        <p style="margin:14px 0 0;"><a href="/rapport" class="button-muted">Détail ventes / serveurs / articles</a></p>
+    </details>
+    <details class="compact-card" data-autoclose-details style="margin-top:14px;">
+        <summary><strong>Résumé ventes semaine en cours</strong> · <?= e((string) ($report_detail_summary['week_period_label'] ?? '')) ?> · <?= e(format_money((float) ($report_detail_summary['sales_grand_total_week'] ?? 0), $restaurantCurrency)) ?> · auto <?= e((string) (int) ($report_detail_summary['auto_closed_count_week'] ?? 0)) ?></summary>
+        <?php $vw = $report_detail_summary['vente_exec_summary_week']['totals'] ?? []; ?>
+        <ul style="line-height:1.75; margin:12px 0 0; padding-left:20px;">
+            <li><strong>Articles (unités)</strong> : <?= e((string) ($vw['articles_units'] ?? 0)) ?></li>
+            <li><strong>Opérations auto-clôturées (semaine)</strong> : <?= e((string) (int) ($report_detail_summary['auto_closed_count_week'] ?? 0)) ?></li>
+        </ul>
+        <p style="margin:14px 0 0;"><a href="/rapport?period=weekly" class="button-muted">Ouvrir le rapport en mode semaine</a></p>
+    </details>
 </section>
 <?php if (!empty($report_detail_summary['activity_index']['agents'] ?? null)): ?>
 <section class="card" style="padding:20px; margin-bottom:24px;">
