@@ -64,28 +64,41 @@ foreach ($cancelledOrDeclinedRequests as $request) {
     $eventDate = (string) ($request['resolution_at'] ?: $request['updated_at'] ?: $request['created_at']);
     $isDeclined = (string) $request['status'] === 'REFUSE_CUISINE';
     $note = trim((string) ($request['resolution_note'] ?? ''));
+    $rItems = $requestItemsByRequest[(int) ($request['id'] ?? 0)] ?? [];
+    $lineBits = [];
+    $sumLines = 0.0;
+    foreach ($rItems as $ri) {
+        $lineBits[] = (string) ($ri['menu_item_name'] ?? 'Article')
+            . ' × ' . (string) ($ri['requested_quantity'] ?? 0)
+            . ' @ ' . format_money((float) ($ri['unit_price'] ?? 0), $restaurantCurrency)
+            . ' → ' . format_money((float) ($ri['requested_total'] ?? 0), $restaurantCurrency);
+        $sumLines += (float) ($ri['requested_total'] ?? 0);
+    }
+    $linesSummary = $lineBits === [] ? '—' : implode(' · ', $lineBits);
+    $moneyHint = $sumLines > 0.0001 ? (' · total commande ' . format_money($sumLines, $restaurantCurrency) . ' (non vendu)') : '';
     $historyEntries[] = [
         'type' => 'Demande service',
-        'reference' => '#' . (string) $request['id'] . ' - ' . (string) ($request['service_reference'] ?: '-'),
+        'reference' => '#' . (string) $request['id'] . ' - ' . (string) ($request['service_reference'] ?: '-') . ' · serveur ' . ($request['server_name'] ?? '—'),
         'status' => service_flow_status_label($request['status']),
         'date' => $eventDate,
-        'details' => $isDeclined
-            ? ('Commande declinee par la cuisine : ' . ($note !== '' ? $note : '—') . ' · ' . request_terminal_resolution_line(
-                'declinee',
-                $request['resolution_by_name'] ?? null,
-                'kitchen',
-                $note,
-                (string) ($request['resolution_at'] ?? ''),
-                $historyTimezone
-            ))
-            : ('Demande annulee avant preparation · ' . request_terminal_resolution_line(
-                'annulee',
-                $request['resolution_by_name'] ?? null,
-                'cashier_server',
-                $note,
-                (string) ($request['resolution_at'] ?? ''),
-                $historyTimezone
-            )),
+        'details' => 'Lignes : ' . $linesSummary . $moneyHint . ' · '
+            . ($isDeclined
+                ? ('Refus cuisine : ' . ($note !== '' ? $note : '—') . ' · ' . request_terminal_resolution_line(
+                    'declinee',
+                    $request['resolution_by_name'] ?? null,
+                    'kitchen',
+                    $note,
+                    (string) ($request['resolution_at'] ?? ''),
+                    $historyTimezone
+                ))
+                : ('Annulation serveur · ' . request_terminal_resolution_line(
+                    'annulee',
+                    $request['resolution_by_name'] ?? null,
+                    'cashier_server',
+                    $note,
+                    (string) ($request['resolution_at'] ?? ''),
+                    $historyTimezone
+                ))),
         'amount' => 0.0,
     ];
 }
@@ -903,10 +916,10 @@ foreach ($historyEntries as $entry) {
                     }
                     ?>
                     <?php if ($canCancelRequest): ?>
-                        <form method="post" action="/ventes/demandes/<?= e((string) $request['id']) ?>/annuler" style="margin-top:14px; padding-top:14px; border-top:1px solid var(--line);">
+                        <form method="post" action="/ventes/demandes/<?= e((string) $request['id']) ?>/annuler" style="margin-top:14px; padding-top:14px; border-top:1px solid var(--line);" onsubmit="return confirm('Annuler la commande #<?= e((string) $request['id']) ?> avant prise en charge cuisine ?');">
                             <label>Annuler cette commande (motif obligatoire)</label>
                             <textarea name="reason" required placeholder="Ex. table change d avis, erreur de saisie..."></textarea>
-                            <button type="submit" class="button-muted">Annuler avant prise en charge cuisine</button>
+                            <button type="submit" class="button-muted">Annuler commande #<?= e((string) $request['id']) ?></button>
                         </form>
                     <?php endif; ?>
                 </article>

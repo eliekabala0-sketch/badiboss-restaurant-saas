@@ -1501,6 +1501,8 @@ final class StockService
             throw new \RuntimeException('Annulation impossible : le stock a deja traite ou pris en charge cette demande.');
         }
 
+        $requestItems = $this->kitchenStockRequestItemsForRequest($restaurantId, $requestId);
+
         $pdo = $this->database->pdo();
         $pdo->beginTransaction();
 
@@ -1552,7 +1554,16 @@ final class StockService
             'action_name' => 'stock_request_cancelled',
             'entity_type' => 'kitchen_stock_requests',
             'entity_id' => (string) $requestId,
-            'new_values' => ['status' => 'ANNULE', 'resolution_note' => $reason],
+            'new_values' => [
+                'status' => 'ANNULE',
+                'resolution_note' => $reason,
+                'cancelled_by' => [
+                    'user_id' => $actor['id'] ?? null,
+                    'full_name' => $actor['full_name'] ?? '',
+                    'role_code' => $actor['role_code'] ?? '',
+                ],
+                'operation' => $this->buildKitchenStockRequestAuditSnapshot($restaurantId, $requestId, $request, $requestItems),
+            ],
             'justification' => 'Annulation cuisine avant traitement stock',
         ]);
     }

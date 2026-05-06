@@ -404,7 +404,19 @@ final class SalesService
             'action_name' => 'request_cancelled',
             'entity_type' => 'server_requests',
             'entity_id' => (string) $requestId,
-            'new_values' => ['status' => 'ANNULE', 'resolution_note' => $reason],
+            'new_values' => [
+                'status' => 'ANNULE',
+                'resolution_note' => $reason,
+                'cancelled_by' => [
+                    'user_id' => $actor['id'] ?? null,
+                    'full_name' => $actor['full_name'] ?? '',
+                    'role_code' => $actor['role_code'] ?? '',
+                ],
+                'operation' => $this->buildServerRequestOperationSnapshot(
+                    $request,
+                    $this->serverRequestLineRowsForAudit($restaurantId, $requestId)
+                ),
+            ],
             'justification' => 'Annulation serveur avant prise en charge cuisine',
         ]);
     }

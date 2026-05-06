@@ -156,7 +156,14 @@ $resolvedKitchenCases = array_values(array_filter(
 ));
 
 $historyEntries = [];
-$seenTerminalServerHistoryRequests = [];
+$serverHistoryItemsByRequest = [];
+foreach ($serverRequestHistoryItems as $histItem) {
+    $hrid = (int) ($histItem['request_id'] ?? 0);
+    if ($hrid > 0) {
+        $serverHistoryItemsByRequest[$hrid][] = $histItem;
+    }
+}
+$emittedTerminalServerRequests = [];
 foreach ($serverRequestHistoryItems as $item) {
     $requestStatus = (string) ($item['request_status'] ?? '');
     if (in_array($requestStatus, $activeRequestStatuses, true)) {
@@ -165,33 +172,55 @@ foreach ($serverRequestHistoryItems as $item) {
 
     if (in_array($requestStatus, ['ANNULE', 'REFUSE_CUISINE'], true)) {
         $rid = (int) ($item['request_id'] ?? 0);
-        if ($rid > 0 && isset($seenTerminalServerHistoryRequests[$rid])) {
+        if ($rid <= 0 || isset($emittedTerminalServerRequests[$rid])) {
             continue;
         }
-        if ($rid > 0) {
-            $seenTerminalServerHistoryRequests[$rid] = true;
+        $emittedTerminalServerRequests[$rid] = true;
+        $bundle = $serverHistoryItemsByRequest[$rid] ?? [$item];
+        $lineTexts = [];
+        $sumRequestedMoney = 0.0;
+        foreach ($bundle as $ln) {
+            $lineTexts[] = (string) ($ln['menu_item_name'] ?? 'Article')
+                . ' × demandé ' . (string) ($ln['requested_quantity'] ?? 0)
+                . ', préparé ' . (string) ($ln['supplied_quantity'] ?? 0)
+                . ', indisp. ' . (string) ($ln['unavailable_quantity'] ?? 0)
+                . ' · ' . format_money((float) ($ln['requested_total'] ?? 0), $restaurantCurrency);
+            $sumRequestedMoney += (float) ($ln['requested_total'] ?? 0);
         }
+        $head = $bundle[0];
+        $eventDate = (string) ($head['request_resolution_at'] ?: $head['request_received_at'] ?: $head['updated_at'] ?: $head['request_created_at'] ?: $head['created_at']);
+        $refBase = 'Commande #' . (string) $rid . ' · ref. ' . ($head['service_reference'] ?: '—') . ' · serveur ' . ($head['server_name'] ?? '—');
+        if ($sumRequestedMoney > 0.0001) {
+            $refBase .= ' · total chiffré demandé ' . format_money($sumRequestedMoney, $restaurantCurrency);
+        }
+        $historyEntries[] = [
+            'type' => $requestStatus === 'REFUSE_CUISINE' ? 'Commande refusée cuisine' : 'Commande annulée serveur',
+            'reference' => $refBase,
+            'status' => service_flow_status_label($requestStatus),
+            'date' => $eventDate,
+            'details' => 'Lignes : ' . implode(' · ', $lineTexts) . ' · '
+                . request_terminal_resolution_line(
+                    $requestStatus === 'REFUSE_CUISINE' ? 'declinee' : 'annulee',
+                    $head['resolution_by_name'] ?? null,
+                    $requestStatus === 'REFUSE_CUISINE' ? 'kitchen' : 'cashier_server',
+                    (string) ($head['request_resolution_note'] ?? ''),
+                    (string) ($head['request_resolution_at'] ?? ''),
+                    $historyTimezone
+                ),
+            'amount' => 0.0,
+        ];
+        continue;
     }
 
     $eventDate = (string) ($item['request_received_at'] ?: $item['updated_at'] ?: $item['request_created_at'] ?: $item['created_at']);
     $historyEntries[] = [
         'type' => 'Demande serveur',
-        'reference' => ($item['menu_item_name'] ?? 'Produit') . ' · ' . ($item['service_reference'] ?: 'Sans reference'),
+        'reference' => 'Cmd #' . (string) ($item['request_id'] ?? '?') . ' · ' . ($item['menu_item_name'] ?? 'Produit') . ' · ' . ($item['service_reference'] ?: 'Sans reference'),
         'status' => service_flow_status_label($requestStatus !== '' ? $requestStatus : (string) ($item['status'] ?? '')),
         'date' => $eventDate,
         'details' => 'Serveur ' . ($item['server_name'] ?? '-') . ' · demande ' . (string) ($item['requested_quantity'] ?? 0)
             . ' · prepare ' . (string) ($item['supplied_quantity'] ?? 0)
-            . ' · indisponible ' . (string) ($item['unavailable_quantity'] ?? 0)
-            . (in_array($requestStatus, ['ANNULE', 'REFUSE_CUISINE'], true)
-                ? ' · ' . request_terminal_resolution_line(
-                    $requestStatus === 'REFUSE_CUISINE' ? 'declinee' : 'annulee',
-                    $item['resolution_by_name'] ?? null,
-                    $requestStatus === 'REFUSE_CUISINE' ? 'kitchen' : 'cashier_server',
-                    (string) ($item['request_resolution_note'] ?? ''),
-                    (string) ($item['request_resolution_at'] ?? ''),
-                    $historyTimezone
-                )
-                : ''),
+            . ' · indisponible ' . (string) ($item['unavailable_quantity'] ?? 0),
         'amount' => 0.0,
     ];
 }
@@ -240,12 +269,13 @@ foreach ($endedStockRequests as $request) {
     $note = trim((string) ($request['resolution_note'] ?? ''));
     $historyEntries[] = [
         'type' => $isDeclinedStock ? 'Demande stock refusee' : 'Demande stock annulee',
-        'reference' => 'Demande #' . (string) $request['id'] . ' · ' . ((int) ($request['item_count'] ?? count($requestItems) ?: 1)) . ' produit(s)',
+        'reference' => 'Demande #' . (string) $request['id'] . ' · cuisine ' . ($request['requested_by_name'] ?? '—') . ' · ' . ((int) ($request['item_count'] ?? count($requestItems) ?: 1)) . ' ligne(s)',
         'status' => stock_request_status_label($request['status'] ?? null),
         'date' => $eventDate,
-        'details' => ($details !== [] ? implode(', ', $details) . ' · ' : '')
+        'details' => 'Op. demande stock #' . (string) $request['id'] . ' · '
+            . ($details !== [] ? 'lignes : ' . implode(', ', $details) . ' · ' : '')
             . ($isDeclinedStock
-                ? ('Demande stock declinee : ' . ($note !== '' ? $note : '—') . ' · ' . request_terminal_resolution_line(
+                ? ('Refus stock : ' . ($note !== '' ? $note : '—') . ' · ' . request_terminal_resolution_line(
                     'declinee',
                     $request['resolution_by_name'] ?? null,
                     'stock_manager',
@@ -537,11 +567,13 @@ $stockBadgeClass = static function (?string $status): string {
 
 <?php
 $declineServerRequestMeta = [];
+$declineServerLineItemsByRequest = [];
 foreach (array_merge($waitingServerItems, $preparingServerItems) as $item) {
     $rid = (int) ($item['request_id'] ?? 0);
     if ($rid <= 0) {
         continue;
     }
+    $declineServerLineItemsByRequest[$rid][] = $item;
     if (!isset($declineServerRequestMeta[$rid])) {
         $declineServerRequestMeta[$rid] = [
             'service_reference' => (string) ($item['service_reference'] ?? ''),
@@ -554,14 +586,28 @@ foreach (array_merge($waitingServerItems, $preparingServerItems) as $item) {
 <section class="card" style="padding:22px; margin-top:24px;">
     <details class="compact-card" open data-autoclose-details>
         <summary><strong>Refuser toute la commande serveur (non disponible)</strong></summary>
-        <p class="muted" style="margin-top:12px;">Refus sur la commande entiere avec motif obligatoire. Le service voit le motif dans son historique — sans vente ni caisse.</p>
+        <p class="muted" style="margin-top:12px;">Refus sur la commande entiere avec motif obligatoire. Le service voit le motif dans son historique — sans vente ni caisse. Chaque bloc rappelle les lignes exactes refusées.</p>
         <?php foreach ($declineServerRequestMeta as $reqId => $meta): ?>
             <div style="margin-top:18px; padding-top:16px; border-top:1px solid var(--line);">
                 <p style="margin:0 0 8px;"><strong>Commande #<?= e((string) $reqId) ?></strong> · <?= e($meta['server_name'] !== '' ? $meta['server_name'] : 'Serveur') ?> · ref. <?= e($meta['service_reference'] !== '' ? $meta['service_reference'] : '-') ?></p>
-                <form method="post" action="/cuisine/demandes-serveur/<?= e((string) $reqId) ?>/decliner">
+                <?php $dlines = $declineServerLineItemsByRequest[$reqId] ?? []; ?>
+                <?php if ($dlines !== []): ?>
+                    <ul style="margin:0 0 12px; padding-left:20px; line-height:1.55;">
+                        <?php foreach ($dlines as $dln): ?>
+                            <li>
+                                <strong><?= e((string) ($dln['menu_item_name'] ?? 'Article')) ?></strong>
+                                · demandé <?= e((string) ($dln['requested_quantity'] ?? 0)) ?>
+                                <?php if ((float) ($dln['requested_total'] ?? 0) > 0): ?>
+                                    · <?= e(format_money((float) ($dln['requested_total'] ?? 0), $restaurantCurrency)) ?>
+                                <?php endif; ?>
+                            </li>
+                        <?php endforeach; ?>
+                    </ul>
+                <?php endif; ?>
+                <form method="post" action="/cuisine/demandes-serveur/<?= e((string) $reqId) ?>/decliner" onsubmit="return confirm('Refuser toute cette commande ? Aucune vente ne sera créée.');">
                     <label>Motif obligatoire</label>
                     <textarea name="reason" required placeholder="Ex. rupture, plat indisponible ce service..."></textarea>
-                    <button type="submit" class="button-muted">Decliner / non disponible</button>
+                    <button type="submit" class="button-muted">Rejeter / non disponible (commande #<?= e((string) $reqId) ?>)</button>
                 </form>
             </div>
         <?php endforeach; ?>
@@ -869,10 +915,12 @@ foreach (array_merge($waitingServerItems, $preparingServerItems) as $item) {
                             && (string) ($request['status'] ?? '') === 'DEMANDE';
                         ?>
                         <?php if ($canCancelStockReq): ?>
-                            <form method="post" action="/cuisine/demandes-stock/<?= e((string) $request['id']) ?>/annuler" style="margin-bottom:14px; padding-bottom:14px; border-bottom:1px solid var(--line);">
-                                <label>Annuler cette demande avant traitement stock (motif obligatoire)</label>
-                                <textarea name="reason" required placeholder="Ex. besoin annule, erreur de quantite..."></textarea>
-                                <button type="submit" class="button-muted">Annuler la demande</button>
+                            <form method="post" action="/cuisine/demandes-stock/<?= e((string) $request['id']) ?>/annuler" style="margin-bottom:14px; padding:14px; border:1px solid var(--line); border-radius:12px; background:rgba(255,255,255,0.02);" onsubmit="return confirm('Annuler cette demande stock avant traitement magasin ?');">
+                                <strong>Annuler la demande #<?= e((string) $request['id']) ?></strong>
+                                <span class="muted" style="display:block; margin-top:6px;">Auteur de la demande · statut « demandé » uniquement.</span>
+                                <label style="margin-top:10px; display:block;">Motif obligatoire</label>
+                                <textarea name="reason" required placeholder="Ex. besoin annulé, erreur de quantité..."></textarea>
+                                <button type="submit" class="button-muted" style="margin-top:10px;">Annuler demande stock</button>
                             </form>
                         <?php endif; ?>
 

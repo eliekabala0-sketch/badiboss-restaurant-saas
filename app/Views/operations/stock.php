@@ -210,12 +210,13 @@ foreach ($endedStockRequests as $request) {
     $note = trim((string) ($request['resolution_note'] ?? ''));
     $historyEntries[] = [
         'type' => $isDeclinedStock ? 'Demande stock refusee' : 'Demande stock annulee',
-        'reference' => 'Demande #' . (string) $request['id'] . ' · ' . ((int) ($request['item_count'] ?? count($requestItems) ?: 1)) . ' produit(s)',
+        'reference' => 'Demande #' . (string) $request['id'] . ' · cuisine ' . ($request['requested_by_name'] ?? '—') . ' · ' . ((int) ($request['item_count'] ?? count($requestItems) ?: 1)) . ' ligne(s)',
         'status' => stock_request_status_label($request['status'] ?? null),
         'date' => $eventDate,
-        'details' => ($details !== [] ? implode(', ', $details) . ' · ' : '')
+        'details' => 'Op. demande stock #' . (string) $request['id'] . ' · '
+            . ($details !== [] ? 'lignes : ' . implode(', ', $details) . ' · ' : '')
             . ($isDeclinedStock
-                ? ('Demande stock declinee : ' . ($note !== '' ? $note : '—') . ' · ' . request_terminal_resolution_line(
+                ? ('Refus stock : ' . ($note !== '' ? $note : '—') . ' · ' . request_terminal_resolution_line(
                     'declinee',
                     $request['resolution_by_name'] ?? null,
                     'stock_manager',
@@ -621,14 +622,14 @@ $priorityBadgeClass = static function (?string $priority): string {
                                 </form>
 
                                 <?php if (in_array((string) $request['status'], ['DEMANDE', 'EN_COURS_TRAITEMENT'], true)): ?>
-                                    <details style="margin-top:14px;">
-                                        <summary style="cursor:pointer;"><strong>Decliner / non disponible (toute la demande)</strong></summary>
-                                        <form method="post" action="/stock/demandes-cuisine/<?= e((string) $request['id']) ?>/decliner" style="margin-top:10px;">
+                                    <div style="margin-top:14px; padding:14px; border:1px solid var(--line); border-radius:12px; background:rgba(255,200,100,0.06);">
+                                        <strong>Rejeter / non disponible</strong> — demande #<?= e((string) $request['id']) ?> (toute la demande, aucun mouvement magasin)
+                                        <form method="post" action="/stock/demandes-cuisine/<?= e((string) $request['id']) ?>/decliner" style="margin-top:10px;" onsubmit="return confirm('Refuser cette demande cuisine ? Aucune sortie stock ne sera enregistrée.');">
                                             <label>Motif obligatoire</label>
                                             <textarea name="reason" required placeholder="Ex. rupture, article introuvable..."></textarea>
-                                            <button type="submit" class="button-muted">Decliner la demande cuisine</button>
+                                            <button type="submit" class="button-muted" style="margin-top:10px;">Rejeter la demande #<?= e((string) $request['id']) ?></button>
                                         </form>
-                                    </details>
+                                    </div>
                                 <?php endif; ?>
                             <?php else: ?>
                                 <span class="muted">Lecture seule.</span>
