@@ -49,14 +49,6 @@ final class RailwayDbTools
             ['name' => 'submitted_to_manager_at', 'sql' => 'ALTER TABLE operation_cases ADD COLUMN submitted_to_manager_at DATETIME NULL AFTER technical_confirmed_at'],
             ['name' => 'trace_snapshot_json', 'sql' => 'ALTER TABLE operation_cases ADD COLUMN trace_snapshot_json LONGTEXT NULL AFTER manager_justification'],
         ],
-        'stock_items' => [
-            ['name' => 'category_label', 'sql' => 'ALTER TABLE stock_items ADD COLUMN category_label VARCHAR(120) NULL AFTER unit_name'],
-            ['name' => 'item_note', 'sql' => 'ALTER TABLE stock_items ADD COLUMN item_note TEXT NULL AFTER estimated_unit_cost'],
-            ['name' => 'updated_at', 'sql' => 'ALTER TABLE stock_items ADD COLUMN updated_at DATETIME NULL AFTER created_at'],
-            ['name' => 'archived_at', 'sql' => 'ALTER TABLE stock_items ADD COLUMN archived_at DATETIME NULL AFTER updated_at'],
-            ['name' => 'archived_by', 'sql' => 'ALTER TABLE stock_items ADD COLUMN archived_by BIGINT UNSIGNED NULL AFTER archived_at'],
-            ['name' => 'archive_reason', 'sql' => 'ALTER TABLE stock_items ADD COLUMN archive_reason TEXT NULL AFTER archived_by'],
-        ],
     ];
 
     public static function install(array $config): array
@@ -167,6 +159,8 @@ final class RailwayDbTools
             self::ensureRestaurantCurrency($pdo, $report);
             self::ensureCorrectionRequestsTable($pdo, $report);
 
+            self::ensureStockItemsRuntimeColumns($pdo, $report);
+
             foreach (self::RUNTIME_COLUMN_DEFS as $table => $columns) {
                 foreach ($columns as $column) {
                     if (self::columnExists($pdo, $table, $column['name'])) {
@@ -174,35 +168,71 @@ final class RailwayDbTools
                         continue;
                     }
 
-                    $pdo->exec($column['sql']);
-                    $report['columns_added'][] = $table . '.' . $column['name'];
+                    try {
+                        $pdo->exec($column['sql']);
+                        $report['columns_added'][] = $table . '.' . $column['name'];
+                    } catch (Throwable $e) {
+                        $report['errors'][] = $table . '.' . $column['name'] . ': ' . self::mask($e->getMessage());
+                    }
                 }
             }
 
-            $pdo->exec("ALTER TABLE server_requests MODIFY status ENUM('DEMANDE','EN_PREPARATION','PRET_A_SERVIR','REMIS_SERVEUR','FOURNI_PARTIEL','FOURNI_TOTAL','VENDU_PARTIEL','VENDU_TOTAL','CLOTURE','ANNULE','REFUSE_CUISINE') NOT NULL DEFAULT 'DEMANDE'");
-            $report['enum_updates'][] = 'server_requests.status';
+            try {
+                $pdo->exec("ALTER TABLE server_requests MODIFY status ENUM('DEMANDE','EN_PREPARATION','PRET_A_SERVIR','REMIS_SERVEUR','FOURNI_PARTIEL','FOURNI_TOTAL','VENDU_PARTIEL','VENDU_TOTAL','CLOTURE','ANNULE','REFUSE_CUISINE') NOT NULL DEFAULT 'DEMANDE'");
+                $report['enum_updates'][] = 'server_requests.status';
+            } catch (Throwable $e) {
+                $report['errors'][] = 'server_requests.status_enum: ' . self::mask($e->getMessage());
+            }
 
-            $pdo->exec("ALTER TABLE server_request_items MODIFY supply_status ENUM('DEMANDE','EN_PREPARATION','PRET_A_SERVIR','REMIS_SERVEUR','FOURNI_TOTAL','FOURNI_PARTIEL','NON_FOURNI','CLOTURE') NOT NULL DEFAULT 'DEMANDE'");
-            $report['enum_updates'][] = 'server_request_items.supply_status';
+            try {
+                $pdo->exec("ALTER TABLE server_request_items MODIFY supply_status ENUM('DEMANDE','EN_PREPARATION','PRET_A_SERVIR','REMIS_SERVEUR','FOURNI_TOTAL','FOURNI_PARTIEL','NON_FOURNI','CLOTURE') NOT NULL DEFAULT 'DEMANDE'");
+                $report['enum_updates'][] = 'server_request_items.supply_status';
+            } catch (Throwable $e) {
+                $report['errors'][] = 'server_request_items.supply_status_enum: ' . self::mask($e->getMessage());
+            }
 
-            $pdo->exec("UPDATE kitchen_stock_requests SET status = 'FOURNI_TOTAL' WHERE status = 'DISPONIBLE'");
-            $report['data_backfills'][] = 'kitchen_stock_requests.status DISPONIBLE -> FOURNI_TOTAL';
-            $pdo->exec("UPDATE kitchen_stock_requests SET status = 'FOURNI_PARTIEL' WHERE status = 'PARTIELLEMENT_DISPONIBLE'");
-            $report['data_backfills'][] = 'kitchen_stock_requests.status PARTIELLEMENT_DISPONIBLE -> FOURNI_PARTIEL';
-            $pdo->exec("UPDATE kitchen_stock_requests SET status = 'NON_FOURNI' WHERE status = 'INDISPONIBLE'");
-            $report['data_backfills'][] = 'kitchen_stock_requests.status INDISPONIBLE -> NON_FOURNI';
+            try {
+                $pdo->exec("UPDATE kitchen_stock_requests SET status = 'FOURNI_TOTAL' WHERE status = 'DISPONIBLE'");
+                $report['data_backfills'][] = 'kitchen_stock_requests.status DISPONIBLE -> FOURNI_TOTAL';
+            } catch (Throwable $e) {
+                $report['errors'][] = 'kitchen_stock_requests backfill DISPONIBLE: ' . self::mask($e->getMessage());
+            }
+            try {
+                $pdo->exec("UPDATE kitchen_stock_requests SET status = 'FOURNI_PARTIEL' WHERE status = 'PARTIELLEMENT_DISPONIBLE'");
+                $report['data_backfills'][] = 'kitchen_stock_requests.status PARTIELLEMENT_DISPONIBLE -> FOURNI_PARTIEL';
+            } catch (Throwable $e) {
+                $report['errors'][] = 'kitchen_stock_requests backfill PARTIEL: ' . self::mask($e->getMessage());
+            }
+            try {
+                $pdo->exec("UPDATE kitchen_stock_requests SET status = 'NON_FOURNI' WHERE status = 'INDISPONIBLE'");
+                $report['data_backfills'][] = 'kitchen_stock_requests.status INDISPONIBLE -> NON_FOURNI';
+            } catch (Throwable $e) {
+                $report['errors'][] = 'kitchen_stock_requests backfill INDISPO: ' . self::mask($e->getMessage());
+            }
 
-            $pdo->exec("ALTER TABLE kitchen_stock_requests MODIFY status ENUM('DEMANDE','EN_COURS_TRAITEMENT','FOURNI_TOTAL','FOURNI_PARTIEL','NON_FOURNI','DISPONIBLE','PARTIELLEMENT_DISPONIBLE','INDISPONIBLE','CLOTURE','ANNULE','REFUSE_STOCK') NOT NULL DEFAULT 'DEMANDE'");
-            $report['enum_updates'][] = 'kitchen_stock_requests.status';
+            try {
+                $pdo->exec("ALTER TABLE kitchen_stock_requests MODIFY status ENUM('DEMANDE','EN_COURS_TRAITEMENT','FOURNI_TOTAL','FOURNI_PARTIEL','NON_FOURNI','DISPONIBLE','PARTIELLEMENT_DISPONIBLE','INDISPONIBLE','CLOTURE','ANNULE','REFUSE_STOCK') NOT NULL DEFAULT 'DEMANDE'");
+                $report['enum_updates'][] = 'kitchen_stock_requests.status';
+            } catch (Throwable $e) {
+                $report['errors'][] = 'kitchen_stock_requests.status_enum: ' . self::mask($e->getMessage());
+            }
 
             if (self::columnExists($pdo, 'server_request_items', 'unavailable_quantity')) {
-                $pdo->exec('UPDATE server_request_items SET unavailable_quantity = GREATEST(requested_quantity - supplied_quantity, 0) WHERE unavailable_quantity = 0');
-                $report['data_backfills'][] = 'server_request_items.unavailable_quantity';
+                try {
+                    $pdo->exec('UPDATE server_request_items SET unavailable_quantity = GREATEST(requested_quantity - supplied_quantity, 0) WHERE unavailable_quantity = 0');
+                    $report['data_backfills'][] = 'server_request_items.unavailable_quantity';
+                } catch (Throwable $e) {
+                    $report['errors'][] = 'server_request_items unavailable backfill: ' . self::mask($e->getMessage());
+                }
             }
 
             if (self::columnExists($pdo, 'kitchen_stock_requests', 'unavailable_quantity')) {
-                $pdo->exec('UPDATE kitchen_stock_requests SET unavailable_quantity = GREATEST(quantity_requested - quantity_supplied, 0) WHERE unavailable_quantity = 0');
-                $report['data_backfills'][] = 'kitchen_stock_requests.unavailable_quantity';
+                try {
+                    $pdo->exec('UPDATE kitchen_stock_requests SET unavailable_quantity = GREATEST(quantity_requested - quantity_supplied, 0) WHERE unavailable_quantity = 0');
+                    $report['data_backfills'][] = 'kitchen_stock_requests.unavailable_quantity';
+                } catch (Throwable $e) {
+                    $report['errors'][] = 'kitchen_stock_requests unavailable backfill: ' . self::mask($e->getMessage());
+                }
             }
 
         } catch (Throwable $e) {
@@ -639,6 +669,63 @@ final class RailwayDbTools
         }
 
         return implode(PHP_EOL, $out);
+    }
+
+    private static function ensureStockItemsRuntimeColumns(PDO $pdo, array &$report): void
+    {
+        if (!self::tableExists($pdo, 'stock_items')) {
+            $report['errors'][] = 'stock_items table missing';
+
+            return;
+        }
+
+        self::addStockItemsColumnIfMissing($pdo, $report, 'category_label', 'VARCHAR(120) NULL', ['unit_name', 'name']);
+        self::addStockItemsColumnIfMissing($pdo, $report, 'item_note', 'TEXT NULL', ['estimated_unit_cost', 'alert_threshold', 'quantity_in_stock', 'created_at']);
+        self::addStockItemsColumnIfMissing($pdo, $report, 'updated_at', 'DATETIME NULL', ['created_at', 'item_note', 'estimated_unit_cost']);
+        self::addStockItemsColumnIfMissing($pdo, $report, 'archived_at', 'DATETIME NULL', ['updated_at', 'created_at']);
+        self::addStockItemsColumnIfMissing($pdo, $report, 'archived_by', 'BIGINT UNSIGNED NULL', ['archived_at', 'updated_at', 'created_at']);
+        self::addStockItemsColumnIfMissing($pdo, $report, 'archive_reason', 'TEXT NULL', ['archived_by', 'archived_at', 'updated_at', 'created_at']);
+    }
+
+    /**
+     * @param list<string> $preferredAnchors
+     */
+    private static function addStockItemsColumnIfMissing(PDO $pdo, array &$report, string $name, string $ddl, array $preferredAnchors): void
+    {
+        if (self::columnExists($pdo, 'stock_items', $name)) {
+            $report['columns_existing'][] = 'stock_items.' . $name;
+
+            return;
+        }
+
+        $after = '';
+        foreach ($preferredAnchors as $anchor) {
+            if (self::columnExists($pdo, 'stock_items', $anchor)) {
+                $after = ' AFTER `' . str_replace('`', '``', $anchor) . '`';
+                break;
+            }
+        }
+
+        $ident = '`' . str_replace('`', '``', $name) . '`';
+        $sql = 'ALTER TABLE stock_items ADD COLUMN ' . $ident . ' ' . $ddl . $after;
+
+        try {
+            $pdo->exec($sql);
+            $report['columns_added'][] = 'stock_items.' . $name;
+        } catch (Throwable $e) {
+            if ($after === '') {
+                $report['errors'][] = 'stock_items.' . $name . ': ' . self::mask($e->getMessage());
+
+                return;
+            }
+            $fallback = 'ALTER TABLE stock_items ADD COLUMN ' . $ident . ' ' . $ddl;
+            try {
+                $pdo->exec($fallback);
+                $report['columns_added'][] = 'stock_items.' . $name . ' (sans AFTER)';
+            } catch (Throwable $e2) {
+                $report['errors'][] = 'stock_items.' . $name . ': ' . self::mask($e2->getMessage());
+            }
+        }
     }
 
     private static function dbMeta(array $c): array { return ['source' => (string) ($c['source'] ?? 'unknown'), 'host' => (string) ($c['host'] ?? 'unknown'), 'port' => (string) ($c['port'] ?? 'unknown'), 'database' => (string) ($c['database'] ?? 'unknown'), 'user' => (string) ($c['username'] ?? 'unknown')]; }
