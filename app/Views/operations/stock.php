@@ -768,11 +768,11 @@ $priorityBadgeClass = static function (?string $priority): string {
 </section>
 
 <section class="card" style="margin-top:24px;">
-    <details class="compact-card" style="padding:0;">
+    <details class="compact-card" style="padding:0;" open>
         <summary style="cursor:pointer; list-style:none; padding:22px 22px 18px;">
-            <h2 style="margin:0; display:inline;">Niveaux de stock</h2>
+            <h2 style="margin:0; display:inline;">Niveaux de stock — modifier un article</h2>
             <span class="muted"> · <?= e((string) count($itemsForLevels)) ?> article(s)</span>
-            <p class="muted" style="margin:8px 0 0;">Lecture rapide des quantites disponibles et des sorties encore provisoires.</p>
+            <p class="muted" style="margin:8px 0 0;">Ouvrez « Modifier / archiver » par ligne pour corriger les données ou retirer un article des listes actives (archivage audité).</p>
         </summary>
     <div class="table-wrap" style="padding:0 22px 22px;">
         <table>
@@ -803,7 +803,7 @@ $priorityBadgeClass = static function (?string $priority): string {
                     <td>
                         <?php if (can_access('stock.item.edit')): ?>
                             <details class="no-print">
-                                <summary style="cursor:pointer;">Modifier</summary>
+                                <summary style="cursor:pointer;">Modifier / archiver</summary>
                                 <form method="post" action="/stock/items/<?= e((string) $item['id']) ?>/update" class="split" style="margin-top:12px;">
                                     <div><label>Nom</label><input name="name" value="<?= e((string) $item['name']) ?>" required></div>
                                     <div><label>Unite</label><input name="unit_name" value="<?= e((string) $item['unit_name']) ?>" required></div>
@@ -811,16 +811,16 @@ $priorityBadgeClass = static function (?string $priority): string {
                                     <div><label>Seuil d alerte</label><input name="alert_threshold" value="<?= e((string) $item['alert_threshold']) ?>"></div>
                                     <div><label>Cout unitaire estime</label><input name="estimated_unit_cost" value="<?= e((string) $item['estimated_unit_cost']) ?>"></div>
                                     <div style="grid-column:1 / -1;"><label>Note</label><textarea name="item_note"><?= e((string) ($item['item_note'] ?? '')) ?></textarea></div>
-                                    <div style="grid-column:1 / -1; display:flex; gap:10px; flex-wrap:wrap;">
-                                        <button type="submit">Enregistrer</button>
+                                    <div style="grid-column:1 / -1; display:flex; gap:10px; flex-wrap:wrap; align-items:center;">
+                                        <button type="submit">Enregistrer les modifications</button>
+                                        <button type="submit" form="<?= e('archive_stock_' . (string) $item['id']) ?>" class="button-muted" onclick="return confirm('Archiver / retirer cet article des listes actives ?');">Archiver / supprimer des listes</button>
                                         <a href="#stock_modifications" class="button-muted">Historique des modifications</a>
                                     </div>
                                 </form>
-                                <form method="post" action="/stock/items/<?= e((string) $item['id']) ?>/archive" style="margin-top:16px; padding-top:14px; border-top:1px dashed var(--line);">
-                                    <label><strong>Archiver cet article</strong> (aucune suppression des données ; masqué des saisies actives si sans blocage en cours)</label>
-                                    <p class="muted" style="margin:8px 0;">Motif obligatoire pour l audit. Si des mouvements ou demandes en cours bloquent, le message d erreur indique quoi régler avant.</p>
+                                <form id="<?= e('archive_stock_' . (string) $item['id']) ?>" method="post" action="/stock/items/<?= e((string) $item['id']) ?>/archive" style="margin-top:14px; padding-top:14px; border-top:1px dashed var(--line);">
+                                    <label><strong>Archivage ou retrait des listes actives</strong> (traçabilité obligatoire ; pas d’effacement des mouvements passés)</label>
+                                    <p class="muted" style="margin:8px 0;">Motif obligatoire pour l’audit. Si des mouvements provisoires ou demandes bloquent, le message indique quoi régler avant.</p>
                                     <textarea name="archive_reason" required placeholder="Ex. produit remplacé, fin de gamme, fusion avec un autre article..."></textarea>
-                                    <button type="submit" class="button-muted" style="margin-top:8px;" onclick="return confirm('Archiver cet article de stock pour ce restaurant ?');">Archiver</button>
                                 </form>
                             </details>
                         <?php else: ?>

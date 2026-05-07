@@ -708,9 +708,6 @@ foreach (array_merge($waitingServerItems, $preparingServerItems) as $item) {
                                     $lineIsBeverage = menu_line_is_beverage($item['menu_category_name'] ?? null, $item['menu_category_slug'] ?? null);
                                     $reqQ = (float) ($item['requested_quantity'] ?? 0);
                                     $supQ = (float) ($item['supplied_quantity'] ?? 0);
-                                    $beverageRienAFaire = $lineIsBeverage
-                                        && (string) ($item['status'] ?? '') === 'PRET_A_SERVIR'
-                                        && abs($reqQ - $supQ) < 0.0001;
                                     $defaultSuppliedInput = $supQ > 0 ? $supQ : $reqQ;
                                     ?>
                                     <tr class="<?= $index >= $activePreviewLimit ? 'history-extra' : '' ?>" data-history-group="<?= e($serverGroupId) ?>" <?= $index >= $activePreviewLimit ? 'style="display:none;"' : '' ?>>
@@ -730,17 +727,18 @@ foreach (array_merge($waitingServerItems, $preparingServerItems) as $item) {
                                         <td data-label="Note" style="min-width:180px;"><?= e((string) ($item['request_note'] ?: '-')) ?></td>
                                         <td data-label="Actions" style="min-width:220px;">
                                             <?php if (can_access('kitchen.request.fulfill')): ?>
-                                                <?php if ($beverageRienAFaire): ?>
-                                                    <p class="flash-ok" style="margin:0; padding:10px 12px; border-radius:12px;">Boisson prête — rien à faire en cuisine (stock débité automatiquement).</p>
+                                                <?php if ($lineIsBeverage && (string) ($item['status'] ?? '') === 'PRET_A_SERVIR' && abs($reqQ - $supQ) < 0.0001): ?>
+                                                    <p class="muted" style="margin:0;">Boisson déjà validée en cuisine (débit stock effectué au moment de la validation).</p>
                                                 <?php elseif ($lineIsBeverage): ?>
-                                                    <p class="muted" style="margin:0 0 8px;">Compléter la quantité servie si besoin, puis valider.</p>
+                                                    <p class="muted" style="margin:0 0 10px;">À valider uniquement ici : aucun débit stock cuisine tant que vous n’avez pas confirmé.</p>
                                                     <div class="kitchen-touch-actions">
                                                     <form method="post" action="/cuisine/demandes-serveur/<?= e((string) $item['id']) ?>/fourni">
-                                                        <label>Quantité servie</label>
+                                                        <label>Quantité servie (stock cuisine)</label>
                                                         <div class="quantity-stepper" data-quantity-stepper><button type="button" data-stepper-minus>-</button><input name="supplied_quantity" value="<?= e((string) $defaultSuppliedInput) ?>" min="0" step="1"><button type="button" data-stepper-plus>+</button></div>
-                                                        <button type="submit" name="workflow_stage" value="PRET_A_SERVIR">Valider boisson (prêt)</button>
+                                                        <button type="submit" name="workflow_stage" value="PRET_A_SERVIR">Valider boisson servie</button>
                                                     </form>
                                                     </div>
+                                                    <p class="muted" style="margin:12px 0 0; font-size:0.92rem;">Stock insuffisant ? <a href="#kitchen-demande-stock">Demander au stock</a> depuis le formulaire ci‑dessous.</p>
                                                 <?php else: ?>
                                                 <div class="kitchen-touch-actions">
                                                 <form method="post" action="/cuisine/demandes-serveur/<?= e((string) $item['id']) ?>/fourni">
@@ -1058,7 +1056,7 @@ foreach (array_merge($waitingServerItems, $preparingServerItems) as $item) {
         </details>
     </article>
 
-    <article class="card" style="padding:22px;">
+    <article class="card" style="padding:22px;" id="kitchen-demande-stock">
         <details class="compact-card" data-autoclose-details>
             <summary><strong>Demander au stock</strong></summary>
         <h2 style="margin-top:0;">Demande cuisine vers stock</h2>

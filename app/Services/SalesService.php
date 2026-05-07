@@ -274,29 +274,6 @@ final class SalesService
                 'justification' => 'Demande chiffree du serveur depuis le menu',
             ]);
 
-            $lineIdsStmt = $this->database->pdo()->prepare(
-                'SELECT id FROM server_request_items WHERE request_id = :rid ORDER BY id ASC'
-            );
-            $lineIdsStmt->execute(['rid' => $requestId]);
-            $lineIds = array_map(static fn ($v): int => (int) $v, $lineIdsStmt->fetchAll(PDO::FETCH_COLUMN) ?: []);
-            $kitchenService = Container::getInstance()->get('kitchenService');
-            foreach ($normalizedItems as $idx => $norm) {
-                if (!menu_line_is_beverage(
-                    isset($norm['menu_category_name']) ? (string) $norm['menu_category_name'] : '',
-                    isset($norm['menu_category_slug']) ? (string) $norm['menu_category_slug'] : '',
-                )) {
-                    continue;
-                }
-                $lid = $lineIds[$idx] ?? 0;
-                if ($lid <= 0) {
-                    continue;
-                }
-                try {
-                    $kitchenService->autoFulfillBeverageServerLine($restaurantId, $lid, $actor);
-                } catch (\Throwable $e) {
-                    error_log('[badiboss] autoFulfillBeverage after create request_line=' . $lid . ' ' . $e->getMessage());
-                }
-            }
         } catch (\Throwable $throwable) {
             if ($pdo->inTransaction()) {
                 $pdo->rollBack();
@@ -454,9 +431,8 @@ final class SalesService
             throw new \RuntimeException('Motif de declinaison obligatoire.');
         }
 
-        $role = (string) ($actor['role_code'] ?? '');
-        if (!in_array($role, ['kitchen', 'manager'], true)) {
-            throw new \RuntimeException('Seule la cuisine (ou le gerant) peut decliner une demande serveur.');
+        if (!can_access('kitchen.request.fulfill', $actor)) {
+            throw new \RuntimeException('Action reservee aux comptes habilites a traiter la file cuisine (declinaison).');
         }
 
         $request = $this->findServerRequest($requestId, $restaurantId);

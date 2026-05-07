@@ -1327,7 +1327,7 @@ final class StockService
         try {
             $inventory = $this->findKitchenInventoryItem($restaurantId, $stockItemId);
             if ($inventory === null || (float) ($inventory['quantity_available'] ?? 0) + 0.00001 < $quantity) {
-                throw new \RuntimeException('Boisson indisponible en cuisine, demandez au stock.');
+                throw new \RuntimeException('Boisson insuffisante en cuisine, demandez au stock.');
             }
 
             $statement = $pdo->prepare(
