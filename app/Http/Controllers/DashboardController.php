@@ -28,6 +28,38 @@ final class DashboardController
         echo 'OK';
     }
 
+    /**
+     * Déploiement / support : commit Git exposé par la plateforme (Railway, etc.). Public, sans secret.
+     */
+    public function healthVersion(Request $request): void
+    {
+        header('Content-Type: application/json; charset=utf-8');
+        $commit = (string) (
+            getenv('RAILWAY_GIT_COMMIT_SHA')
+            ?: getenv('RAILWAY_GIT_COMMIT')
+            ?: getenv('RENDER_GIT_COMMIT')
+            ?: getenv('VERCEL_GIT_COMMIT_SHA')
+            ?: getenv('GIT_COMMIT')
+            ?: ''
+        );
+        $branch = (string) (
+            getenv('RAILWAY_GIT_BRANCH')
+            ?: getenv('RENDER_GIT_BRANCH')
+            ?: getenv('VERCEL_GIT_COMMIT_REF')
+            ?: getenv('GIT_BRANCH')
+            ?: ''
+        );
+        $appVersion = (string) (getenv('APP_VERSION') ?: '');
+        $payload = [
+            'commit' => $commit !== '' ? $commit : 'unknown',
+            'commit_short' => $commit !== '' ? substr($commit, 0, 7) : 'unknown',
+            'branch' => $branch,
+            'app_version' => $appVersion,
+            'time' => gmdate('c'),
+        ];
+        echo json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+    }
+
     public function superAdmin(Request $request): void
     {
         authorize_access('platform.admin.view');

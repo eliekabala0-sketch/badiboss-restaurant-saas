@@ -884,7 +884,7 @@ document.addEventListener('click', function (event) {
 });
 
 document.querySelectorAll('[data-autoclose-details]').forEach(function (details) {
-    details.open = false;
+    /* Ne pas forcer la fermeture : respecter l'attribut HTML `open` (file cuisine, refus, etc.). */
     details.addEventListener('toggle', function () {
         if (!details.open) {
             return;

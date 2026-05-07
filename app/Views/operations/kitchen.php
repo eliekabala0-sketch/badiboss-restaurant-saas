@@ -746,8 +746,8 @@ foreach (array_merge($waitingServerItems, $preparingServerItems) as $item) {
                                                 <form method="post" action="/cuisine/demandes-serveur/<?= e((string) $item['id']) ?>/fourni">
                                                     <label>Quantité préparée / servie</label>
                                                     <div class="quantity-stepper" data-quantity-stepper><button type="button" data-stepper-minus>-</button><input name="supplied_quantity" value="<?= e((string) $defaultSuppliedInput) ?>" min="0" step="1"><button type="button" data-stepper-plus>+</button></div>
-                                                    <button type="submit" name="workflow_stage" value="EN_PREPARATION">Prendre en charge</button>
-                                                    <button type="submit" name="workflow_stage" value="PRET_A_SERVIR" class="button-muted">Marquer prêt</button>
+                                                    <button type="submit" name="workflow_stage" value="PRET_A_SERVIR">Marquer prêt</button>
+                                                    <button type="submit" name="workflow_stage" value="EN_PREPARATION" class="button-muted">Prendre en charge</button>
                                                 </form>
                                                 </div>
                                                 <?php endif; ?>

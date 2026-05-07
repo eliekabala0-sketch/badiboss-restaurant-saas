@@ -450,15 +450,21 @@ final class OperationsController
         $restaurantId = $this->resolveRestaurantId($request);
         authorize_access('kitchen.request.fulfill');
 
-        Container::getInstance()->get('kitchenService')->fulfillServerRequestItem(
-            $restaurantId,
-            (int) $request->route('id'),
-            [
-                'supplied_quantity' => $request->input('supplied_quantity'),
-                'workflow_stage' => $request->input('workflow_stage', 'PRET_A_SERVIR'),
-            ],
-            current_user()
-        );
+        try {
+            Container::getInstance()->get('kitchenService')->fulfillServerRequestItem(
+                $restaurantId,
+                (int) $request->route('id'),
+                [
+                    'supplied_quantity' => $request->input('supplied_quantity'),
+                    'workflow_stage' => $request->input('workflow_stage', 'PRET_A_SERVIR'),
+                ],
+                current_user()
+            );
+        } catch (\Throwable $e) {
+            flash('error', ui_safe_message($e->getMessage()));
+            redirect($this->moduleUrl('/cuisine', $restaurantId));
+            return;
+        }
 
         flash(
             'success',

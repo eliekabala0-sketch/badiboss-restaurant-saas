@@ -19,6 +19,8 @@ final class StockService
     public static function normalizeStockItemName(string $name): string
     {
         $n = mb_strtolower(trim($name));
+        $n = str_replace(['’', '´', '`', 'ʼ'], "'", $n);
+        $n = str_replace(['-', '_', '.', '/', '\\', ',', '(', ')', '[', ']', ':', '·'], ' ', $n);
         $n = preg_replace('/\s+/u', ' ', $n) ?? '';
 
         return trim($n);

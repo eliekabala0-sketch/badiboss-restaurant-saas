@@ -24,6 +24,7 @@ use App\Middleware\SuperAdminMiddleware;
 
 $router->get('/', [RestaurantOnboardingController::class, 'home']);
 $router->get('/health', [DashboardController::class, 'health']);
+$router->get('/health/version', [DashboardController::class, 'healthVersion']);
 $router->get('/login', [AuthController::class, 'showLogin']);
 $router->post('/login', [AuthController::class, 'login']);
 $router->get('/creer-mon-restaurant', [RestaurantOnboardingController::class, 'showRegistration']);

@@ -288,8 +288,13 @@ final class SalesService
                     continue;
                 }
                 $lid = $lineIds[$idx] ?? 0;
-                if ($lid > 0) {
+                if ($lid <= 0) {
+                    continue;
+                }
+                try {
                     $kitchenService->autoFulfillBeverageServerLine($restaurantId, $lid, $actor);
+                } catch (\Throwable $e) {
+                    error_log('[badiboss] autoFulfillBeverage after create request_line=' . $lid . ' ' . $e->getMessage());
                 }
             }
         } catch (\Throwable $throwable) {
