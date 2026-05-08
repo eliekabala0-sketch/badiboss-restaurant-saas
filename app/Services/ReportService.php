@@ -82,6 +82,13 @@ final class ReportService
         $summary['estimated_profit'] = $salesTotal - (float) $summary['kitchen_report']['real_material_cost_of_sales'] - (float) $summary['stock_report']['stock_losses_value'] - (float) $summary['kitchen_report']['kitchen_losses_value'] - (float) $summary['server_report']['server_loss_value'] - (float) $summary['financial_losses'];
         $summary['general_report']['estimated_gross_profit'] = (float) $summary['estimated_profit'];
         $summary['auto_closed_operations'] = $this->autoClosedServerRequestAudits($restaurantId, $startAt, $endAt);
+        $summary['leaderboards'] = $this->leaderboardSlices($restaurantId, $selectedDate);
+        $summary['agents_activity'] = $this->agentsActivityBreakdown($restaurantId, $startAt, $endAt, $viewFilters, $reportActivityIndex);
+        $needleArt = mb_strtolower(trim((string) ($viewFilters['article_search'] ?? '')), 'UTF-8');
+        if ($needleArt !== '') {
+            $summary['sales_detail_by_server'] = $this->filterSalesDetailByArticleSubstring($summary['sales_detail_by_server'], $needleArt);
+        }
+
         return $summary;
     }
 
@@ -812,19 +819,49 @@ final class ReportService
         $articleList = array_values($byArticle);
         usort($articleList, static fn (array $a, array $b): int => ((float) ($b['total_sold'] ?? 0)) <=> ((float) ($a['total_sold'] ?? 0)));
 
-        $itemsQty = 0.0;
-        foreach ($articleList as $ar) {
-            $itemsQty += (float) ($ar['qty_sold'] ?? 0);
+        $grandAmount = round((float) ($salesDetail['grand_total'] ?? 0), 2);
+        $grandOrders = 0;
+        foreach ($byServer as $rw) {
+            $grandOrders += (int) ($rw['orders_count'] ?? 0);
         }
+        foreach ($byServer as &$row) {
+            $sold = (float) ($row['total_sold'] ?? 0);
+            $oc = (int) ($row['orders_count'] ?? 0);
+            $row['pct_of_grand_amount'] = $grandAmount <= 0.0 ? 0.0 : round(100.0 * $sold / $grandAmount, 2);
+            $row['pct_of_orders'] = $grandOrders <= 0 ? 0.0 : round(100.0 * $oc / $grandOrders, 2);
+        }
+        unset($row);
+
+        $articleNeedle = mb_strtolower(trim((string) ($viewFilters['article_search'] ?? '')), 'UTF-8');
+        if ($articleNeedle !== '') {
+            $articleList = array_values(array_filter(
+                $articleList,
+                static fn (array $ar): bool => mb_strpos(mb_strtolower((string) ($ar['article'] ?? ''), 'UTF-8'), $articleNeedle, 0, 'UTF-8') !== false
+            ));
+        }
+
+        $qtyDenominator = 0.0;
+        foreach ($articleList as $ar) {
+            $qtyDenominator += (float) ($ar['qty_sold'] ?? 0);
+        }
+
+        foreach ($articleList as &$ar) {
+            $qty = (float) ($ar['qty_sold'] ?? 0);
+            $sold = (float) ($ar['total_sold'] ?? 0);
+            $ar['pct_qty_of_total'] = $qtyDenominator <= 0.0 ? 0.0 : round(100.0 * $qty / $qtyDenominator, 2);
+            $ar['pct_amount_of_grand'] = $grandAmount <= 0.0 ? 0.0 : round(100.0 * $sold / $grandAmount, 2);
+        }
+        unset($ar);
 
         return [
             'period_label' => $periodLabel,
             'by_server' => $byServer,
             'by_article' => $articleList,
             'totals' => [
-                'grand_amount' => round((float) ($salesDetail['grand_total'] ?? 0), 2),
-                'articles_units' => round($itemsQty, 3),
+                'grand_amount' => $grandAmount,
+                'articles_units' => round($qtyDenominator, 3),
                 'activity_pool_total' => (float) ($activityIndex['grand_total_actions'] ?? $activityIndex['total_raw_score'] ?? 0),
+                'orders_total' => $grandOrders,
             ],
         ];
     }
@@ -884,7 +921,30 @@ final class ReportService
             return strcmp((string) ($b['created_at'] ?? ''), (string) ($a['created_at'] ?? ''));
         });
 
-        return array_slice($merged, 0, 350);
+        $needleActor = mb_strtolower(trim((string) ($viewFilters['timeline_actor_search'] ?? '')), 'UTF-8');
+        if ($needleActor !== '') {
+            $merged = array_values(array_filter(
+                $merged,
+                static function (array $r) use ($needleActor): bool {
+                    $hay = mb_strtolower(
+                        ((string) ($r['actor_name'] ?? '')) . ' ' . ((string) ($r['timeline_detail'] ?? '')) . ' ' . report_audit_action_label((string) ($r['action_name'] ?? '')),
+                        'UTF-8'
+                    );
+
+                    return mb_strpos($hay, $needleActor, 0, 'UTF-8') !== false;
+                }
+            ));
+        }
+
+        $limit = (int) ($viewFilters['timeline_limit'] ?? 350);
+        if ($limit < 50) {
+            $limit = 50;
+        }
+        if ($limit > 900) {
+            $limit = 900;
+        }
+
+        return array_slice($merged, 0, $limit);
     }
 
     /**
@@ -1352,6 +1412,588 @@ final class ReportService
         unset($p);
 
         return ['people' => array_values($byUser), 'grand_total_movements' => $grandMov];
+    }
+
+    /**
+     * Classements « meilleur serveur » et « produit le plus vendu » pour jour / semaine / mois calendaires (date pivot du rapport).
+     *
+     * @return array<string, array<string, mixed>>
+     */
+    private function leaderboardSlices(int $restaurantId, DateTimeImmutable $selectedDate): array
+    {
+        $timezone = $this->reportTimezone($restaurantId);
+        $selectedDate = $selectedDate->setTimezone($timezone)->setTime(0, 0, 0);
+        $out = [];
+        foreach (
+            [
+                'day' => 'daily',
+                'week' => 'weekly',
+                'month' => 'monthly',
+            ] as $key => $periodKey
+        ) {
+            [$startAt, $endAt, $label] = $this->periodBounds($selectedDate, $periodKey, $timezone);
+            $out[$key] = [
+                'period_label' => $label,
+                'best_server' => $this->topSellingServerRow($restaurantId, $startAt, $endAt),
+                'best_product' => $this->topSellingProductRow($restaurantId, $startAt, $endAt),
+            ];
+        }
+
+        return $out;
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function topSellingServerRow(int $restaurantId, DateTimeImmutable $startAt, DateTimeImmutable $endAt): array
+    {
+        $closed = ['VALIDE', 'CLOTURE', 'VENDU_TOTAL', 'VENDU_PARTIEL'];
+        $inList = implode(',', array_map(static fn (string $st): string => '"' . $st . '"', $closed));
+        $statement = $this->database->pdo()->prepare(
+            'SELECT COALESCE(u.id, 0) AS server_user_id,
+                    COALESCE(u.full_name, "Serveur") AS server_name,
+                    COUNT(s.id) AS sales_count,
+                    COALESCE(SUM(s.total_amount), 0) AS total_amount
+             FROM sales s
+             LEFT JOIN users u ON u.id = s.server_id
+             WHERE s.restaurant_id = :restaurant_id
+               AND COALESCE(s.validated_at, s.created_at) >= :start_at
+               AND COALESCE(s.validated_at, s.created_at) < :end_at
+               AND s.status IN (' . $inList . ')
+             GROUP BY COALESCE(u.id, 0), COALESCE(u.full_name, "Serveur")
+             ORDER BY total_amount DESC, sales_count DESC
+             LIMIT 1'
+        );
+        $statement->execute([
+            'restaurant_id' => $restaurantId,
+            'start_at' => $startAt->format('Y-m-d H:i:s'),
+            'end_at' => $endAt->format('Y-m-d H:i:s'),
+        ]);
+        $row = $statement->fetch(PDO::FETCH_ASSOC);
+
+        return is_array($row) ? $row : [];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function topSellingProductRow(int $restaurantId, DateTimeImmutable $startAt, DateTimeImmutable $endAt): array
+    {
+        $statement = $this->database->pdo()->prepare(
+            'SELECT mi.id AS menu_item_id,
+                    mi.name AS product_name,
+                    COALESCE(mc.name, "") AS category_name,
+                    COALESCE(SUM(si.quantity), 0) AS qty_sold,
+                    COALESCE(SUM(si.quantity * si.unit_price), 0) AS total_sold
+             FROM sale_items si
+             INNER JOIN sales s ON s.id = si.sale_id
+             INNER JOIN menu_items mi ON mi.id = si.menu_item_id
+             LEFT JOIN menu_categories mc ON mc.id = mi.category_id
+             WHERE s.restaurant_id = :restaurant_id
+               AND COALESCE(s.validated_at, s.created_at) >= :start_at
+               AND COALESCE(s.validated_at, s.created_at) < :end_at
+             GROUP BY mi.id, mi.name, mc.name
+             ORDER BY total_sold DESC, qty_sold DESC, mi.name ASC
+             LIMIT 1'
+        );
+        $statement->execute([
+            'restaurant_id' => $restaurantId,
+            'start_at' => $startAt->format('Y-m-d H:i:s'),
+            'end_at' => $endAt->format('Y-m-d H:i:s'),
+        ]);
+        $row = $statement->fetch(PDO::FETCH_ASSOC);
+
+        return is_array($row) ? $row : [];
+    }
+
+    /**
+     * @param array<string, mixed> $salesDetail
+     *
+     * @return array<string, mixed>
+     */
+    private function filterSalesDetailByArticleSubstring(array $salesDetail, string $needleLower): array
+    {
+        $servers = [];
+        foreach (($salesDetail['servers'] ?? []) as $srv) {
+            $lines = [];
+            foreach (($srv['lines'] ?? []) as $ln) {
+                $name = mb_strtolower((string) ($ln['menu_item_name'] ?? ''), 'UTF-8');
+                if ($needleLower === '' || mb_strpos($name, $needleLower, 0, 'UTF-8') !== false) {
+                    $lines[] = $ln;
+                }
+            }
+            if ($lines === []) {
+                continue;
+            }
+            $srvTotal = 0.0;
+            foreach ($lines as $ln) {
+                $srvTotal += (float) ($ln['line_total'] ?? 0);
+            }
+            $srv['lines'] = $lines;
+            $srv['server_total'] = round($srvTotal, 2);
+            $servers[] = $srv;
+        }
+        $grand = 0.0;
+        foreach ($servers as $sx) {
+            $grand += (float) ($sx['server_total'] ?? 0);
+        }
+        foreach ($servers as &$srv) {
+            $srvTotal = (float) ($srv['server_total'] ?? 0);
+            $srv['pct_of_grand_total'] = $grand <= 0.0 ? 0.0 : round(100.0 * $srvTotal / $grand, 2);
+            foreach ($srv['lines'] as &$ln) {
+                $lt = (float) ($ln['line_total'] ?? 0);
+                $ln['pct_of_server_sales'] = $srvTotal <= 0.0 ? 0.0 : round(100.0 * $lt / $srvTotal, 2);
+            }
+            unset($ln);
+        }
+        unset($srv);
+
+        return ['servers' => $servers, 'grand_total' => round($grand, 2)];
+    }
+
+    private function secondsToMinutesRounded(?float $seconds): ?float
+    {
+        if ($seconds === null || $seconds < 0) {
+            return null;
+        }
+
+        return round($seconds / 60.0, 1);
+    }
+
+    /**
+     * @return non-empty-string
+     */
+    private function speedTierLabel(?float $avgMinutes): string
+    {
+        if ($avgMinutes === null) {
+            return 'Non calculé';
+        }
+        if ($avgMinutes < 10.0) {
+            return 'Rapide';
+        }
+        if ($avgMinutes <= 30.0) {
+            return 'Moyen';
+        }
+
+        return 'Lent';
+    }
+
+    private function speedTierHint(string $tier): string
+    {
+        return match ($tier) {
+            'Rapide' => 'moins de 10 minutes',
+            'Moyen' => '10 à 30 minutes',
+            'Lent' => 'plus de 30 minutes',
+            default => '',
+        };
+    }
+
+    private function simpleSpeedScore(?float $avgMinutes): ?int
+    {
+        if ($avgMinutes === null) {
+            return null;
+        }
+        if ($avgMinutes < 10.0) {
+            return 92;
+        }
+        if ($avgMinutes <= 30.0) {
+            return 72;
+        }
+
+        return 42;
+    }
+
+    private function blendSpeedScores(?int $a, ?int $b): ?int
+    {
+        $vals = array_values(array_filter([$a, $b], static fn (?int $v): bool => $v !== null));
+        if ($vals === []) {
+            return null;
+        }
+
+        return (int) round(array_sum($vals) / count($vals));
+    }
+
+    /**
+     * @param array<string, mixed> $activityIndex
+     *
+     * @return array<string, mixed>
+     */
+    private function agentsActivityBreakdown(int $restaurantId, DateTimeImmutable $startAt, DateTimeImmutable $endAt, array $viewFilters, array $activityIndex): array
+    {
+        $s = $startAt->format('Y-m-d H:i:s');
+        $e = $endAt->format('Y-m-d H:i:s');
+        $pool = (float) ($activityIndex['grand_total_actions'] ?? 0);
+        $needle = mb_strtolower(trim((string) ($viewFilters['activity_agent_search'] ?? '')), 'UTF-8');
+
+        $pdo = $this->database->pdo();
+        $agentsAll = [];
+        foreach (($activityIndex['agents'] ?? []) as $ag) {
+            $uid = (int) ($ag['user_id'] ?? 0);
+            if ($uid <= 0) {
+                continue;
+            }
+            $agentsAll[$uid] = $ag;
+        }
+
+        $closedStatuses = ['VALIDE', 'CLOTURE', 'VENDU_TOTAL', 'VENDU_PARTIEL'];
+        $inClosed = implode(',', array_map(static fn (string $st): string => '"' . $st . '"', $closedStatuses));
+
+        $ordersStmt = $pdo->prepare(
+            'SELECT sr.server_id AS uid, COUNT(*) AS c
+             FROM server_requests sr
+             WHERE sr.restaurant_id = :rid AND sr.created_at >= :s AND sr.created_at < :e
+               AND sr.status NOT IN ("ANNULE","REFUSE_CUISINE")
+             GROUP BY sr.server_id'
+        );
+        $ordersStmt->execute(['rid' => $restaurantId, 's' => $s, 'e' => $e]);
+        $ordersMap = [];
+        foreach ($ordersStmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            $ordersMap[(int) ($row['uid'] ?? 0)] = (int) ($row['c'] ?? 0);
+        }
+
+        $firstOrdStmt = $pdo->prepare(
+            'SELECT sr.server_id AS uid, MIN(sr.created_at) AS t
+             FROM server_requests sr
+             WHERE sr.restaurant_id = :rid AND sr.created_at >= :s AND sr.created_at < :e
+               AND sr.status NOT IN ("ANNULE","REFUSE_CUISINE")
+             GROUP BY sr.server_id'
+        );
+        $firstOrdStmt->execute(['rid' => $restaurantId, 's' => $s, 'e' => $e]);
+        $firstOrderMap = [];
+        foreach ($firstOrdStmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            $firstOrderMap[(int) ($row['uid'] ?? 0)] = (string) ($row['t'] ?? '');
+        }
+
+        $closedSalesStmt = $pdo->prepare(
+            'SELECT s.server_id AS uid, COUNT(*) AS c
+             FROM sales s
+             WHERE s.restaurant_id = :rid AND s.validated_at IS NOT NULL
+               AND s.validated_at >= :s AND s.validated_at < :e
+               AND s.status IN (' . $inClosed . ')
+             GROUP BY s.server_id'
+        );
+        $closedSalesStmt->execute(['rid' => $restaurantId, 's' => $s, 'e' => $e]);
+        $closedSalesMap = [];
+        foreach ($closedSalesStmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            $closedSalesMap[(int) ($row['uid'] ?? 0)] = (int) ($row['c'] ?? 0);
+        }
+
+        $remitStmt = $pdo->prepare(
+            'SELECT ct.from_user_id AS uid, COUNT(*) AS c
+             FROM cash_transfers ct
+             WHERE ct.restaurant_id = :rid AND ct.source_type = "sale"
+               AND COALESCE(ct.received_at, ct.requested_at, ct.created_at) >= :s
+               AND COALESCE(ct.received_at, ct.requested_at, ct.created_at) < :e
+             GROUP BY ct.from_user_id'
+        );
+        $remitStmt->execute(['rid' => $restaurantId, 's' => $s, 'e' => $e]);
+        $remitMap = [];
+        foreach ($remitStmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            $remitMap[(int) ($row['uid'] ?? 0)] = (int) ($row['c'] ?? 0);
+        }
+
+        $avgCloseStmt = $pdo->prepare(
+            'SELECT s.server_id AS uid,
+                    AVG(TIMESTAMPDIFF(SECOND, COALESCE(sr.created_at, s.created_at), s.validated_at)) AS avg_sec
+             FROM sales s
+             LEFT JOIN server_requests sr ON s.origin_type = "server_request" AND sr.id = s.origin_id
+             WHERE s.restaurant_id = :rid AND s.validated_at IS NOT NULL
+               AND s.validated_at >= :s AND s.validated_at < :e
+               AND s.status IN (' . $inClosed . ')
+               AND TIMESTAMPDIFF(SECOND, COALESCE(sr.created_at, s.created_at), s.validated_at) >= 0
+             GROUP BY s.server_id'
+        );
+        $avgCloseStmt->execute(['rid' => $restaurantId, 's' => $s, 'e' => $e]);
+        $avgCloseMap = [];
+        foreach ($avgCloseStmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            $avgCloseMap[(int) ($row['uid'] ?? 0)] = isset($row['avg_sec']) ? (float) $row['avg_sec'] : null;
+        }
+
+        $avgRemitStmt = $pdo->prepare(
+            'SELECT s.server_id AS uid,
+                    AVG(TIMESTAMPDIFF(SECOND, s.validated_at, ct.requested_at)) AS avg_sec
+             FROM sales s
+             INNER JOIN cash_transfers ct ON ct.restaurant_id = s.restaurant_id AND ct.source_type = "sale" AND ct.source_id = s.id
+             WHERE s.restaurant_id = :rid
+               AND s.validated_at IS NOT NULL AND ct.requested_at IS NOT NULL
+               AND TIMESTAMPDIFF(SECOND, s.validated_at, ct.requested_at) >= 0
+               AND ct.requested_at >= :s AND ct.requested_at < :e
+               AND s.status IN (' . $inClosed . ')
+             GROUP BY s.server_id'
+        );
+        $avgRemitStmt->execute(['rid' => $restaurantId, 's' => $s, 'e' => $e]);
+        $avgRemitMap = [];
+        foreach ($avgRemitStmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            $avgRemitMap[(int) ($row['uid'] ?? 0)] = isset($row['avg_sec']) ? (float) $row['avg_sec'] : null;
+        }
+
+        $kitchenStmt = $pdo->prepare(
+            'SELECT sri.technical_confirmed_by AS uid,
+                    COUNT(*) AS lines_done,
+                    SUM(CASE WHEN sri.supplied_quantity > 0
+                             AND sri.supply_status IN ("FOURNI_TOTAL","FOURNI_PARTIEL","REMIS_SERVEUR","PRET_A_SERVIR")
+                        THEN 1 ELSE 0 END) AS lines_validated,
+                    SUM(CASE WHEN sri.supply_status = "NON_FOURNI" OR sri.status = "NON_FOURNI" THEN 1 ELSE 0 END) AS lines_rejected,
+                    MIN(sri.prepared_at) AS first_prep,
+                    AVG(CASE WHEN sri.prepared_at IS NOT NULL
+                        THEN TIMESTAMPDIFF(SECOND, sri.created_at, sri.prepared_at) END) AS avg_proc_sec
+             FROM server_request_items sri
+             INNER JOIN server_requests sr ON sr.id = sri.request_id
+             WHERE sr.restaurant_id = :rid
+               AND sri.prepared_at IS NOT NULL
+               AND sri.prepared_at >= :s AND sri.prepared_at < :e
+               AND sri.technical_confirmed_by IS NOT NULL
+             GROUP BY sri.technical_confirmed_by'
+        );
+        $kitchenStmt->execute(['rid' => $restaurantId, 's' => $s, 'e' => $e]);
+        $kitchenMap = [];
+        foreach ($kitchenStmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            $uid = (int) ($row['uid'] ?? 0);
+            $kitchenMap[$uid] = $row;
+        }
+
+        $auditKitchenStmt = $pdo->prepare(
+            'SELECT user_id AS uid, MIN(created_at) AS t
+             FROM audit_logs
+             WHERE restaurant_id = :rid AND module_name = "kitchen"
+               AND user_id IS NOT NULL
+               AND created_at >= :s AND created_at < :e
+             GROUP BY user_id'
+        );
+        $auditKitchenStmt->execute(['rid' => $restaurantId, 's' => $s, 'e' => $e]);
+        $auditKitchenFirst = [];
+        foreach ($auditKitchenStmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            $auditKitchenFirst[(int) ($row['uid'] ?? 0)] = (string) ($row['t'] ?? '');
+        }
+
+        $kpFirstStmt = $pdo->prepare(
+            'SELECT created_by AS uid, MIN(created_at) AS t
+             FROM kitchen_production
+             WHERE restaurant_id = :rid AND created_at >= :s AND created_at < :e
+             GROUP BY created_by'
+        );
+        $kpFirstStmt->execute(['rid' => $restaurantId, 's' => $s, 'e' => $e]);
+        $kpFirst = [];
+        foreach ($kpFirstStmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            $kpFirst[(int) ($row['uid'] ?? 0)] = (string) ($row['t'] ?? '');
+        }
+
+        $stockReqRecvStmt = $pdo->prepare(
+            'SELECT user_id AS uid, COUNT(*) AS c
+             FROM audit_logs
+             WHERE restaurant_id = :rid AND module_name = "stock"
+               AND action_name = "kitchen_stock_request_processing_started"
+               AND user_id IS NOT NULL
+               AND created_at >= :s AND created_at < :e
+             GROUP BY user_id'
+        );
+        $stockReqRecvStmt->execute(['rid' => $restaurantId, 's' => $s, 'e' => $e]);
+        $stockRecvMap = [];
+        foreach ($stockReqRecvStmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            $stockRecvMap[(int) ($row['uid'] ?? 0)] = (int) ($row['c'] ?? 0);
+        }
+
+        $stockTreatStmt = $pdo->prepare(
+            'SELECT responded_by AS uid, COUNT(*) AS c,
+                    AVG(TIMESTAMPDIFF(SECOND, created_at, responded_at)) AS avg_sec
+             FROM kitchen_stock_requests
+             WHERE restaurant_id = :rid AND responded_at IS NOT NULL
+               AND responded_at >= :s AND responded_at < :e
+             GROUP BY responded_by'
+        );
+        $stockTreatStmt->execute(['rid' => $restaurantId, 's' => $s, 'e' => $e]);
+        $stockTreatMap = [];
+        foreach ($stockTreatStmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            $stockTreatMap[(int) ($row['uid'] ?? 0)] = $row;
+        }
+
+        $stockMoveStmt = $pdo->prepare(
+            'SELECT user_id AS uid, COUNT(*) AS sorties
+             FROM stock_movements
+             WHERE restaurant_id = :rid AND status = "VALIDE"
+               AND movement_type IN ("SORTIE","SORTIE_CUISINE")
+               AND created_at >= :s AND created_at < :e
+             GROUP BY user_id'
+        );
+        $stockMoveStmt->execute(['rid' => $restaurantId, 's' => $s, 'e' => $e]);
+        $stockOutMap = [];
+        foreach ($stockMoveStmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            $stockOutMap[(int) ($row['uid'] ?? 0)] = (int) ($row['sorties'] ?? 0);
+        }
+
+        $stockFirstStmt = $pdo->prepare(
+            'SELECT user_id AS uid, MIN(created_at) AS t
+             FROM stock_movements
+             WHERE restaurant_id = :rid AND status = "VALIDE"
+               AND created_at >= :s AND created_at < :e
+             GROUP BY user_id'
+        );
+        $stockFirstStmt->execute(['rid' => $restaurantId, 's' => $s, 'e' => $e]);
+        $stockFirstMap = [];
+        foreach ($stockFirstStmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            $stockFirstMap[(int) ($row['uid'] ?? 0)] = (string) ($row['t'] ?? '');
+        }
+
+        $cashStmt = $pdo->prepare(
+            'SELECT received_by AS uid,
+                    COUNT(*) AS remises_recues,
+                    SUM(CASE WHEN status IN ("RECU_CAISSE","ECART_SIGNALE") THEN 1 ELSE 0 END) AS validees,
+                    SUM(CASE WHEN status = "REMISE_REJETEE_CAISSE" THEN 1 ELSE 0 END) AS rejettees,
+                    MIN(received_at) AS first_recv,
+                    AVG(TIMESTAMPDIFF(SECOND, requested_at, received_at)) AS avg_recv_sec
+             FROM cash_transfers
+             WHERE restaurant_id = :rid AND source_type = "sale"
+               AND received_by IS NOT NULL AND received_at IS NOT NULL
+               AND received_at >= :s AND received_at < :e
+               AND requested_at IS NOT NULL
+               AND TIMESTAMPDIFF(SECOND, requested_at, received_at) >= 0
+             GROUP BY received_by'
+        );
+        $cashStmt->execute(['rid' => $restaurantId, 's' => $s, 'e' => $e]);
+        $cashMap = [];
+        foreach ($cashStmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            $cashMap[(int) ($row['uid'] ?? 0)] = $row;
+        }
+
+        $serversOut = [];
+        $kitchenOut = [];
+        $stockOut = [];
+        $cashiersOut = [];
+        $otherOut = [];
+
+        foreach ($agentsAll as $uid => $ag) {
+            $fullName = (string) ($ag['full_name'] ?? '');
+            $roleCode = (string) ($ag['role_code'] ?? '');
+            if ($needle !== '' && mb_strpos(mb_strtolower($fullName . ' ' . $roleCode, 'UTF-8'), $needle, 0, 'UTF-8') === false) {
+                continue;
+            }
+            $actions = (int) round((float) ($ag['total_actions'] ?? $ag['raw_score'] ?? 0));
+            $pct = $pool <= 0.0 ? 0.0 : round(100.0 * $actions / $pool, 2);
+
+            $base = [
+                'user_id' => $uid,
+                'full_name' => $fullName,
+                'role_code' => $roleCode,
+                'actions_count' => $actions,
+                'activity_percent' => $pct,
+                'activity_line' => $actions . ' action' . ($actions > 1 ? 's' : '') . ' — ' . $pct . ' % de l’activité globale',
+                'service_started_at' => null,
+            ];
+
+            if ($roleCode === 'cashier_server') {
+                $avgCloseMin = $this->secondsToMinutesRounded($avgCloseMap[$uid] ?? null);
+                $avgRemMin = $this->secondsToMinutesRounded($avgRemitMap[$uid] ?? null);
+                $tierClose = $this->speedTierLabel($avgCloseMin);
+                $tierRem = $this->speedTierLabel($avgRemMin);
+                $score = $this->blendSpeedScores($this->simpleSpeedScore($avgCloseMin), $this->simpleSpeedScore($avgRemMin));
+                $serversOut[] = array_merge($base, [
+                    'segment' => 'server',
+                    'orders_count' => (int) ($ordersMap[$uid] ?? 0),
+                    'closed_sales_count' => (int) ($closedSalesMap[$uid] ?? 0),
+                    'cash_remittances_count' => (int) ($remitMap[$uid] ?? 0),
+                    'first_order_at' => $firstOrderMap[$uid] ?? null,
+                    'avg_minutes_order_to_close' => $avgCloseMin,
+                    'avg_minutes_close_to_remittance' => $avgRemMin,
+                    'speed_close_tier' => $tierClose,
+                    'speed_remittance_tier' => $tierRem,
+                    'speed_close_hint' => $this->speedTierHint($tierClose),
+                    'speed_remittance_hint' => $this->speedTierHint($tierRem),
+                    'simple_score' => $score,
+                    'service_started_at' => $firstOrderMap[$uid] ?? null,
+                ]);
+                continue;
+            }
+
+            if ($roleCode === 'kitchen') {
+                $km = $kitchenMap[$uid] ?? [
+                    'lines_done' => 0,
+                    'lines_validated' => 0,
+                    'lines_rejected' => 0,
+                    'avg_proc_sec' => null,
+                ];
+                $procMin = $this->secondsToMinutesRounded(isset($km['avg_proc_sec']) ? (float) $km['avg_proc_sec'] : null);
+                $tier = $this->speedTierLabel($procMin);
+                $fk = $auditKitchenFirst[$uid] ?? null;
+                $kp = $kpFirst[$uid] ?? null;
+                $mergedFirst = null;
+                foreach ([$fk, $kp] as $ts) {
+                    if ($ts !== null && $ts !== '') {
+                        $mergedFirst = $mergedFirst === null || strcmp((string) $ts, (string) $mergedFirst) < 0 ? $ts : $mergedFirst;
+                    }
+                }
+                $kitchenOut[] = array_merge($base, [
+                    'segment' => 'kitchen',
+                    'commands_received' => (int) ($km['lines_done'] ?? 0),
+                    'commands_validated' => (int) ($km['lines_validated'] ?? 0),
+                    'commands_rejected' => (int) ($km['lines_rejected'] ?? 0),
+                    'avg_minutes_processing' => $procMin,
+                    'speed_tier' => $tier,
+                    'speed_hint' => $this->speedTierHint($tier),
+                    'simple_score' => $this->simpleSpeedScore($procMin),
+                    'first_kitchen_action_at' => $mergedFirst,
+                    'service_started_at' => $mergedFirst,
+                ]);
+                continue;
+            }
+
+            if ($roleCode === 'stock_manager') {
+                $tm = $stockTreatMap[$uid] ?? ['c' => 0, 'avg_sec' => null];
+                $procMin = $this->secondsToMinutesRounded(isset($tm['avg_sec']) ? (float) $tm['avg_sec'] : null);
+                $tier = $this->speedTierLabel($procMin);
+                $stockOut[] = array_merge($base, [
+                    'segment' => 'stock',
+                    'requests_received' => (int) ($stockRecvMap[$uid] ?? 0),
+                    'requests_handled' => (int) (($tm['c'] ?? 0)),
+                    'stock_out_movements' => (int) ($stockOutMap[$uid] ?? 0),
+                    'avg_minutes_request_processing' => $procMin,
+                    'speed_tier' => $tier,
+                    'speed_hint' => $this->speedTierHint($tier),
+                    'simple_score' => $this->simpleSpeedScore($procMin),
+                    'first_stock_action_at' => $stockFirstMap[$uid] ?? null,
+                    'service_started_at' => $stockFirstMap[$uid] ?? null,
+                ]);
+                continue;
+            }
+
+            if ($roleCode === 'cashier_accountant' || ($roleCode === 'manager' && ((float) ($ag['cash_actions'] ?? 0)) > 0)) {
+                $cm = $cashMap[$uid] ?? [
+                    'remises_recues' => 0,
+                    'validees' => 0,
+                    'rejettees' => 0,
+                    'first_recv' => null,
+                    'avg_recv_sec' => null,
+                ];
+                $recvMin = $this->secondsToMinutesRounded(isset($cm['avg_recv_sec']) ? (float) $cm['avg_recv_sec'] : null);
+                $tier = $this->speedTierLabel($recvMin);
+                $cashiersOut[] = array_merge($base, [
+                    'segment' => 'cashier',
+                    'remittances_received' => (int) ($cm['remises_recues'] ?? 0),
+                    'remittances_validated' => (int) ($cm['validees'] ?? 0),
+                    'remittances_rejected' => (int) ($cm['rejettees'] ?? 0),
+                    'avg_minutes_reception_decision' => $recvMin,
+                    'speed_tier' => $tier,
+                    'speed_hint' => $this->speedTierHint($tier),
+                    'simple_score' => $this->simpleSpeedScore($recvMin),
+                    'first_cash_action_at' => $cm['first_recv'] ?? null,
+                    'service_started_at' => $cm['first_recv'] ?? null,
+                ]);
+                continue;
+            }
+
+            $otherOut[] = array_merge($base, [
+                'segment' => 'other',
+                'simple_score' => null,
+            ]);
+        }
+
+        return [
+            'pool_total_actions' => round($pool, 2),
+            'servers' => $serversOut,
+            'kitchen' => $kitchenOut,
+            'stock' => $stockOut,
+            'cashiers' => $cashiersOut,
+            'other_roles' => $otherOut,
+        ];
     }
 
     private function alertRules(): array

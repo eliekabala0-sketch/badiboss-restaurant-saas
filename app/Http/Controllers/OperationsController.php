@@ -1014,6 +1014,10 @@ final class OperationsController
             'menu_item_id' => (int) ($request->query['menu_item_id'] ?? 0),
             'stock_item_id' => (int) ($request->query['stock_item_id'] ?? 0),
             'stock_movement_type' => trim((string) ($request->query['stock_movement_type'] ?? '')),
+            'article_search' => trim((string) ($request->query['article_search'] ?? '')),
+            'activity_agent_search' => trim((string) ($request->query['activity_agent_search'] ?? '')),
+            'timeline_actor_search' => trim((string) ($request->query['timeline_actor_search'] ?? '')),
+            'timeline_limit' => (int) ($request->query['timeline_limit'] ?? 350),
         ];
 
         $reportUsers = Container::getInstance()->get('roleAdmin')->listUsersForRestaurant($restaurantId);

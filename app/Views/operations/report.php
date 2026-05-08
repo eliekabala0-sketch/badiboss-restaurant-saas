@@ -15,25 +15,112 @@ $printQuery = http_build_query(array_filter([
     'menu_item_id' => (int) ($viewFilters['menu_item_id'] ?? 0) > 0 ? (string) (int) $viewFilters['menu_item_id'] : null,
     'stock_item_id' => (int) ($viewFilters['stock_item_id'] ?? 0) > 0 ? (string) (int) $viewFilters['stock_item_id'] : null,
     'stock_movement_type' => trim((string) ($viewFilters['stock_movement_type'] ?? '')) !== '' ? (string) $viewFilters['stock_movement_type'] : null,
+    'article_search' => trim((string) ($viewFilters['article_search'] ?? '')) !== '' ? (string) $viewFilters['article_search'] : null,
+    'activity_agent_search' => trim((string) ($viewFilters['activity_agent_search'] ?? '')) !== '' ? (string) $viewFilters['activity_agent_search'] : null,
+    'timeline_actor_search' => trim((string) ($viewFilters['timeline_actor_search'] ?? '')) !== '' ? (string) $viewFilters['timeline_actor_search'] : null,
+    'timeline_limit' => (int) ($viewFilters['timeline_limit'] ?? 350) > 350 ? (string) (int) ($viewFilters['timeline_limit'] ?? 350) : null,
     'print' => '1',
 ], static fn ($value): bool => $value !== null && $value !== ''));
 $cashClarity = $report['financial_report']['cash_clarity'] ?? [];
 $people = $report['people_overview'] ?? [];
-$activity = $report['activity_index'] ?? ['global_percent' => 0, 'agents' => []];
-$timeline = $report['nominative_timeline'] ?? [];
+$gt = $people['grand_totals'] ?? [];
 $salesDetail = $report['sales_detail_by_server'] ?? ['servers' => [], 'grand_total' => 0];
 $kitchenDetail = $report['kitchen_detail_by_cook'] ?? ['cooks' => [], 'grand_total_qty' => 0, 'grand_total_value' => 0];
 $stockDetail = $report['stock_detail_by_person'] ?? ['people' => [], 'grand_total_movements' => 0];
+$timeline = $report['nominative_timeline'] ?? [];
 $execSummary = $report['executive_summary'] ?? ['by_server' => [], 'by_article' => [], 'totals' => [], 'period_label' => ''];
+$leaderboards = $report['leaderboards'] ?? [];
+$agentsActivity = $report['agents_activity'] ?? [
+    'pool_total_actions' => 0,
+    'servers' => [],
+    'kitchen' => [],
+    'stock' => [],
+    'cashiers' => [],
+    'other_roles' => [],
+];
+$reportUiChunk = 18;
+$autoClosed = $report['auto_closed_operations'] ?? [];
 ?>
 <style>
 @media print {
     .no-print { display:none !important; }
     .card { box-shadow:none !important; border:1px solid #d6d6d6; }
+    .report-section-details { border: none !important; }
+    .report-section-details > summary { list-style: none; }
+    .report-section-details > summary::-webkit-details-marker { display: none; }
+    /* Impression : ouvrir le détail pour inclure le corps */
+    .report-section-details { display: block !important; }
+    .report-section-details > *:not(summary) { display: block !important; }
 }
 .report-detail-nested > details { margin-top:12px; }
 .report-detail-nested summary { cursor:pointer; }
+.report-section-details { padding: 18px 22px 22px; margin-bottom: 24px; border-radius: var(--radius-xl, 24px); border: 1px solid var(--line, rgba(212,175,55,0.14)); background: var(--panel, #171717); box-shadow: var(--shadow, 0 26px 60px rgba(0,0,0,0.42)); }
+.report-section-details > summary {
+    cursor: pointer;
+    font-size: 1.05rem;
+    font-family: Georgia, "Times New Roman", serif;
+    color: #fff8e7;
+    padding: 4px 0 12px;
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+    margin-bottom: 14px;
+    list-style: none;
+}
+.report-section-details > summary::-webkit-details-marker { display: none; }
+.report-section-body { padding-top: 4px; }
+.report-mobile-cards { display: none; }
+@media (max-width: 720px) {
+    .report-table-desktop { display: none !important; }
+    .report-mobile-cards { display: grid !important; gap: 12px; }
+    .report-agent-card {
+        border: 1px solid rgba(255,255,255,0.08);
+        border-radius: 14px;
+        padding: 14px 16px;
+        background: rgba(255,255,255,0.03);
+        font-size: 0.95rem;
+        line-height: 1.55;
+    }
+    .report-agent-card strong { color: var(--brand, #d4af37); }
+}
+.report-leader-grid {
+    display: grid;
+    gap: 14px;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    margin-top: 14px;
+}
+.report-leader-card {
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 14px;
+    padding: 14px 16px;
+    background: rgba(255,255,255,0.025);
+}
+.voir-plus-btn {
+    margin-top: 12px;
+    padding: 10px 16px;
+    border-radius: 999px;
+    border: 1px solid rgba(212,175,55,0.35);
+    background: transparent;
+    color: var(--brand, #d4af37);
+    cursor: pointer;
+    font-weight: 600;
+}
 </style>
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+    document.querySelectorAll('[data-report-expand]').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+            var id = btn.getAttribute('data-report-expand');
+            var target = id ? document.getElementById(id) : null;
+            if (target) {
+                target.hidden = false;
+                btn.style.display = 'none';
+            }
+        });
+    });
+});
+window.addEventListener('beforeprint', function () {
+    document.querySelectorAll('.report-section-details').forEach(function (d) { d.open = true; });
+});
+</script>
 <section class="topbar">
     <div class="brand">
         <h1><?= e($title ?? 'Rapport') ?></h1>
@@ -42,8 +129,10 @@ $execSummary = $report['executive_summary'] ?? ['by_server' => [], 'by_article' 
 </section>
 
 <?php if (!empty($report['financial_report']['summary'] ?? [])): ?>
-    <section class="card" style="padding:22px; margin-top:24px;">
-        <h2 style="margin-top:0;">Synthèse caisse (filtre période du rapport)</h2>
+<section class="card" style="padding:0; margin-top:24px;">
+    <details class="report-section-details">
+        <summary><strong>Caisse</strong> — synthèse financière et remises</summary>
+        <div class="report-section-body">
         <?php if (!empty($cashClarity)): ?>
             <p class="muted" style="margin-top:0;">Convention affichée : entrées +, sorties − (montants tels qu’enregistrés sur la période <?= e(($cashClarity['period_from'] ?? '') . ' → ' . ($cashClarity['period_to'] ?? '')) ?>).</p>
             <ul style="margin:0; padding-left:20px; line-height:1.7;">
@@ -110,7 +199,9 @@ $execSummary = $report['executive_summary'] ?? ['by_server' => [], 'by_article' 
                 </table>
             </div>
         <?php endif; ?>
-    </section>
+        </div>
+    </details>
+</section>
 <?php endif; ?>
 <section class="card" style="padding:18px; margin-bottom:24px;">
     <div class="menu-thumb">
@@ -209,59 +300,67 @@ $execSummary = $report['executive_summary'] ?? ['by_server' => [], 'by_article' 
             <option value="PERTE" <?= (($viewFilters['stock_movement_type'] ?? '') === 'PERTE') ? 'selected' : '' ?>>Perte</option>
             <option value="RETOUR_STOCK" <?= (($viewFilters['stock_movement_type'] ?? '') === 'RETOUR_STOCK') ? 'selected' : '' ?>>Retour stock</option>
         </select>
+        <label>Recherche article (résumé / détail ventes)</label>
+        <input type="text" name="article_search" value="<?= e((string) ($viewFilters['article_search'] ?? '')) ?>" placeholder="Ex. poulet, jus…">
+        <label>Recherche agent (activité agents)</label>
+        <input type="text" name="activity_agent_search" value="<?= e((string) ($viewFilters['activity_agent_search'] ?? '')) ?>" placeholder="Prénom ou rôle">
+        <label>Recherche historique nominatif</label>
+        <input type="text" name="timeline_actor_search" value="<?= e((string) ($viewFilters['timeline_actor_search'] ?? '')) ?>" placeholder="Nom ou mot dans le détail">
+        <?php $tlLim = (int) ($viewFilters['timeline_limit'] ?? 350); ?>
+        <label>Lignes max historique</label>
+        <select name="timeline_limit">
+            <option value="350" <?= $tlLim <= 350 ? 'selected' : '' ?>>350</option>
+            <option value="600" <?= $tlLim > 350 && $tlLim <= 600 ? 'selected' : '' ?>>600</option>
+            <option value="900" <?= $tlLim > 600 ? 'selected' : '' ?>>900</option>
+        </select>
         <div style="margin-top:14px;"><button type="submit">Afficher</button></div>
     </form>
     </details>
     <p class="muted" style="margin-bottom:0;"><?= e($report['period_label'] ?? '') ?> · du <?= e(format_date_fr($report['range_start'] ?? null, $reportTimezone)) ?> au <?= e(format_date_fr($report['range_end'] ?? null, $reportTimezone)) ?> · Fuseau <?= e($report['timezone'] ?? $reportTimezone->getName()) ?></p>
 </section>
 
-<?php $autoClosed = $report['auto_closed_operations'] ?? []; ?>
-<section class="card" style="padding:22px; margin-bottom:24px;">
-    <details class="compact-card" data-autoclose-details>
-        <summary><strong>Opérations clôturées automatiquement</strong><?php if ($autoClosed !== []): ?> · <?= e((string) count($autoClosed)) ?> événement(s)<?php endif; ?></summary>
-        <p class="muted" style="margin-top:12px;">Clôtures vente/remise au changement de jour, réceptions ou expirations pilotées par le système (fuseau restaurant). Détail cliquable vers l’entité audit.</p>
-        <?php if ($autoClosed === []): ?>
-            <p class="muted" style="margin-bottom:0;">Aucune opération auto-clôturée sur cette période.</p>
-        <?php else: ?>
-            <div class="table-wrap" style="margin-top:14px;">
-                <table>
-                    <thead>
-                    <tr><th>Date</th><th>Acteur</th><th>Type</th><th>Réf.</th><th>Motif / détail</th></tr>
-                    </thead>
-                    <tbody>
-                    <?php foreach ($autoClosed as $acr): ?>
-                        <?php
-                        $nv = [];
-                        if (!empty($acr['new_values_json'])) {
-                            $tmp = json_decode((string) $acr['new_values_json'], true);
-                            $nv = is_array($tmp) ? $tmp : [];
-                        }
-                        $amtHint = '';
-                        if (isset($nv['operation']['amounts']['total_supplied'])) {
-                            $amtHint = format_money((float) $nv['operation']['amounts']['total_supplied'], $restaurantCurrency);
-                        } elseif (isset($nv['amount_received'])) {
-                            $amtHint = format_money((float) $nv['amount_received'], $restaurantCurrency);
-                        } elseif (isset($nv['total_amount'])) {
-                            $amtHint = format_money((float) $nv['total_amount'], $restaurantCurrency);
-                        }
-                        ?>
-                        <tr>
-                            <td><?= e(format_date_fr($acr['created_at'] ?? null, $reportTimezone)) ?></td>
-                            <td><?= e((string) ($acr['actor_name'] ?? '')) ?><br><span class="muted"><?= e((string) ($acr['actor_role_code'] ?? '')) ?></span></td>
-                            <td><?= e(report_audit_action_label((string) ($acr['action_name'] ?? ''))) ?></td>
-                            <td><span class="muted"><?= e((string) ($acr['entity_id'] ?? '-')) ?></span><?php if ($amtHint !== ''): ?><br><?= e($amtHint) ?><?php endif; ?></td>
-                            <td style="max-width:320px;"><?= e((string) ($acr['justification'] ?? '')) ?><?php if ($nv !== []): ?><details style="margin-top:8px;"><summary class="muted" style="cursor:pointer;">JSON technique</summary><pre style="white-space:pre-wrap;font-size:11px;margin:8px 0 0;"><?= e(json_encode($nv, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE)) ?></pre></details><?php endif; ?></td>
-                        </tr>
-                    <?php endforeach; ?>
-                    </tbody>
-                </table>
+<section class="card no-print" style="padding:0;">
+    <details class="report-section-details">
+        <summary><strong>Meilleurs indicateurs</strong> · jour / semaine / mois (calendaires autour de la date du rapport)</summary>
+        <div class="report-section-body">
+            <p class="muted" style="margin-top:0;">Critères : serveur classé par montant total vendu ; produit par montant sur les ventes prises en compte dans le rapport.</p>
+            <div class="report-leader-grid">
+                <?php foreach (['day' => 'Jour', 'week' => 'Semaine', 'month' => 'Mois'] as $lk => $lab): ?>
+                    <?php $slice = $leaderboards[$lk] ?? []; $bs = $slice['best_server'] ?? []; $bp = $slice['best_product'] ?? []; ?>
+                    <div class="report-leader-card">
+                        <strong><?= e($lab) ?></strong>
+                        <p class="muted" style="margin:8px 0 6px;"><?= e((string) ($slice['period_label'] ?? '')) ?></p>
+                        <p style="margin:0;">
+                            <?php if (($bs['server_name'] ?? '') !== ''): ?>
+                                Meilleur serveur : <strong><?= e((string) $bs['server_name']) ?></strong>
+                                — <?= e((string) (int) ($bs['sales_count'] ?? 0)) ?> ventes
+                                — <?= e(format_money((float) ($bs['total_amount'] ?? 0), $restaurantCurrency)) ?>
+                            <?php else: ?>
+                                <span class="muted">Aucun serveur sur cette plage.</span>
+                            <?php endif; ?>
+                        </p>
+                        <p style="margin:12px 0 0;">
+                            <?php if (($bp['product_name'] ?? '') !== ''): ?>
+                                Produit le plus vendu : <strong><?= e((string) $bp['product_name']) ?></strong>
+                                — <?= e((string) $bp['qty_sold']) ?> pièces — <?= e(format_money((float) ($bp['total_sold'] ?? 0), $restaurantCurrency)) ?>
+                                <?php if (($bp['category_name'] ?? '') !== ''): ?>
+                                    <span class="muted"> · <?= e((string) $bp['category_name']) ?></span>
+                                <?php endif; ?>
+                            <?php else: ?>
+                                <span class="muted">Aucun produit sur cette plage.</span>
+                            <?php endif; ?>
+                        </p>
+                    </div>
+                <?php endforeach; ?>
             </div>
-        <?php endif; ?>
+        </div>
     </details>
 </section>
 
-<section class="card" style="padding:22px; margin-bottom:24px;">
-    <h2 style="margin-top:0;">Par personne</h2>
+<section class="card" style="padding:0; margin-bottom:24px;">
+    <details class="report-section-details">
+        <summary><strong>Synthèse équipe</strong> · ventes / cuisine / stock / caisse</summary>
+        <div class="report-section-body">
     <p class="muted">Répartition sur la période sélectionnée (les filtres utilisateur / rôle s’appliquent aux blocs cuisine, stock et caisse ; les ventes par serveur suivent aussi le filtre « ventes clôturées »).</p>
     <div class="split" style="margin-top:12px;">
         <article style="flex:1; min-width:220px;">
@@ -311,9 +410,6 @@ $execSummary = $report['executive_summary'] ?? ['by_server' => [], 'by_article' 
             <?php endif; ?>
         </article>
     </div>
-    <?php
-    $gt = $people['grand_totals'] ?? [];
-    ?>
     <div style="margin-top:18px; padding-top:14px; border-top:1px solid #e8e8e8;">
         <h3 style="margin-top:0;">Total général</h3>
         <p style="margin:0;"><strong>Ventes</strong> : <?= e((string) ($gt['sales_count'] ?? 0)) ?> · <?= e(format_money((float) ($gt['sales_amount'] ?? 0), $restaurantCurrency)) ?> &nbsp;|&nbsp;
@@ -321,82 +417,322 @@ $execSummary = $report['executive_summary'] ?? ['by_server' => [], 'by_article' 
             <strong>Sorties stock</strong> : <?= e((string) ($gt['stock_sorties'] ?? 0)) ?> &nbsp;|&nbsp;
             <strong>Pertes stock</strong> : <?= e((string) ($gt['stock_pertes'] ?? 0)) ?></p>
     </div>
+        </div>
+    </details>
 </section>
 
-<section class="card" style="padding:22px; margin-bottom:24px;">
-    <details class="compact-card" data-autoclose-details>
-        <summary><strong>Résumé ventes (Activité + serveur + article)</strong> · <?= e((string) ($execSummary['period_label'] ?? ($report['period_label'] ?? ''))) ?></summary>
-        <p class="muted" style="margin-top:12px;">Totaux alignés sur les filtres du rapport (jour / semaine / mois / date précise).</p>
+<section class="card" style="padding:0; margin-bottom:24px;">
+    <details class="report-section-details">
+        <summary><strong>Ventes globales</strong> · <?= e((string) ($execSummary['period_label'] ?? ($report['period_label'] ?? ''))) ?></summary>
+        <div class="report-section-body">
+        <p class="muted" style="margin-top:0;">Totaux alignés sur les filtres du rapport (jour / semaine / mois / date précise). Les pourcentages articles sont calculés sur les lignes affichées ; les pourcentages serveurs sur le total vendu de la période.</p>
         <?php $exTotals = $execSummary['totals'] ?? []; ?>
-        <p style="margin:12px 0 0;"><strong>Total général vendu</strong> : <?= e(format_money((float) ($exTotals['grand_amount'] ?? 0), $restaurantCurrency)) ?> · <strong>Articles (unités)</strong> : <?= e((string) ($exTotals['articles_units'] ?? 0)) ?> · <strong>Pool Activité (actions)</strong> : <?= e((string) (int) round((float) ($exTotals['activity_pool_total'] ?? 0))) ?></p>
+        <p style="margin:12px 0 0;"><strong>Total vendu (période filtre)</strong> : <?= e(format_money((float) ($exTotals['grand_amount'] ?? 0), $restaurantCurrency)) ?> · <strong>Articles (unités)</strong> : <?= e((string) ($exTotals['articles_units'] ?? 0)) ?> · <strong>Commandes (serveur)</strong> : <?= e((string) (int) ($exTotals['orders_total'] ?? 0)) ?> · <strong>Pool activité (actions)</strong> : <?= e((string) (int) round((float) ($exTotals['activity_pool_total'] ?? 0))) ?></p>
         <?php if (($execSummary['by_server'] ?? []) !== []): ?>
-            <h3 style="margin:18px 0 8px;">Par serveur</h3>
-            <div class="table-wrap">
+            <p style="margin:14px 0 8px;"><strong>Répartition serveurs</strong></p>
+            <p class="muted" style="margin-top:0;">
+                <?php foreach ($execSummary['by_server'] as $ix => $row): ?>
+                    <?= $ix > 0 ? ' · ' : '' ?>
+                    <?= e((string) ($row['server_name'] ?? '-')) ?> : <?= e(format_money((float) ($row['total_sold'] ?? 0), $restaurantCurrency)) ?>
+                    (<?= e((string) ($row['pct_of_grand_amount'] ?? 0)) ?> %)
+                <?php endforeach; ?>
+            </p>
+            <?php
+            $srvRows = $execSummary['by_server'];
+            $srvChunk = $reportUiChunk;
+            $srvMain = array_slice($srvRows, 0, $srvChunk);
+            $srvMore = array_slice($srvRows, $srvChunk);
+            ?>
+            <div class="table-wrap report-table-desktop">
                 <table>
-                    <thead><tr><th>Serveur</th><th>Commandes</th><th>Articles vendus</th><th>Total vendu</th><th>Activité (actions)</th><th>Activité %</th></tr></thead>
+                    <thead><tr><th>Serveur</th><th>Commandes</th><th>% cmd</th><th>Articles</th><th>Total vendu</th><th>% montant</th><th>Activité</th><th>% pool</th></tr></thead>
                     <tbody>
-                    <?php foreach ($execSummary['by_server'] as $row): ?>
+                    <?php foreach ($srvMain as $row): ?>
                         <tr>
                             <td><?= e((string) ($row['server_name'] ?? '-')) ?></td>
                             <td><?= e((string) ($row['orders_count'] ?? 0)) ?></td>
+                            <td><?= e((string) ($row['pct_of_orders'] ?? 0)) ?> %</td>
                             <td><?= e((string) ($row['articles_sold'] ?? 0)) ?></td>
                             <td><?= e(format_money((float) ($row['total_sold'] ?? 0), $restaurantCurrency)) ?></td>
+                            <td><?= e((string) ($row['pct_of_grand_amount'] ?? 0)) ?> %</td>
                             <td><?= e((string) ($row['activity_actions'] ?? 0)) ?></td>
                             <td><?= e((string) ($row['activity_percent'] ?? 0)) ?> %</td>
                         </tr>
                     <?php endforeach; ?>
                     </tbody>
-                </table>
-            </div>
-        <?php endif; ?>
-        <?php if (($execSummary['by_article'] ?? []) !== []): ?>
-            <h3 style="margin:18px 0 8px;">Par article</h3>
-            <div class="table-wrap">
-                <table>
-                    <thead><tr><th>Article</th><th>Quantité vendue</th><th>Total vendu</th></tr></thead>
-                    <tbody>
-                    <?php foreach ($execSummary['by_article'] as $row): ?>
+                    <?php if ($srvMore !== []): ?>
+                    <tbody id="exec-srv-more" hidden>
+                    <?php foreach ($srvMore as $row): ?>
                         <tr>
-                            <td><?= e((string) ($row['article'] ?? '-')) ?></td>
-                            <td><?= e((string) ($row['qty_sold'] ?? 0)) ?></td>
+                            <td><?= e((string) ($row['server_name'] ?? '-')) ?></td>
+                            <td><?= e((string) ($row['orders_count'] ?? 0)) ?></td>
+                            <td><?= e((string) ($row['pct_of_orders'] ?? 0)) ?> %</td>
+                            <td><?= e((string) ($row['articles_sold'] ?? 0)) ?></td>
                             <td><?= e(format_money((float) ($row['total_sold'] ?? 0), $restaurantCurrency)) ?></td>
+                            <td><?= e((string) ($row['pct_of_grand_amount'] ?? 0)) ?> %</td>
+                            <td><?= e((string) ($row['activity_actions'] ?? 0)) ?></td>
+                            <td><?= e((string) ($row['activity_percent'] ?? 0)) ?> %</td>
                         </tr>
                     <?php endforeach; ?>
                     </tbody>
+                    <?php endif; ?>
                 </table>
             </div>
-        <?php endif; ?>
-    </details>
-</section>
-
-<section class="card" style="padding:22px; margin-bottom:24px;">
-    <details class="compact-card" data-autoclose-details>
-        <summary><strong>Activité</strong> · total des actions sur la période : <?= e((string) (int) round((float) ($activity['grand_total_actions'] ?? $activity['total_raw_score'] ?? 0))) ?> · répartition <?= e((string) ($activity['global_percent'] ?? 0)) ?> %</summary>
-        <p class="muted" style="margin-top:12px;"><strong>Activité</strong> agrège des compteurs par rôle : service (commandes, ventes clôturées, remises), cuisine (traitement des lignes, préparations, autres validations), stock (mouvements validés, demandes cuisine traitées), caisse (réceptions, remises chaîne, dépenses). Le pourcentage est la part de chaque personne dans le total général d’actions ; si le total est 0, l’affichage reste à 0&nbsp;%.</p>
-        <?php if (($activity['agents'] ?? []) === []): ?>
-            <p class="muted" style="margin-bottom:0;">Pas assez d’actions pour calculer une répartition.</p>
-        <?php else: ?>
-            <ul style="margin:12px 0 0; padding-left:18px;">
-                <?php foreach ($activity['agents'] as $ag): ?>
-                    <li><?= e(named_actor_label($ag['full_name'] ?? null, $ag['role_code'] ?? null)) ?> :
-                        <strong>Activité</strong> <?= e((string) ($ag['activity_share_percent'] ?? $ag['activity_percent'] ?? 0)) ?> %
-                        <span class="muted">(<?= e((string) (int) round((float) ($ag['total_actions'] ?? $ag['raw_score'] ?? 0))) ?> actions ·
-                        service <?= e((string) (int) ($ag['server_actions'] ?? 0)) ?>,
-                        cuisine <?= e((string) (int) ($ag['kitchen_actions'] ?? 0)) ?>,
-                        stock <?= e((string) (int) ($ag['stock_actions'] ?? 0)) ?>,
-                        caisse <?= e((string) (int) ($ag['cash_actions'] ?? 0)) ?>)</span>
-                    </li>
+            <div class="report-mobile-cards">
+                <?php foreach ($srvRows as $row): ?>
+                    <div class="report-agent-card">
+                        <strong><?= e((string) ($row['server_name'] ?? '-')) ?></strong><br>
+                        <?= e((string) ($row['orders_count'] ?? 0)) ?> cmd (<?= e((string) ($row['pct_of_orders'] ?? 0)) ?> %) ·
+                        <?= e((string) ($row['articles_sold'] ?? 0)) ?> art.<br>
+                        Total <?= e(format_money((float) ($row['total_sold'] ?? 0), $restaurantCurrency)) ?> (<?= e((string) ($row['pct_of_grand_amount'] ?? 0)) ?> %)<br>
+                        <span class="muted">Activité <?= e((string) ($row['activity_actions'] ?? 0)) ?> · <?= e((string) ($row['activity_percent'] ?? 0)) ?> %</span>
+                    </div>
                 <?php endforeach; ?>
-            </ul>
+            </div>
+            <?php if ($srvMore !== []): ?>
+                <button type="button" class="voir-plus-btn no-print report-table-desktop" data-report-expand="exec-srv-more">Voir plus (<?= e((string) count($srvMore)) ?> serveur<?= count($srvMore) > 1 ? 's' : '' ?>)</button>
+            <?php endif; ?>
         <?php endif; ?>
+        <?php if (($execSummary['by_article'] ?? []) !== []): ?>
+            <?php
+            $artRows = $execSummary['by_article'];
+            $artChunk = $reportUiChunk;
+            $artMain = array_slice($artRows, 0, $artChunk);
+            $artMore = array_slice($artRows, $artChunk);
+            ?>
+            <p style="margin:22px 0 8px;"><strong>Ventes par article</strong></p>
+            <p class="muted" style="margin-top:0;">
+                <?php foreach ($execSummary['by_article'] as $ix => $row): ?>
+                    <?= $ix > 0 ? ' · ' : '' ?>
+                    <?= e((string) ($row['article'] ?? '-')) ?> : <?= e(format_money((float) ($row['total_sold'] ?? 0), $restaurantCurrency)) ?>
+                    (<?= e((string) ($row['pct_amount_of_grand'] ?? 0)) ?> %)
+                <?php endforeach; ?>
+            </p>
+            <div class="table-wrap report-table-desktop">
+                <table>
+                    <thead><tr><th>Article</th><th>Quantité</th><th>% qté</th><th>Total vendu</th><th>% montant</th></tr></thead>
+                    <tbody>
+                    <?php foreach ($artMain as $row): ?>
+                        <tr>
+                            <td><?= e((string) ($row['article'] ?? '-')) ?></td>
+                            <td><?= e((string) ($row['qty_sold'] ?? 0)) ?></td>
+                            <td><?= e((string) ($row['pct_qty_of_total'] ?? 0)) ?> %</td>
+                            <td><?= e(format_money((float) ($row['total_sold'] ?? 0), $restaurantCurrency)) ?></td>
+                            <td><?= e((string) ($row['pct_amount_of_grand'] ?? 0)) ?> %</td>
+                        </tr>
+                    <?php endforeach; ?>
+                    </tbody>
+                    <?php if ($artMore !== []): ?>
+                    <tbody id="exec-art-more" hidden>
+                    <?php foreach ($artMore as $row): ?>
+                        <tr>
+                            <td><?= e((string) ($row['article'] ?? '-')) ?></td>
+                            <td><?= e((string) ($row['qty_sold'] ?? 0)) ?></td>
+                            <td><?= e((string) ($row['pct_qty_of_total'] ?? 0)) ?> %</td>
+                            <td><?= e(format_money((float) ($row['total_sold'] ?? 0), $restaurantCurrency)) ?></td>
+                            <td><?= e((string) ($row['pct_amount_of_grand'] ?? 0)) ?> %</td>
+                        </tr>
+                    <?php endforeach; ?>
+                    </tbody>
+                    <?php endif; ?>
+                </table>
+            </div>
+            <div class="report-mobile-cards">
+                <?php foreach ($artRows as $row): ?>
+                    <div class="report-agent-card">
+                        <strong><?= e((string) ($row['article'] ?? '-')) ?></strong><br>
+                        <?= e((string) ($row['qty_sold'] ?? 0)) ?> pièces (<?= e((string) ($row['pct_qty_of_total'] ?? 0)) ?> %)<br>
+                        <?= e(format_money((float) ($row['total_sold'] ?? 0), $restaurantCurrency)) ?> (<?= e((string) ($row['pct_amount_of_grand'] ?? 0)) ?> %)
+                    </div>
+                <?php endforeach; ?>
+            </div>
+            <?php if ($artMore !== []): ?>
+                <button type="button" class="voir-plus-btn no-print report-table-desktop" data-report-expand="exec-art-more">Voir plus (<?= e((string) count($artMore)) ?> article<?= count($artMore) > 1 ? 's' : '' ?>)</button>
+            <?php endif; ?>
+        <?php endif; ?>
+        </div>
     </details>
 </section>
 
-<section class="card" style="padding:22px; margin-bottom:24px;">
-    <details class="compact-card" data-autoclose-details>
-        <summary><strong>Historique nominatif</strong></summary>
-    <h2 style="margin-top:14px;">Historique nominatif</h2>
-    <p class="muted" style="margin-top:0;">Lignes synthétiques (ventes clôturées) et entrées d’audit ; filtres périmètre et code d’action ci-dessus.</p>
+<section class="card" style="padding:0; margin-bottom:24px;">
+    <details class="report-section-details">
+        <summary><strong>Activité des agents</strong> · pool <?= e((string) (int) round((float) ($agentsActivity['pool_total_actions'] ?? 0))) ?> actions (période rapport)</summary>
+        <div class="report-section-body">
+            <p class="muted" style="margin-top:0;">Pourcentage affiché : nombre d’actions / total des actions de la période (0&nbsp;% si total nul). Les métriques dépendent du rôle. Rapidité : Rapide &lt; 10&nbsp;min, Moyen 10 à 30&nbsp;min, Lent &gt; 30&nbsp;min ; sinon « Non calculé ».</p>
+            <?php if (($agentsActivity['servers'] ?? []) !== []): ?>
+                <h4 style="margin:18px 0 8px;">Serveurs</h4>
+                <div class="table-wrap report-table-desktop">
+                    <table>
+                        <thead>
+                        <tr>
+                            <th>Agent</th><th>Actions</th><th>%</th><th>Début</th><th>Cmd.</th><th>Ventes clôt.</th><th>Remises</th>
+                            <th>Moy. clôture</th><th>Moy. remise caisse</th><th>Score</th>
+                        </tr>
+                        </thead>
+                        <tbody>
+                        <?php foreach ($agentsActivity['servers'] as $row): ?>
+                            <tr>
+                                <td><?= e(named_actor_label($row['full_name'] ?? null, $row['role_code'] ?? null)) ?></td>
+                                <td><?= e((string) (int) ($row['actions_count'] ?? 0)) ?></td>
+                                <td><?= e((string) ($row['activity_percent'] ?? 0)) ?> %</td>
+                                <td><?= !empty($row['first_order_at']) ? e(format_date_fr($row['first_order_at'], $reportTimezone)) : '—' ?></td>
+                                <td><?= e((string) (int) ($row['orders_count'] ?? 0)) ?></td>
+                                <td><?= e((string) (int) ($row['closed_sales_count'] ?? 0)) ?></td>
+                                <td><?= e((string) (int) ($row['cash_remittances_count'] ?? 0)) ?></td>
+                                <td><?= isset($row['avg_minutes_order_to_close']) ? e((string) $row['avg_minutes_order_to_close']) . ' min · ' . e((string) ($row['speed_close_tier'] ?? '')) : 'Non calculé' ?></td>
+                                <td><?= isset($row['avg_minutes_close_to_remittance']) ? e((string) $row['avg_minutes_close_to_remittance']) . ' min · ' . e((string) ($row['speed_remittance_tier'] ?? '')) : 'Non calculé' ?></td>
+                                <td><?= isset($row['simple_score']) ? e((string) (int) $row['simple_score']) . ' / 100' : '—' ?></td>
+                            </tr>
+                        <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                </div>
+                <div class="report-mobile-cards">
+                    <?php foreach ($agentsActivity['servers'] as $row): ?>
+                        <div class="report-agent-card">
+                            <strong><?= e(named_actor_label($row['full_name'] ?? null, $row['role_code'] ?? null)) ?></strong>
+                            <div><?= e((string) ($row['activity_line'] ?? '')) ?></div>
+                            <div>Début service : <?= !empty($row['first_order_at']) ? e(format_date_fr($row['first_order_at'], $reportTimezone)) : '—' ?></div>
+                            <div>Cmd. <?= e((string) (int) ($row['orders_count'] ?? 0)) ?> · Ventes clôturées <?= e((string) (int) ($row['closed_sales_count'] ?? 0)) ?> · Remises <?= e((string) (int) ($row['cash_remittances_count'] ?? 0)) ?></div>
+                            <div>Clôture : <?= isset($row['avg_minutes_order_to_close']) ? e((string) $row['avg_minutes_order_to_close']) . ' min (' . e((string) ($row['speed_close_tier'] ?? '')) . ')' : 'Non calculé' ?></div>
+                            <div>Remise caisse : <?= isset($row['avg_minutes_close_to_remittance']) ? e((string) $row['avg_minutes_close_to_remittance']) . ' min (' . e((string) ($row['speed_remittance_tier'] ?? '')) . ')' : 'Non calculé' ?></div>
+                            <div>Score rapidité : <?= isset($row['simple_score']) ? e((string) (int) $row['simple_score']) . ' / 100' : '—' ?></div>
+                        </div>
+                    <?php endforeach; ?>
+                </div>
+            <?php endif; ?>
+
+            <?php if (($agentsActivity['kitchen'] ?? []) !== []): ?>
+                <h4 style="margin:22px 0 8px;">Cuisine</h4>
+                <div class="table-wrap report-table-desktop">
+                    <table>
+                        <thead><tr><th>Cuisinier</th><th>Actions</th><th>%</th><th>1ʳᵉ action</th><th>Lignes</th><th>Validées</th><th>Rejetées</th><th>Moy. traitement</th><th>Score</th></tr></thead>
+                        <tbody>
+                        <?php foreach ($agentsActivity['kitchen'] as $row): ?>
+                            <tr>
+                                <td><?= e(named_actor_label($row['full_name'] ?? null, $row['role_code'] ?? null)) ?></td>
+                                <td><?= e((string) (int) ($row['actions_count'] ?? 0)) ?></td>
+                                <td><?= e((string) ($row['activity_percent'] ?? 0)) ?> %</td>
+                                <td><?= !empty($row['first_kitchen_action_at']) ? e(format_date_fr($row['first_kitchen_action_at'], $reportTimezone)) : '—' ?></td>
+                                <td><?= e((string) (int) ($row['commands_received'] ?? 0)) ?></td>
+                                <td><?= e((string) (int) ($row['commands_validated'] ?? 0)) ?></td>
+                                <td><?= e((string) (int) ($row['commands_rejected'] ?? 0)) ?></td>
+                                <td><?= isset($row['avg_minutes_processing']) ? e((string) $row['avg_minutes_processing']) . ' min · ' . e((string) ($row['speed_tier'] ?? '')) : 'Non calculé' ?></td>
+                                <td><?= isset($row['simple_score']) ? e((string) (int) $row['simple_score']) . ' / 100' : '—' ?></td>
+                            </tr>
+                        <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                </div>
+                <div class="report-mobile-cards">
+                    <?php foreach ($agentsActivity['kitchen'] as $row): ?>
+                        <div class="report-agent-card">
+                            <strong><?= e(named_actor_label($row['full_name'] ?? null, $row['role_code'] ?? null)) ?></strong>
+                            <div><?= e((string) ($row['activity_line'] ?? '')) ?></div>
+                            <div>1ʳᵉ action : <?= !empty($row['first_kitchen_action_at']) ? e(format_date_fr($row['first_kitchen_action_at'], $reportTimezone)) : '—' ?></div>
+                            <div>Lignes <?= e((string) (int) ($row['commands_received'] ?? 0)) ?> · Validées <?= e((string) (int) ($row['commands_validated'] ?? 0)) ?> · Rejetées <?= e((string) (int) ($row['commands_rejected'] ?? 0)) ?></div>
+                            <div>Trait. moy. <?= isset($row['avg_minutes_processing']) ? e((string) $row['avg_minutes_processing']) . ' min (' . e((string) ($row['speed_tier'] ?? '')) . ')' : 'Non calculé' ?></div>
+                            <div>Score <?= isset($row['simple_score']) ? e((string) (int) $row['simple_score']) . ' / 100' : '—' ?></div>
+                        </div>
+                    <?php endforeach; ?>
+                </div>
+            <?php endif; ?>
+
+            <?php if (($agentsActivity['stock'] ?? []) !== []): ?>
+                <h4 style="margin:22px 0 8px;">Stock</h4>
+                <div class="table-wrap report-table-desktop">
+                    <table>
+                        <thead><tr><th>Agent</th><th>Actions</th><th>%</th><th>1ʳᵉ action</th><th>Demandes reçues</th><th>Traitées</th><th>Sorties</th><th>Moy. traitement</th><th>Score</th></tr></thead>
+                        <tbody>
+                        <?php foreach ($agentsActivity['stock'] as $row): ?>
+                            <tr>
+                                <td><?= e(named_actor_label($row['full_name'] ?? null, $row['role_code'] ?? null)) ?></td>
+                                <td><?= e((string) (int) ($row['actions_count'] ?? 0)) ?></td>
+                                <td><?= e((string) ($row['activity_percent'] ?? 0)) ?> %</td>
+                                <td><?= !empty($row['first_stock_action_at']) ? e(format_date_fr($row['first_stock_action_at'], $reportTimezone)) : '—' ?></td>
+                                <td><?= e((string) (int) ($row['requests_received'] ?? 0)) ?></td>
+                                <td><?= e((string) (int) ($row['requests_handled'] ?? 0)) ?></td>
+                                <td><?= e((string) (int) ($row['stock_out_movements'] ?? 0)) ?></td>
+                                <td><?= isset($row['avg_minutes_request_processing']) ? e((string) $row['avg_minutes_request_processing']) . ' min · ' . e((string) ($row['speed_tier'] ?? '')) : 'Non calculé' ?></td>
+                                <td><?= isset($row['simple_score']) ? e((string) (int) $row['simple_score']) . ' / 100' : '—' ?></td>
+                            </tr>
+                        <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                </div>
+                <div class="report-mobile-cards">
+                    <?php foreach ($agentsActivity['stock'] as $row): ?>
+                        <div class="report-agent-card">
+                            <strong><?= e(named_actor_label($row['full_name'] ?? null, $row['role_code'] ?? null)) ?></strong>
+                            <div><?= e((string) ($row['activity_line'] ?? '')) ?></div>
+                            <div>Demandes reçues <?= e((string) (int) ($row['requests_received'] ?? 0)) ?> · Traitées <?= e((string) (int) ($row['requests_handled'] ?? 0)) ?> · Sorties <?= e((string) (int) ($row['stock_out_movements'] ?? 0)) ?></div>
+                            <div>Moy. <?= isset($row['avg_minutes_request_processing']) ? e((string) $row['avg_minutes_request_processing']) . ' min (' . e((string) ($row['speed_tier'] ?? '')) . ')' : 'Non calculé' ?></div>
+                            <div>Score <?= isset($row['simple_score']) ? e((string) (int) $row['simple_score']) . ' / 100' : '—' ?></div>
+                        </div>
+                    <?php endforeach; ?>
+                </div>
+            <?php endif; ?>
+
+            <?php if (($agentsActivity['cashiers'] ?? []) !== []): ?>
+                <h4 style="margin:22px 0 8px;">Caisse</h4>
+                <div class="table-wrap report-table-desktop">
+                    <table>
+                        <thead><tr><th>Agent</th><th>Actions</th><th>%</th><th>1ʳᵉ réception</th><th>Remises reçues</th><th>Validées</th><th>Rejetées</th><th>Moy. décision</th><th>Score</th></tr></thead>
+                        <tbody>
+                        <?php foreach ($agentsActivity['cashiers'] as $row): ?>
+                            <tr>
+                                <td><?= e(named_actor_label($row['full_name'] ?? null, $row['role_code'] ?? null)) ?></td>
+                                <td><?= e((string) (int) ($row['actions_count'] ?? 0)) ?></td>
+                                <td><?= e((string) ($row['activity_percent'] ?? 0)) ?> %</td>
+                                <td><?= !empty($row['first_cash_action_at']) ? e(format_date_fr($row['first_cash_action_at'], $reportTimezone)) : '—' ?></td>
+                                <td><?= e((string) (int) ($row['remittances_received'] ?? 0)) ?></td>
+                                <td><?= e((string) (int) ($row['remittances_validated'] ?? 0)) ?></td>
+                                <td><?= e((string) (int) ($row['remittances_rejected'] ?? 0)) ?></td>
+                                <td><?= isset($row['avg_minutes_reception_decision']) ? e((string) $row['avg_minutes_reception_decision']) . ' min · ' . e((string) ($row['speed_tier'] ?? '')) : 'Non calculé' ?></td>
+                                <td><?= isset($row['simple_score']) ? e((string) (int) $row['simple_score']) . ' / 100' : '—' ?></td>
+                            </tr>
+                        <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                </div>
+                <div class="report-mobile-cards">
+                    <?php foreach ($agentsActivity['cashiers'] as $row): ?>
+                        <div class="report-agent-card">
+                            <strong><?= e(named_actor_label($row['full_name'] ?? null, $row['role_code'] ?? null)) ?></strong>
+                            <div><?= e((string) ($row['activity_line'] ?? '')) ?></div>
+                            <div>Remises <?= e((string) (int) ($row['remittances_received'] ?? 0)) ?> · Validées <?= e((string) (int) ($row['remittances_validated'] ?? 0)) ?> · Rejetées <?= e((string) (int) ($row['remittances_rejected'] ?? 0)) ?></div>
+                            <div>Délai moyen <?= isset($row['avg_minutes_reception_decision']) ? e((string) $row['avg_minutes_reception_decision']) . ' min (' . e((string) ($row['speed_tier'] ?? '')) . ')' : 'Non calculé' ?></div>
+                            <div>Score <?= isset($row['simple_score']) ? e((string) (int) $row['simple_score']) . ' / 100' : '—' ?></div>
+                        </div>
+                    <?php endforeach; ?>
+                </div>
+            <?php endif; ?>
+
+            <?php if (($agentsActivity['other_roles'] ?? []) !== []): ?>
+                <h4 style="margin:22px 0 8px;">Autres rôles (résumé)</h4>
+                <ul style="margin:0; padding-left:18px;">
+                    <?php foreach ($agentsActivity['other_roles'] as $row): ?>
+                        <li><?= e(named_actor_label($row['full_name'] ?? null, $row['role_code'] ?? null)) ?> · <?= e((string) ($row['activity_line'] ?? '')) ?></li>
+                    <?php endforeach; ?>
+                </ul>
+            <?php endif; ?>
+
+            <?php if (
+                ($agentsActivity['servers'] ?? []) === [] && ($agentsActivity['kitchen'] ?? []) === []
+                && ($agentsActivity['stock'] ?? []) === [] && ($agentsActivity['cashiers'] ?? []) === []
+                && ($agentsActivity['other_roles'] ?? []) === []
+            ): ?>
+                <p class="muted" style="margin-bottom:0;">Aucun agent avec actions sur cette période dans les filtres — élargissez la date ou les filtres.</p>
+            <?php endif; ?>
+        </div>
+    </details>
+</section>
+
+<section class="card" style="padding:0; margin-bottom:24px;">
+    <details class="report-section-details">
+        <summary><strong>Historique nominatif</strong><?php if ($timeline !== []): ?> · <?= e((string) count($timeline)) ?> ligne(s) affichée(s)<?php endif; ?></summary>
+        <div class="report-section-body">
+    <p class="muted" style="margin-top:0;">Ventes clôturées synthétiques et entrées d’audit ; filtres périmètre et code d’action ci-dessus. Limite : <?= e((string) (int) ($viewFilters['timeline_limit'] ?? 350)) ?> lignes.</p>
     <?php if ($timeline === []): ?>
         <p class="muted">Aucun événement dans le filtre.</p>
     <?php else: ?>
@@ -435,13 +771,15 @@ $execSummary = $report['executive_summary'] ?? ['by_server' => [], 'by_article' 
         </div>
         <p class="muted" style="margin-bottom:0;">Format phrase (exemple) : <?= e(nominative_timeline_sentence($timeline[0] ?? [], $restaurantCurrency, $reportTimezone)) ?></p>
     <?php endif; ?>
+        </div>
     </details>
 </section>
 
-<section class="card no-print" style="padding:22px; margin-bottom:24px;">
-    <details class="compact-card" data-autoclose-details>
-        <summary><strong>Rapports détaillés — par personne et par produit</strong></summary>
-        <p class="muted" style="margin-top:12px; margin-bottom:0;">Sections repliables pour éviter de surcharger l’écran ; adapté mobile. Les filtres ci-dessus (période, personne, rôle, produit carte, article stock, type de mouvement) s’appliquent.</p>
+<section class="card no-print" style="padding:0; margin-bottom:24px;">
+    <details class="report-section-details">
+        <summary><strong>Rapports détaillés</strong> · ventes par ligne, cuisine, stock</summary>
+        <div class="report-section-body">
+        <p class="muted" style="margin-top:0; margin-bottom:0;">Sections repliables pour éviter de surcharger l’écran ; adapté mobile. Les filtres ci-dessus (période, personne, rôle, produit carte, article stock, type de mouvement) s’appliquent.</p>
         <div class="report-detail-nested" style="margin-top:16px;">
             <details>
                 <summary><strong>1. Ventes par serveur et par produit</strong> · Total général <?= e(format_money((float) ($salesDetail['grand_total'] ?? 0), $restaurantCurrency)) ?></summary>
@@ -520,9 +858,14 @@ $execSummary = $report['executive_summary'] ?? ['by_server' => [], 'by_article' 
                 <?php endif; ?>
             </details>
         </div>
+        </div>
     </details>
 </section>
 
+<section class="card" style="padding:0; margin-bottom:24px;">
+    <details class="report-section-details">
+        <summary><strong>Stock & Cuisine</strong> · agrégés et indicateurs</summary>
+        <div class="report-section-body">
 <section class="grid stats">
     <article class="card stat"><span>Stock début</span><strong><?= e((string) $report['opening_stock_total']) ?></strong></article>
     <article class="card stat"><span>Stock actuel</span><strong><?= e((string) $report['current_stock_total']) ?></strong></article>
@@ -558,10 +901,15 @@ $execSummary = $report['executive_summary'] ?? ['by_server' => [], 'by_article' 
         <p><strong>Incidents cuisine</strong> : <?= e((string) $report['kitchen_report']['kitchen_incidents']) ?></p>
     </article>
 </section>
+        </div>
+    </details>
+</section>
 
 <?php if (($report['incident_cases'] ?? []) !== []): ?>
-    <section class="card" style="padding:22px; margin-top:24px;">
-        <h2 style="margin-top:0;">Incidents et decisions signes</h2>
+<section class="card" style="padding:0; margin-top:24px; margin-bottom:24px;">
+    <details class="report-section-details">
+        <summary><strong>Incidents et décisions</strong> · <?= e((string) count($report['incident_cases'] ?? [])) ?> cas</summary>
+        <div class="report-section-body">
         <div class="table-wrap">
             <table>
                 <thead>
@@ -584,10 +932,16 @@ $execSummary = $report['executive_summary'] ?? ['by_server' => [], 'by_article' 
                 </tbody>
             </table>
         </div>
-    </section>
+        </div>
+    </details>
+</section>
 <?php endif; ?>
 
-<section class="split" style="margin-top:24px;">
+<section class="card" style="padding:0; margin-top:24px; margin-bottom:24px;">
+    <details class="report-section-details">
+        <summary><strong>Ventes serveur & bilan général</strong></summary>
+        <div class="report-section-body">
+<section class="split" style="margin-top:0;">
     <article class="card" style="padding:22px;">
         <h2 style="margin-top:0;">Rapport serveur</h2>
         <p><strong>Total demandé</strong> : <?= e(format_money($report['server_report']['total_requested'], $restaurantCurrency)) ?></p>
@@ -633,4 +987,53 @@ $execSummary = $report['executive_summary'] ?? ['by_server' => [], 'by_article' 
         <p><strong>Perte serveur</strong> : <?= e(format_money($report['general_report']['server_loss_value'], $restaurantCurrency)) ?></p>
         <p><strong>Bénéfice brut estimé</strong> : <?= e(format_money($report['general_report']['estimated_gross_profit'], $restaurantCurrency)) ?></p>
     </article>
+</section>
+        </div>
+    </details>
+</section>
+
+<section class="card" style="padding:0; margin-bottom:24px;">
+    <details class="report-section-details">
+        <summary><strong>Opérations clôturées automatiquement</strong><?php if ($autoClosed !== []): ?> · <?= e((string) count($autoClosed)) ?> événement(s)<?php endif; ?></summary>
+        <div class="report-section-body">
+        <p class="muted" style="margin-top:0;">Clôtures vente/remise au changement de jour, réceptions ou expirations pilotées par le système (fuseau restaurant).</p>
+        <?php if ($autoClosed === []): ?>
+            <p class="muted" style="margin-bottom:0;">Aucune opération auto-clôturée sur cette période.</p>
+        <?php else: ?>
+            <div class="table-wrap" style="margin-top:14px;">
+                <table>
+                    <thead>
+                    <tr><th>Date</th><th>Acteur</th><th>Type</th><th>Réf.</th><th>Motif / détail</th></tr>
+                    </thead>
+                    <tbody>
+                    <?php foreach ($autoClosed as $acr): ?>
+                        <?php
+                        $nv = [];
+                        if (!empty($acr['new_values_json'])) {
+                            $tmp = json_decode((string) $acr['new_values_json'], true);
+                            $nv = is_array($tmp) ? $tmp : [];
+                        }
+                        $amtHint = '';
+                        if (isset($nv['operation']['amounts']['total_supplied'])) {
+                            $amtHint = format_money((float) $nv['operation']['amounts']['total_supplied'], $restaurantCurrency);
+                        } elseif (isset($nv['amount_received'])) {
+                            $amtHint = format_money((float) $nv['amount_received'], $restaurantCurrency);
+                        } elseif (isset($nv['total_amount'])) {
+                            $amtHint = format_money((float) $nv['total_amount'], $restaurantCurrency);
+                        }
+                        ?>
+                        <tr>
+                            <td><?= e(format_date_fr($acr['created_at'] ?? null, $reportTimezone)) ?></td>
+                            <td><?= e((string) ($acr['actor_name'] ?? '')) ?><br><span class="muted"><?= e((string) ($acr['actor_role_code'] ?? '')) ?></span></td>
+                            <td><?= e(report_audit_action_label((string) ($acr['action_name'] ?? ''))) ?></td>
+                            <td><span class="muted"><?= e((string) ($acr['entity_id'] ?? '-')) ?></span><?php if ($amtHint !== ''): ?><br><?= e($amtHint) ?><?php endif; ?></td>
+                            <td style="max-width:320px;"><?= e((string) ($acr['justification'] ?? '')) ?><?php if ($nv !== []): ?><details style="margin-top:8px;"><summary class="muted" style="cursor:pointer;">JSON technique</summary><pre style="white-space:pre-wrap;font-size:11px;margin:8px 0 0;"><?= e(json_encode($nv, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE)) ?></pre></details><?php endif; ?></td>
+                        </tr>
+                    <?php endforeach; ?>
+                    </tbody>
+                </table>
+            </div>
+        <?php endif; ?>
+        </div>
+    </details>
 </section>
