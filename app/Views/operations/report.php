@@ -40,6 +40,16 @@ $agentsActivity = $report['agents_activity'] ?? [
 ];
 $reportUiChunk = 18;
 $autoClosed = $report['auto_closed_operations'] ?? [];
+$cashTodaySnap = $cash_today_snapshot ?? null;
+$pendingLateR = $pending_late_remittance_attributions ?? [];
+$todayYmdRestaurant = $today_ymd_restaurant ?? ($report['selected_date'] ?? $date ?? '');
+$salesByCategory = $report['sales_by_category'] ?? ['categories' => [], 'grand_total' => 0];
+$serverShortfallRep = $report['server_remittance_shortfall'] ?? ['agents' => [], 'grand_shortfall' => 0];
+$rptUid = (int) ($viewFilters['user_id'] ?? 0);
+$rptUserQ = $rptUid > 0 ? '&user_id=' . rawurlencode((string) $rptUid) : '';
+$ridQsa = ((current_user()['scope'] ?? null) === 'super_admin' && !empty($restaurant['id']))
+    ? '&restaurant_id=' . rawurlencode((string) (int) $restaurant['id'])
+    : '';
 ?>
 <style>
 @media print {
@@ -127,6 +137,88 @@ window.addEventListener('beforeprint', function () {
         <p>Suivi détaillé du stock, de la cuisine, des ventes, des pertes et des incidents sur une vraie période calendrier.</p>
     </div>
 </section>
+
+<?php if (!empty($cashTodaySnap)): ?>
+<section class="card" style="padding:22px; margin-top:24px;">
+    <div class="topbar" style="margin-bottom:14px;">
+        <div>
+            <h2 style="margin:0;">Situation actuelle / Aujourd’hui</h2>
+            <p class="muted" style="margin:6px 0 0;"><?= e((string) ($cashTodaySnap['period_label'] ?? '')) ?> · calendrier restaurant</p>
+        </div>
+    </div>
+    <div class="grid stats">
+        <article class="card stat"><span>Vendu clôturé</span><strong><?= e(format_money((float) ($cashTodaySnap['total_sold_closed'] ?? 0), $restaurantCurrency)) ?></strong></article>
+        <article class="card stat"><span>Remis à caisse</span><strong><?= e(format_money((float) ($cashTodaySnap['remitted_to_cash_physical'] ?? 0), $restaurantCurrency)) ?></strong></article>
+        <article class="card stat"><span>Reçu caisse</span><strong><?= e(format_money((float) ($cashTodaySnap['cashier_received_today'] ?? 0), $restaurantCurrency)) ?></strong></article>
+        <article class="card stat"><span>Manquant</span><strong><?= e(format_money((float) ($cashTodaySnap['shortfall_today_total'] ?? 0), $restaurantCurrency)) ?></strong></article>
+        <article class="card stat"><span>Dépenses</span><strong><?= e(format_money((float) ($cashTodaySnap['expenses_today'] ?? 0), $restaurantCurrency)) ?></strong></article>
+        <article class="card stat"><span>Solde caisse</span><strong><?= e(format_money((float) ($cashTodaySnap['cash_balance_current'] ?? 0), $restaurantCurrency)) ?></strong></article>
+        <article class="card stat"><span>Écarts</span><strong><?= e(format_money((float) ($cashTodaySnap['discrepancies_today'] ?? 0), $restaurantCurrency)) ?></strong></article>
+    </div>
+    <?php $sfd = $cashTodaySnap['server_shortfall']['agents'] ?? []; ?>
+    <?php if (array_filter($sfd, static fn (array $a): bool => ((float) ($a['shortfall'] ?? 0)) > 0.0001)): ?>
+    <details class="compact-card no-print" style="margin-top:14px;" data-autoclose-details>
+        <summary><strong>Manquants serveurs</strong> (aujourd’hui)</summary>
+        <?php foreach ($sfd as $ag): ?>
+            <?php if ((float) ($ag['shortfall'] ?? 0) <= 0.0001) { continue; } ?>
+            <div class="report-agent-card" style="margin-top:12px;">
+                <strong><?= e(named_actor_label($ag['server_name'] ?? null, 'cashier_server')) ?></strong>
+                <p class="muted" style="margin:6px 0 0;">Non versé : <?= e(format_money((float) ($ag['shortfall'] ?? 0), $restaurantCurrency)) ?></p>
+                <?php foreach (($ag['missing_sales'] ?? []) as $ms): ?>
+                    <p style="margin:8px 0 4px;">Vente #<?= e((string) ($ms['sale_id'] ?? '')) ?></p>
+                    <ul style="margin:0; padding-left:18px;">
+                        <?php foreach (($ms['lines'] ?? []) as $ln): ?>
+                            <li><?= e((string) ($ln['menu_item_name'] ?? '')) ?> × <?= e((string) ($ln['quantity'] ?? '')) ?> : <?= e(format_money((float) ($ln['line_total'] ?? 0), $restaurantCurrency)) ?></li>
+                        <?php endforeach; ?>
+                    </ul>
+                <?php endforeach; ?>
+            </div>
+        <?php endforeach; ?>
+    </details>
+    <?php endif; ?>
+</section>
+<?php endif; ?>
+
+<?php if ($rptUid > 0): ?>
+<section class="card no-print" style="padding:18px; margin-top:16px;">
+    <details class="compact-card" open data-autoclose-details>
+        <summary><strong>Filtre agent</strong> : aperçu rapide des périodes</summary>
+        <p class="muted" style="margin-top:10px;">Le tableau du bas reflète la date et la période choisies dans les filtres. Raccourcis ci-dessous conservent l’agent #<?= e((string) $rptUid) ?>.</p>
+        <div class="nav" style="flex-wrap:wrap; margin-top:10px;">
+            <a href="/rapport?report_preset=today<?= e($rptUserQ . $ridQsa) ?>">Aujourd’hui</a>
+            <a href="/rapport?report_preset=yesterday<?= e($rptUserQ . $ridQsa) ?>">Hier</a>
+            <a href="/rapport?report_preset=week<?= e($rptUserQ . $ridQsa) ?>">Semaine</a>
+            <a href="/rapport?report_preset=month<?= e($rptUserQ . $ridQsa) ?>">Mois</a>
+        </div>
+    </details>
+</section>
+<?php endif; ?>
+
+<?php
+$reportCanDecideLateRemittance = in_array((string) (current_user()['role_code'] ?? ''), ['owner', 'manager'], true);
+?>
+<?php if ($pendingLateR !== [] && $reportCanDecideLateRemittance): ?>
+<section class="card no-print" style="padding:18px; margin-top:16px;">
+    <h3 style="margin-top:0;">Remise tardive à décider</h3>
+    <?php foreach ($pendingLateR as $lat): ?>
+        <article class="card" style="padding:12px; margin-top:10px;">
+            <strong>#<?= e((string) ($lat['id'] ?? '')) ?></strong> · <?= e(format_money((float) ($lat['amount'] ?? 0), $restaurantCurrency)) ?> · Vente #<?= e((string) ($lat['sale_id'] ?? '')) ?>
+            <p class="muted" style="margin:6px 0 0;">Serveur : <?= e(named_actor_label($lat['sale_server_name'] ?? $lat['from_user_name'] ?? null, 'cashier_server')) ?></p>
+            <p class="muted" style="margin:6px 0 0;">Vente : <?= e((string) ($lat['sale_day_ymd'] ?? '—')) ?> · Remise : <?= e((string) ($lat['remittance_day_ymd'] ?? '—')) ?></p>
+            <form method="post" action="/owner/caisse/remises-tardives/<?= e((string) ($lat['id'] ?? '0')) ?>/rattachement" style="display:inline;" onsubmit="return confirm('Confirmer ?');"><?php /* owner route — session gère le restaurant */ ?>
+                <input type="hidden" name="basis" value="SALE_DAY"><button type="submit" class="button-muted">Jour de vente</button>
+            </form>
+            <form method="post" action="/owner/caisse/remises-tardives/<?= e((string) ($lat['id'] ?? '0')) ?>/rattachement" style="display:inline; margin-left:8px;" onsubmit="return confirm('Confirmer ?');">
+                <input type="hidden" name="basis" value="REMITTANCE_DAY"><button type="submit" class="button-muted">Jour de remise</button>
+            </form>
+        </article>
+    <?php endforeach; ?>
+</section>
+<?php endif; ?>
+
+<details class="card report-section-details no-print" style="padding:0; margin-top:20px;">
+<summary><strong>Historique / Vue globale (détail période)</strong> · <?= e((string) ($report['period_label'] ?? '')) ?></summary>
+<div class="report-section-body" style="padding:16px;">
 
 <?php if (!empty($report['financial_report']['summary'] ?? [])): ?>
 <section class="card" style="padding:0; margin-top:24px;">
@@ -222,19 +314,14 @@ window.addEventListener('beforeprint', function () {
 <section class="card" style="padding:22px; margin-bottom:24px;">
     <details class="compact-card" data-autoclose-details>
     <summary><strong>Afficher les filtres</strong></summary>
-    <?php
-    $ridQsa = ((current_user()['scope'] ?? null) === 'super_admin' && !empty($restaurant['id']))
-        ? '&restaurant_id=' . rawurlencode((string) (int) $restaurant['id'])
-        : '';
-    ?>
     <details class="compact-card" style="margin-top:12px;" data-autoclose-details>
         <summary><strong>Raccourcis période (ventes / rapport global)</strong></summary>
         <p class="muted" style="margin-top:10px;">Aujourd’hui, hier, semaine ou mois calendaire (fuseau restaurant) sans ressaisir la date.</p>
         <div class="nav" style="flex-wrap:wrap; margin-top:10px;">
-            <a href="/rapport?report_preset=today<?= e($ridQsa) ?>">Aujourd’hui</a>
-            <a href="/rapport?report_preset=yesterday<?= e($ridQsa) ?>">Hier</a>
-            <a href="/rapport?report_preset=week<?= e($ridQsa) ?>">Semaine en cours</a>
-            <a href="/rapport?report_preset=month<?= e($ridQsa) ?>">Mois en cours</a>
+            <a href="/rapport?report_preset=today<?= e($rptUserQ . $ridQsa) ?>">Aujourd’hui</a>
+            <a href="/rapport?report_preset=yesterday<?= e($rptUserQ . $ridQsa) ?>">Hier</a>
+            <a href="/rapport?report_preset=week<?= e($rptUserQ . $ridQsa) ?>">Semaine en cours</a>
+            <a href="/rapport?report_preset=month<?= e($rptUserQ . $ridQsa) ?>">Mois en cours</a>
         </div>
     </details>
     <form method="get" action="/rapport" style="margin-top:14px;">
@@ -318,6 +405,57 @@ window.addEventListener('beforeprint', function () {
     </details>
     <p class="muted" style="margin-bottom:0;"><?= e($report['period_label'] ?? '') ?> · du <?= e(format_date_fr($report['range_start'] ?? null, $reportTimezone)) ?> au <?= e(format_date_fr($report['range_end'] ?? null, $reportTimezone)) ?> · Fuseau <?= e($report['timezone'] ?? $reportTimezone->getName()) ?></p>
 </section>
+
+<?php if (!empty($salesByCategory['categories'] ?? [])): ?>
+<section class="card" style="padding:0; margin-bottom:24px;">
+    <details class="report-section-details">
+        <summary><strong>Ventes par catégorie</strong> · <?= e(format_money((float) ($salesByCategory['grand_total'] ?? 0), $restaurantCurrency)) ?> sur la période filtrée</summary>
+        <div class="report-section-body">
+            <div class="table-wrap" style="margin-top:8px;">
+                <table>
+                    <thead><tr><th>Catégorie</th><th>Quantité</th><th>Total</th><th>%</th><th>Top article</th></tr></thead>
+                    <tbody>
+                    <?php foreach (($salesByCategory['categories'] ?? []) as $cr): ?>
+                        <tr>
+                            <td><?= e((string) ($cr['category_name'] ?? '')) ?></td>
+                            <td><?= e((string) ($cr['quantity_total'] ?? 0)) ?></td>
+                            <td><?= e(format_money((float) ($cr['total_amount'] ?? 0), $restaurantCurrency)) ?></td>
+                            <td><?= e((string) ($cr['pct_of_grand'] ?? 0)) ?> %</td>
+                            <td><?= e((string) ($cr['top_item_name'] ?? '—')) ?> <?php if ((float) ($cr['top_item_qty'] ?? 0) > 0): ?>(× <?= e((string) ($cr['top_item_qty'] ?? '')) ?>)<?php endif; ?></td>
+                        </tr>
+                    <?php endforeach; ?>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </details>
+</section>
+<?php endif; ?>
+
+<?php if ((float) ($serverShortfallRep['grand_shortfall'] ?? 0) > 0.0001): ?>
+<section class="card" style="padding:0; margin-bottom:24px;">
+    <details class="report-section-details">
+        <summary><strong>Non versé / manquant (période filtrée)</strong> · <?= e(format_money((float) ($serverShortfallRep['grand_shortfall'] ?? 0), $restaurantCurrency)) ?></summary>
+        <div class="report-section-body">
+            <?php foreach (($serverShortfallRep['agents'] ?? []) as $ag): ?>
+                <?php if ((float) ($ag['shortfall'] ?? 0) <= 0.0001) { continue; } ?>
+                <div class="report-agent-card" style="margin-top:12px;">
+                    <strong><?= e(named_actor_label($ag['server_name'] ?? null, 'cashier_server')) ?></strong>
+                    <p class="muted" style="margin:6px 0 0;">Vendu clôturé <?= e(format_money((float) ($ag['sold_closed'] ?? 0), $restaurantCurrency)) ?> · Remis effectif <?= e(format_money((float) ($ag['remitted_effective'] ?? 0), $restaurantCurrency)) ?> · Manquant <?= e(format_money((float) ($ag['shortfall'] ?? 0), $restaurantCurrency)) ?></p>
+                    <?php foreach (($ag['missing_sales'] ?? []) as $ms): ?>
+                        <p style="margin:8px 0 4px;">Vente #<?= e((string) ($ms['sale_id'] ?? '')) ?></p>
+                        <ul style="margin:0; padding-left:18px;">
+                            <?php foreach (($ms['lines'] ?? []) as $ln): ?>
+                                <li><?= e((string) ($ln['menu_item_name'] ?? '')) ?> × <?= e((string) ($ln['quantity'] ?? '')) ?></li>
+                            <?php endforeach; ?>
+                        </ul>
+                    <?php endforeach; ?>
+                </div>
+            <?php endforeach; ?>
+        </div>
+    </details>
+</section>
+<?php endif; ?>
 
 <section class="card no-print" style="padding:0;">
     <details class="report-section-details">
@@ -1037,3 +1175,5 @@ window.addEventListener('beforeprint', function () {
         </div>
     </details>
 </section>
+</div>
+</details>

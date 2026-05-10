@@ -9,6 +9,7 @@ use App\Core\Database;
 use DateTimeImmutable;
 use DateTimeZone;
 use PDO;
+use Throwable;
 
 final class CashService
 {
@@ -39,6 +40,7 @@ final class CashService
     public function periodCashClarity(int $restaurantId, string $dateFromYmd, string $dateToYmd): array
     {
         $this->ensureSchema();
+        $periodWhere = $this->sqlCashTransferPeriodPredicate('ct');
         $statement = $this->database->pdo()->prepare(
             'SELECT
                 COALESCE(SUM(CASE WHEN ct.source_type = "sale" THEN ct.amount ELSE 0 END), 0) AS server_remittance_total,
@@ -50,13 +52,14 @@ final class CashService
                 COALESCE(SUM(ABS(ct.discrepancy_amount)), 0) AS discrepancy_total
              FROM cash_transfers ct
              WHERE ct.restaurant_id = :restaurant_id
-               AND COALESCE(ct.received_at, ct.requested_at, ct.created_at) >= :start_at
-               AND COALESCE(ct.received_at, ct.requested_at, ct.created_at) <= :end_at'
+               AND ' . $periodWhere
                 );
         $statement->execute([
             'restaurant_id' => $restaurantId,
             'start_at' => $dateFromYmd . ' 00:00:00',
             'end_at' => $dateToYmd . ' 23:59:59',
+            'dfrom' => $dateFromYmd,
+            'dto' => $dateToYmd,
         ]);
         $row = $statement->fetch(PDO::FETCH_ASSOC) ?: [];
         $filters = ['date_from' => $dateFromYmd, 'date_to' => $dateToYmd];
@@ -96,11 +99,19 @@ final class CashService
             ? (int) $sale['origin_id']
             : null;
 
+        $saleTs = (string) ($sale['validated_at'] ?? $sale['created_at'] ?? '');
+        $saleDayYmd = $this->mysqlDateTimeToYmd($restaurantId, $saleTs) ?? '';
+        $remitDayYmd = (new DateTimeImmutable('now', $this->reportTimezone($restaurantId)))->format('Y-m-d');
+        $lateBasis = null;
+        if ($saleDayYmd !== '' && $remitDayYmd !== '' && $saleDayYmd !== $remitDayYmd) {
+            $lateBasis = 'PENDING';
+        }
+
         $statement = $this->database->pdo()->prepare(
             'INSERT INTO cash_transfers
-            (restaurant_id, from_user_id, to_user_id, amount, currency, source_type, source_id, status, note, discrepancy_amount, discrepancy_note, requested_at, created_by, created_at, updated_at)
+            (restaurant_id, from_user_id, to_user_id, amount, currency, source_type, source_id, sale_day_ymd, remittance_day_ymd, late_remittance_basis, status, note, discrepancy_amount, discrepancy_note, requested_at, created_by, created_at, updated_at)
              VALUES
-            (:restaurant_id, :from_user_id, :to_user_id, :amount, :currency, "sale", :source_id, "REMIS_A_CAISSE", :note, 0, NULL, NOW(), :created_by, NOW(), NOW())'
+            (:restaurant_id, :from_user_id, :to_user_id, :amount, :currency, "sale", :source_id, :sale_day_ymd, :remittance_day_ymd, :late_remittance_basis, "REMIS_A_CAISSE", :note, 0, NULL, NOW(), :created_by, NOW(), NOW())'
         );
         $statement->execute([
             'restaurant_id' => $restaurantId,
@@ -109,6 +120,9 @@ final class CashService
             'amount' => $amount,
             'currency' => $currency,
             'source_id' => (int) $sale['id'],
+            'sale_day_ymd' => $saleDayYmd !== '' ? $saleDayYmd : null,
+            'remittance_day_ymd' => $remitDayYmd,
+            'late_remittance_basis' => $lateBasis,
             'note' => trim((string) ($payload['note'] ?? 'Remise serveur liee a la vente.')) ?: null,
             'created_by' => $actor['id'],
         ]);
@@ -168,6 +182,9 @@ final class CashService
                        ct.amount_received,
                        ct.discrepancy_amount,
                        ct.discrepancy_note,
+                       ct.sale_day_ymd,
+                       ct.remittance_day_ymd,
+                       ct.late_remittance_basis,
                        ct.requested_at AS remitted_at,
                        ct.received_at AS cash_received_at,
                        tu.full_name AS cashier_name,
@@ -199,6 +216,76 @@ final class CashService
         $statement->execute($params);
 
         return $statement->fetchAll(PDO::FETCH_ASSOC);
+    }
+
+    /**
+     * Remises vente dont la date de vente et la date de remise diffèrent : rattachement comptable à trancher.
+     *
+     * @return list<array<string, mixed>>
+     */
+    public function listPendingLateRemittanceAttributions(int $restaurantId): array
+    {
+        $this->ensureSchema();
+        $statement = $this->database->pdo()->prepare(
+            'SELECT ct.*,
+                    fu.full_name AS from_user_name,
+                    tu.full_name AS to_user_name,
+                    s.id AS sale_id,
+                    s.total_amount AS sale_total_amount,
+                    s.status AS sale_status,
+                    s.validated_at AS sale_validated_at,
+                    s.created_at AS sale_created_at,
+                    sr.id AS server_request_id,
+                    sr.service_reference,
+                    su.full_name AS sale_server_name
+             FROM cash_transfers ct
+             LEFT JOIN users fu ON fu.id = ct.from_user_id
+             LEFT JOIN users tu ON tu.id = ct.to_user_id
+             LEFT JOIN sales s ON ct.source_type = "sale" AND s.id = ct.source_id
+             LEFT JOIN server_requests sr ON s.origin_type = "server_request" AND sr.id = s.origin_id
+             LEFT JOIN users su ON su.id = s.server_id
+             WHERE ct.restaurant_id = :restaurant_id
+               AND ct.source_type = "sale"
+               AND ct.late_remittance_basis = "PENDING"
+             ORDER BY ct.id ASC'
+        );
+        $statement->execute(['restaurant_id' => $restaurantId]);
+
+        return $statement->fetchAll(PDO::FETCH_ASSOC);
+    }
+
+    public function decideLateRemittanceAttribution(int $restaurantId, int $transferId, string $basis, array $actor): void
+    {
+        $this->ensureSchema();
+        $basis = strtoupper(trim($basis));
+        if (!in_array($basis, ['SALE_DAY', 'REMITTANCE_DAY'], true)) {
+            throw new \RuntimeException('Choix de rattachement invalide.');
+        }
+        $transfer = $this->findTransferInRestaurant($transferId, $restaurantId);
+        if ((string) ($transfer['source_type'] ?? '') !== 'sale' || (string) ($transfer['late_remittance_basis'] ?? '') !== 'PENDING') {
+            throw new \RuntimeException('Aucune remise tardive en attente sur ce transfert.');
+        }
+        $statement = $this->database->pdo()->prepare(
+            'UPDATE cash_transfers
+             SET late_remittance_basis = :basis,
+                 note = TRIM(CONCAT(IFNULL(note, ""), " [Rattachement remise tardive: ", :basis_label, " par ", :decider, "]")),
+                 updated_at = NOW()
+             WHERE id = :id AND restaurant_id = :restaurant_id AND late_remittance_basis = "PENDING"'
+        );
+        $statement->execute([
+            'basis' => $basis,
+            'basis_label' => $basis === 'SALE_DAY' ? 'jour de vente' : 'jour de remise',
+            'decider' => (string) ($actor['full_name'] ?? 'superviseur'),
+            'id' => $transferId,
+            'restaurant_id' => $restaurantId,
+        ]);
+        if ($statement->rowCount() < 1) {
+            throw new \RuntimeException('Decision impossible (statut change ou transfert introuvable).');
+        }
+        $this->audit($restaurantId, $actor, 'cash_late_remittance_attribution', 'cash_transfers', $transferId, [
+            'basis' => $basis,
+            'sale_id' => (int) ($transfer['source_id'] ?? 0),
+        ], 'Rattachement remise tardive (vente vs jour de remise)');
     }
 
     /**
@@ -571,13 +658,21 @@ final class CashService
             $sql .= ' AND (ct.from_user_id = :user_id OR ct.to_user_id = :user_id OR ct.received_by = :user_id)';
             $params['user_id'] = (int) $filters['user_id'];
         }
-        if (!empty($filters['date_from'])) {
-            $sql .= ' AND COALESCE(ct.received_at, ct.requested_at, ct.created_at) >= :date_from';
-            $params['date_from'] = (string) $filters['date_from'] . ' 00:00:00';
-        }
-        if (!empty($filters['date_to'])) {
-            $sql .= ' AND COALESCE(ct.received_at, ct.requested_at, ct.created_at) <= :date_to';
-            $params['date_to'] = (string) $filters['date_to'] . ' 23:59:59';
+        if (!empty($filters['date_from']) && !empty($filters['date_to'])) {
+            $sql .= ' AND ' . $this->sqlCashTransferPeriodPredicate('ct');
+            $params['start_at'] = (string) $filters['date_from'] . ' 00:00:00';
+            $params['end_at'] = (string) $filters['date_to'] . ' 23:59:59';
+            $params['dfrom'] = (string) $filters['date_from'];
+            $params['dto'] = (string) $filters['date_to'];
+        } else {
+            if (!empty($filters['date_from'])) {
+                $sql .= ' AND COALESCE(ct.received_at, ct.requested_at, ct.created_at) >= :date_from';
+                $params['date_from'] = (string) $filters['date_from'] . ' 00:00:00';
+            }
+            if (!empty($filters['date_to'])) {
+                $sql .= ' AND COALESCE(ct.received_at, ct.requested_at, ct.created_at) <= :date_to';
+                $params['date_to'] = (string) $filters['date_to'] . ' 23:59:59';
+            }
         }
 
         $sql .= ' ORDER BY ct.id DESC';
@@ -1097,7 +1192,90 @@ final class CashService
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci'
         );
 
+        $this->ensureCashTransferAttributionColumns();
         $this->ensureCashPermissionAndRole();
+    }
+
+    /**
+     * Période [:start_at,:end_at] (datetime) et [:dfrom,:dto] (Y-m-d inclus) pour rattachement des remises vente.
+     */
+    private function sqlCashTransferPeriodPredicate(string $alias): string
+    {
+        return '(('
+            . '(' . $alias . '.source_type <> "sale" OR ' . $alias . '.source_type IS NULL)'
+            . ' AND COALESCE(' . $alias . '.received_at, ' . $alias . '.requested_at, ' . $alias . '.created_at) >= :start_at'
+            . ' AND COALESCE(' . $alias . '.received_at, ' . $alias . '.requested_at, ' . $alias . '.created_at) <= :end_at)'
+            . ' OR ('
+            . $alias . '.source_type = "sale"'
+            . ' AND NOT IFNULL(' . $alias . '.late_remittance_basis, "") = "PENDING"'
+            . ' AND ('
+            . '(' . $alias . '.late_remittance_basis = "SALE_DAY" AND ' . $alias . '.sale_day_ymd IS NOT NULL AND ' . $alias . '.sale_day_ymd >= :dfrom AND ' . $alias . '.sale_day_ymd <= :dto)'
+            . ' OR (' . $alias . '.late_remittance_basis = "REMITTANCE_DAY" AND ' . $alias . '.remittance_day_ymd IS NOT NULL AND ' . $alias . '.remittance_day_ymd >= :dfrom AND ' . $alias . '.remittance_day_ymd <= :dto)'
+            . ' OR ('
+            . '(' . $alias . '.late_remittance_basis IS NULL OR ' . $alias . '.late_remittance_basis = "")'
+            . ' AND ' . $alias . '.sale_day_ymd IS NOT NULL AND ' . $alias . '.remittance_day_ymd IS NOT NULL AND ' . $alias . '.sale_day_ymd = ' . $alias . '.remittance_day_ymd'
+            . ' AND ' . $alias . '.sale_day_ymd >= :dfrom AND ' . $alias . '.sale_day_ymd <= :dto)'
+            . ' OR ('
+            . 'COALESCE(' . $alias . '.received_at, ' . $alias . '.requested_at, ' . $alias . '.created_at) >= :start_at'
+            . ' AND COALESCE(' . $alias . '.received_at, ' . $alias . '.requested_at, ' . $alias . '.created_at) <= :end_at'
+            . ' AND NOT (' . $alias . '.late_remittance_basis IN ("SALE_DAY", "REMITTANCE_DAY")'
+            . ' OR ('
+            . '(' . $alias . '.late_remittance_basis IS NULL OR ' . $alias . '.late_remittance_basis = "")'
+            . ' AND ' . $alias . '.sale_day_ymd IS NOT NULL AND ' . $alias . '.remittance_day_ymd IS NOT NULL AND ' . $alias . '.sale_day_ymd = ' . $alias . '.remittance_day_ymd'
+            . '))))))';
+    }
+
+    private function reportTimezone(int $restaurantId): DateTimeZone
+    {
+        $restaurant = Container::getInstance()->get('restaurantAdmin')->findRestaurant($restaurantId);
+        $timezoneName = (string) ($restaurant['settings']['restaurant_reports_timezone'] ?? $restaurant['timezone'] ?? config('app.timezone', 'Africa/Lagos'));
+        try {
+            return new DateTimeZone($timezoneName);
+        } catch (Throwable) {
+            return new DateTimeZone((string) config('app.timezone', 'Africa/Lagos'));
+        }
+    }
+
+    private function mysqlDateTimeToYmd(int $restaurantId, string $mysqlDatetime): ?string
+    {
+        $mysqlDatetime = trim($mysqlDatetime);
+        if ($mysqlDatetime === '') {
+            return null;
+        }
+        $tz = $this->reportTimezone($restaurantId);
+        try {
+            return (new DateTimeImmutable($mysqlDatetime, $tz))->format('Y-m-d');
+        } catch (Throwable) {
+            return null;
+        }
+    }
+
+    private function ensureCashTransferAttributionColumns(): void
+    {
+        $pdo = $this->database->pdo();
+        try {
+            $db = $pdo->query('SELECT DATABASE()')->fetchColumn();
+            if (!is_string($db) || $db === '') {
+                return;
+            }
+            $st = $pdo->prepare(
+                'SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+                 WHERE TABLE_SCHEMA = :s AND TABLE_NAME = "cash_transfers" AND COLUMN_NAME = "sale_day_ymd"'
+            );
+            $st->execute(['s' => $db]);
+            if ((int) $st->fetchColumn() > 0) {
+                return;
+            }
+        } catch (Throwable) {
+            return;
+        }
+        try {
+            $pdo->exec('ALTER TABLE cash_transfers ADD COLUMN sale_day_ymd DATE NULL AFTER source_id');
+            $pdo->exec('ALTER TABLE cash_transfers ADD COLUMN remittance_day_ymd DATE NULL AFTER sale_day_ymd');
+            $pdo->exec('ALTER TABLE cash_transfers ADD COLUMN late_remittance_basis VARCHAR(24) NULL AFTER remittance_day_ymd');
+        } catch (Throwable) {
+            // Colonnes déjà présentes ou environnement sans ALTER.
+        }
     }
 
     private function ensureCashPermissionAndRole(): void

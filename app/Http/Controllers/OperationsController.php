@@ -546,6 +546,11 @@ final class OperationsController
             flash('success', $autoSales . ' ligne(s) serveur ou production en attente ont ete regularisee(s) automatiquement.');
         }
 
+        $actor = current_user();
+        $agentCash = (is_array($actor) && ($actor['role_code'] ?? null) === 'cashier_server')
+            ? Container::getInstance()->get('reportService')->agentServerCashAccountReadModel($restaurantId, (int) ($actor['id'] ?? 0))
+            : null;
+
         view('operations/sales', [
             'title' => 'Ventes',
             'restaurant' => Container::getInstance()->get('restaurantAdmin')->findRestaurant($restaurantId),
@@ -559,6 +564,7 @@ final class OperationsController
             'menu_items' => Container::getInstance()->get('menuAdmin')->listPublicItems($restaurantId),
             'productions' => Container::getInstance()->get('kitchenService')->listProductions($restaurantId),
             'sales_overview' => Container::getInstance()->get('salesService')->serverSalesOverview($restaurantId, $this->salesActorIdFilter()),
+            'agent_server_cash' => $agentCash,
             'incident_types' => $incidentCatalog['incident_types'],
             'flash_success' => flash('success'),
             'flash_error' => flash('error'),
@@ -884,6 +890,35 @@ final class OperationsController
         redirect($this->moduleUrl('/owner', $restaurantId));
     }
 
+    public function decideLateSaleRemittanceAttribution(Request $request): void
+    {
+        $restaurantId = $this->resolveRestaurantId($request);
+        $actor = current_user();
+        if (!in_array($actor['role_code'] ?? null, ['manager', 'owner'], true)) {
+            flash('error', 'Action reservee au gerant ou au proprietaire.');
+            redirect($this->moduleUrl('/owner', $restaurantId));
+        }
+        if (($actor['role_code'] ?? null) === 'manager') {
+            authorize_access('cash.receive.manager');
+        } else {
+            authorize_access('cash.receive.owner');
+        }
+
+        try {
+            Container::getInstance()->get('cashService')->decideLateRemittanceAttribution(
+                $restaurantId,
+                (int) $request->route('id'),
+                (string) $request->input('basis', ''),
+                $actor
+            );
+            flash('success', 'Rattachement de la remise tardive enregistre.');
+        } catch (\Throwable $e) {
+            flash('error', ui_safe_message($e->getMessage()));
+        }
+
+        redirect($this->moduleUrl('/owner', $restaurantId));
+    }
+
     public function createCashMovement(Request $request): void
     {
         $restaurantId = $this->resolveRestaurantId($request);
@@ -1050,6 +1085,9 @@ final class OperationsController
                 static fn (array $row): bool => empty($row['archived_at'])
             )),
             'report' => Container::getInstance()->get('reportService')->dailyReport($restaurantId, $date, $period, $viewFilters),
+            'cash_today_snapshot' => Container::getInstance()->get('reportService')->cashTodayOperationalSnapshot($restaurantId),
+            'pending_late_remittance_attributions' => Container::getInstance()->get('cashService')->listPendingLateRemittanceAttributions($restaurantId),
+            'today_ymd_restaurant' => $todayYmd,
         ]);
 
         audit_access('reports', $restaurantId, 'screens', 'daily-report', 'Consultation rapport journalier');

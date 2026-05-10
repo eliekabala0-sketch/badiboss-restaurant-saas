@@ -63,6 +63,295 @@ final class ReportService
         ];
     }
 
+    /**
+     * Synthèse « situation actuelle » pour le jour calendaire du restaurant (lecture seule).
+     *
+     * @return array<string, mixed>
+     */
+    public function cashTodayOperationalSnapshot(int $restaurantId): array
+    {
+        $timezone = $this->reportTimezone($restaurantId);
+        $todayYmd = $this->todayForRestaurant($restaurantId);
+        $selectedDate = $this->normalizeDate($todayYmd, $timezone);
+        [$startAt, $endAt, $label] = $this->periodBounds($selectedDate, 'daily', $timezone);
+        $s = $startAt->format('Y-m-d H:i:s');
+        $e = $endAt->format('Y-m-d H:i:s');
+        $closedIn = '"VALIDE","CLOTURE","VENDU_TOTAL","VENDU_PARTIEL"';
+
+        $soldStmt = $this->database->pdo()->prepare(
+            'SELECT COALESCE(SUM(s.total_amount), 0) AS t
+             FROM sales s
+             WHERE s.restaurant_id = :rid
+               AND s.status IN (' . $closedIn . ')
+               AND COALESCE(s.validated_at, s.created_at) >= :s AND COALESCE(s.validated_at, s.created_at) < :e'
+        );
+        $soldStmt->execute(['rid' => $restaurantId, 's' => $s, 'e' => $e]);
+        $totalSoldClosed = (float) ($soldStmt->fetch(PDO::FETCH_ASSOC)['t'] ?? 0);
+
+        $remisStmt = $this->database->pdo()->prepare(
+            'SELECT COALESCE(SUM(ct.amount), 0) AS t
+             FROM cash_transfers ct
+             WHERE ct.restaurant_id = :rid AND ct.source_type = "sale"
+               AND ct.status NOT IN ("REMISE_REJETEE_CAISSE", "REMISE_REJETEE_GERANT")
+               AND COALESCE(ct.received_at, ct.requested_at, ct.created_at) >= :s
+               AND COALESCE(ct.received_at, ct.requested_at, ct.created_at) < :e'
+        );
+        $remisStmt->execute(['rid' => $restaurantId, 's' => $s, 'e' => $e]);
+        $remisAuCaisse = (float) ($remisStmt->fetch(PDO::FETCH_ASSOC)['t'] ?? 0);
+
+        $recuStmt = $this->database->pdo()->prepare(
+            'SELECT COALESCE(SUM(COALESCE(ct.amount_received, ct.amount)), 0) AS t
+             FROM cash_transfers ct
+             WHERE ct.restaurant_id = :rid AND ct.source_type = "sale"
+               AND ct.status IN ("RECU_CAISSE", "ECART_SIGNALE")
+               AND ct.received_at IS NOT NULL
+               AND ct.received_at >= :s AND ct.received_at < :e'
+        );
+        $recuStmt->execute(['rid' => $restaurantId, 's' => $s, 'e' => $e]);
+        $recuCaisse = (float) ($recuStmt->fetch(PDO::FETCH_ASSOC)['t'] ?? 0);
+
+        $expStmt = $this->database->pdo()->prepare(
+            'SELECT COALESCE(SUM(cm.amount), 0) AS t FROM cash_movements cm
+             WHERE cm.restaurant_id = :rid AND cm.movement_type = "DEPENSE"
+               AND cm.created_at >= :s AND cm.created_at < :e'
+        );
+        $expStmt->execute(['rid' => $restaurantId, 's' => $s, 'e' => $e]);
+        $depenses = (float) ($expStmt->fetch(PDO::FETCH_ASSOC)['t'] ?? 0);
+
+        $shortfall = $this->serverRemittanceShortfallBreakdown($restaurantId, $startAt, $endAt, 0);
+        $manquantJour = 0.0;
+        foreach (($shortfall['agents'] ?? []) as $ag) {
+            $manquantJour += (float) ($ag['shortfall'] ?? 0);
+        }
+
+        $ecartStmt = $this->database->pdo()->prepare(
+            'SELECT COALESCE(SUM(ABS(ct.discrepancy_amount)), 0) AS t
+             FROM cash_transfers ct
+             WHERE ct.restaurant_id = :rid AND ct.source_type = "sale"
+               AND ct.received_at >= :s AND ct.received_at < :e'
+        );
+        $ecartStmt->execute(['rid' => $restaurantId, 's' => $s, 'e' => $e]);
+        $ecarts = (float) ($ecartStmt->fetch(PDO::FETCH_ASSOC)['t'] ?? 0);
+
+        $cashSvc = Container::getInstance()->get('cashService');
+        $clarity = $cashSvc->periodCashClarity($restaurantId, $todayYmd, $todayYmd);
+        $balanceFull = (float) ($cashSvc->dashboard($restaurantId, [])['summary']['cash_balance'] ?? 0);
+
+        return [
+            'date_ymd' => $todayYmd,
+            'period_label' => $label,
+            'total_sold_closed' => round($totalSoldClosed, 2),
+            'remitted_to_cash_physical' => round($remisAuCaisse, 2),
+            'cashier_received_today' => round($recuCaisse, 2),
+            'shortfall_today_total' => round($manquantJour, 2),
+            'expenses_today' => round($depenses, 2),
+            'cash_balance_current' => round($balanceFull, 2),
+            'discrepancies_today' => round($ecarts, 2),
+            'cash_clarity_today' => $clarity,
+            'server_shortfall' => $shortfall,
+        ];
+    }
+
+    /**
+     * Manquants serveur : ventes clôturées vs remises effectives (hors PENDING et rejets).
+     *
+     * @return array{agents: list<array<string, mixed>>, grand_shortfall: float, grand_sold: float}
+     */
+    public function serverRemittanceShortfallBreakdown(int $restaurantId, DateTimeImmutable $startAt, DateTimeImmutable $endAt, int $filterUserId = 0): array
+    {
+        $s = $startAt->format('Y-m-d H:i:s');
+        $e = $endAt->format('Y-m-d H:i:s');
+        $closedIn = '"VALIDE","CLOTURE","VENDU_TOTAL","VENDU_PARTIEL"';
+        $extraUser = $filterUserId > 0 ? ' AND s.server_id = ' . $filterUserId : '';
+
+        $sql = 'SELECT s.id AS sale_id,
+                       s.server_id,
+                       COALESCE(u.full_name, "Serveur") AS server_name,
+                       s.total_amount,
+                       s.validated_at,
+                       s.created_at,
+                       ct.id AS transfer_id,
+                       ct.status AS transfer_status,
+                       ct.amount AS transfer_amount,
+                       ct.late_remittance_basis
+                FROM sales s
+                LEFT JOIN users u ON u.id = s.server_id
+                LEFT JOIN cash_transfers ct ON ct.id = (
+                    SELECT c2.id FROM cash_transfers c2
+                    WHERE c2.restaurant_id = s.restaurant_id
+                      AND c2.source_type = "sale" AND c2.source_id = s.id
+                    ORDER BY c2.id DESC LIMIT 1
+                )
+                WHERE s.restaurant_id = :rid
+                  AND s.status IN (' . $closedIn . ')
+                  AND COALESCE(s.validated_at, s.created_at) >= :st
+                  AND COALESCE(s.validated_at, s.created_at) < :en' . $extraUser . '
+                ORDER BY s.server_id ASC, s.id ASC';
+        $st = $this->database->pdo()->prepare($sql);
+        $st->execute(['rid' => $restaurantId, 'st' => $s, 'en' => $e]);
+        $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+
+        $missingSaleIds = [];
+        foreach ($rows as $row) {
+            if (!$this->saleRowHasEffectiveRemittance($row)) {
+                $missingSaleIds[] = (int) $row['sale_id'];
+            }
+        }
+        $itemsBySale = $this->saleItemsGroupedForSales($restaurantId, $missingSaleIds);
+
+        $byServer = [];
+        $grandSold = 0.0;
+        $grandShort = 0.0;
+        foreach ($rows as $row) {
+            $sid = (int) ($row['server_id'] ?? 0);
+            if (!isset($byServer[$sid])) {
+                $byServer[$sid] = [
+                    'server_user_id' => $sid,
+                    'server_name' => (string) ($row['server_name'] ?? ''),
+                    'sold_closed' => 0.0,
+                    'remitted_effective' => 0.0,
+                    'shortfall' => 0.0,
+                    'missing_sales' => [],
+                ];
+            }
+            $amt = (float) ($row['total_amount'] ?? 0);
+            $byServer[$sid]['sold_closed'] += $amt;
+            $grandSold += $amt;
+            if ($this->saleRowHasEffectiveRemittance($row)) {
+                $byServer[$sid]['remitted_effective'] += $amt;
+            } else {
+                $byServer[$sid]['shortfall'] += $amt;
+                $grandShort += $amt;
+                $saleId = (int) $row['sale_id'];
+                $byServer[$sid]['missing_sales'][] = [
+                    'sale_id' => $saleId,
+                    'total_amount' => $amt,
+                    'validated_at' => $row['validated_at'] ?? null,
+                    'lines' => $itemsBySale[$saleId] ?? [],
+                ];
+            }
+        }
+
+        $agents = array_values($byServer);
+        usort($agents, static fn (array $a, array $b): int => ((float) ($b['shortfall'] ?? 0) <=> (float) ($a['shortfall'] ?? 0)));
+
+        return [
+            'agents' => $agents,
+            'grand_shortfall' => round($grandShort, 2),
+            'grand_sold' => round($grandSold, 2),
+        ];
+    }
+
+    /**
+     * Compte serveur : aujourd’hui + dette antérieure (lecture).
+     *
+     * @return array<string, mixed>
+     */
+    public function agentServerCashAccountReadModel(int $restaurantId, int $serverUserId): array
+    {
+        if ($serverUserId <= 0) {
+            return ['today' => null, 'legacy_shortfall' => null];
+        }
+        $timezone = $this->reportTimezone($restaurantId);
+        $todayYmd = $this->todayForRestaurant($restaurantId);
+        $todayStart = $this->normalizeDate($todayYmd, $timezone);
+        [$tStart, $tEnd] = $this->periodBounds($todayStart, 'daily', $timezone);
+
+        $todaySf = $this->serverRemittanceShortfallBreakdown($restaurantId, $tStart, $tEnd, $serverUserId);
+        $todayAgent = null;
+        foreach (($todaySf['agents'] ?? []) as $ag) {
+            if ((int) ($ag['server_user_id'] ?? 0) === $serverUserId) {
+                $todayAgent = $ag;
+                break;
+            }
+        }
+        if ($todayAgent === null) {
+            $todayAgent = [
+                'server_user_id' => $serverUserId,
+                'server_name' => '',
+                'sold_closed' => 0.0,
+                'remitted_effective' => 0.0,
+                'shortfall' => 0.0,
+                'missing_sales' => [],
+            ];
+        }
+
+        $pastEnd = $tStart;
+        $pastStart = $pastEnd->sub(new DateInterval('P400D'));
+        $pastSf = $this->serverRemittanceShortfallBreakdown($restaurantId, $pastStart, $pastEnd, $serverUserId);
+        $pastAgent = ['shortfall' => 0.0, 'missing_sales' => []];
+        foreach (($pastSf['agents'] ?? []) as $ag) {
+            if ((int) ($ag['server_user_id'] ?? 0) === $serverUserId) {
+                $pastAgent = $ag;
+                break;
+            }
+        }
+
+        return [
+            'today' => $todayAgent,
+            'legacy_shortfall' => round((float) ($pastAgent['shortfall'] ?? 0), 2),
+            'legacy_detail' => $pastAgent['missing_sales'] ?? [],
+        ];
+    }
+
+    private function saleRowHasEffectiveRemittance(array $row): bool
+    {
+        $tid = (int) ($row['transfer_id'] ?? 0);
+        if ($tid <= 0) {
+            return false;
+        }
+        $st = (string) ($row['transfer_status'] ?? '');
+        if (in_array($st, ['REMISE_REJETEE_CAISSE', 'REMISE_REJETEE_GERANT'], true)) {
+            return false;
+        }
+        if ((string) ($row['late_remittance_basis'] ?? '') === 'PENDING') {
+            return false;
+        }
+
+        return true;
+    }
+
+    /**
+     * @param list<int> $saleIds
+     *
+     * @return array<int, list<array<string, mixed>>>
+     */
+    private function saleItemsGroupedForSales(int $restaurantId, array $saleIds): array
+    {
+        if ($saleIds === []) {
+            return [];
+        }
+        $saleIds = array_values(array_unique(array_filter($saleIds, static fn (int $v): bool => $v > 0)));
+        if ($saleIds === []) {
+            return [];
+        }
+        $in = implode(',', array_fill(0, count($saleIds), '?'));
+        $sql = 'SELECT si.sale_id, mi.name AS menu_item_name, si.quantity, si.unit_price,
+                       (si.quantity * si.unit_price) AS line_total
+                FROM sale_items si
+                INNER JOIN menu_items mi ON mi.id = si.menu_item_id
+                INNER JOIN sales s ON s.id = si.sale_id
+                WHERE s.restaurant_id = ? AND si.sale_id IN (' . $in . ')
+                ORDER BY si.sale_id ASC, si.id ASC';
+        $st = $this->database->pdo()->prepare($sql);
+        $st->execute(array_merge([$restaurantId], $saleIds));
+        $out = [];
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $ln) {
+            $sid = (int) ($ln['sale_id'] ?? 0);
+            if (!isset($out[$sid])) {
+                $out[$sid] = [];
+            }
+            $out[$sid][] = [
+                'menu_item_name' => (string) ($ln['menu_item_name'] ?? ''),
+                'quantity' => (float) ($ln['quantity'] ?? 0),
+                'unit_price' => (float) ($ln['unit_price'] ?? 0),
+                'line_total' => (float) ($ln['line_total'] ?? 0),
+            ];
+        }
+
+        return $out;
+    }
+
     public function reportForPeriod(int $restaurantId, string $date, string $period, array $viewFilters = []): array
     {
         $timezone = $this->reportTimezone($restaurantId);
@@ -84,6 +373,8 @@ final class ReportService
         $summary['auto_closed_operations'] = $this->autoClosedServerRequestAudits($restaurantId, $startAt, $endAt);
         $summary['leaderboards'] = $this->leaderboardSlices($restaurantId, $selectedDate);
         $summary['agents_activity'] = $this->agentsActivityBreakdown($restaurantId, $startAt, $endAt, $viewFilters, $reportActivityIndex);
+        $summary['sales_by_category'] = $this->salesByCategoryReport($restaurantId, $startAt, $endAt, $closedOnly, $userId, $viewFilters);
+        $summary['server_remittance_shortfall'] = $this->serverRemittanceShortfallBreakdown($restaurantId, $startAt, $endAt, $userId);
         $needleArt = mb_strtolower(trim((string) ($viewFilters['article_search'] ?? '')), 'UTF-8');
         if ($needleArt !== '') {
             $summary['sales_detail_by_server'] = $this->filterSalesDetailByArticleSubstring($summary['sales_detail_by_server'], $needleArt);
@@ -1038,6 +1329,94 @@ final class ReportService
         }
 
         return $out;
+    }
+
+    /**
+     * Ventes agrégées par catégorie de menu (quantités, totaux, %, article le plus vendu).
+     *
+     * @return array{categories: list<array<string, mixed>>, grand_total: float}
+     */
+    private function salesByCategoryReport(int $restaurantId, DateTimeImmutable $startAt, DateTimeImmutable $endAt, bool $closedOnly, int $filterUserId, array $viewFilters): array
+    {
+        $menuItemId = (int) ($viewFilters['menu_item_id'] ?? 0);
+        $roleCode = trim((string) ($viewFilters['role_code'] ?? ''));
+        $extra = '';
+        if ($closedOnly) {
+            $extra .= ' AND s.status IN ("VALIDE","CLOTURE","VENDU_TOTAL","VENDU_PARTIEL")';
+        }
+        if ($filterUserId > 0) {
+            $extra .= ' AND s.server_id = ' . $filterUserId;
+        }
+        if ($roleCode !== '') {
+            $extra .= ' AND r.code = ' . $this->database->pdo()->quote($roleCode);
+        }
+        if ($menuItemId > 0) {
+            $extra .= ' AND mi.id = ' . $menuItemId;
+        }
+        $statement = $this->database->pdo()->prepare(
+            'SELECT COALESCE(mc.id, 0) AS category_id,
+                    COALESCE(mc.name, "Sans categorie") AS category_name,
+                    mi.id AS menu_item_id,
+                    mi.name AS menu_item_name,
+                    COALESCE(SUM(si.quantity), 0) AS qty_sold,
+                    COALESCE(SUM(si.quantity * si.unit_price), 0) AS line_total
+             FROM sale_items si
+             INNER JOIN sales s ON s.id = si.sale_id
+             INNER JOIN menu_items mi ON mi.id = si.menu_item_id
+             LEFT JOIN menu_categories mc ON mc.id = mi.category_id
+             LEFT JOIN users u ON u.id = s.server_id
+             LEFT JOIN roles r ON r.id = u.role_id
+             WHERE s.restaurant_id = :restaurant_id
+               AND COALESCE(s.validated_at, s.created_at) >= :start_at
+               AND COALESCE(s.validated_at, s.created_at) < :end_at' . $extra . '
+             GROUP BY category_id, category_name, mi.id, mi.name
+             ORDER BY category_name ASC, line_total DESC'
+        );
+        $statement->execute([
+            'restaurant_id' => $restaurantId,
+            'start_at' => $startAt->format('Y-m-d H:i:s'),
+            'end_at' => $endAt->format('Y-m-d H:i:s'),
+        ]);
+        $rows = $statement->fetchAll(PDO::FETCH_ASSOC);
+        $byCat = [];
+        $grand = 0.0;
+        foreach ($rows as $row) {
+            $cid = (int) ($row['category_id'] ?? 0);
+            $cname = (string) ($row['category_name'] ?? '');
+            $key = $cid . '|' . $cname;
+            if (!isset($byCat[$key])) {
+                $byCat[$key] = [
+                    'category_id' => $cid,
+                    'category_name' => $cname,
+                    'quantity_total' => 0.0,
+                    'total_amount' => 0.0,
+                    'top_item_name' => '',
+                    'top_item_qty' => 0.0,
+                    'top_item_amount' => 0.0,
+                ];
+            }
+            $qty = (float) ($row['qty_sold'] ?? 0);
+            $lt = (float) ($row['line_total'] ?? 0);
+            $byCat[$key]['quantity_total'] += $qty;
+            $byCat[$key]['total_amount'] += $lt;
+            $grand += $lt;
+            if ($lt > (float) ($byCat[$key]['top_item_amount'] ?? 0) + 0.0001
+                || ($lt >= (float) ($byCat[$key]['top_item_amount'] ?? 0) - 0.0001 && $qty > (float) ($byCat[$key]['top_item_qty'] ?? 0))) {
+                $byCat[$key]['top_item_name'] = (string) ($row['menu_item_name'] ?? '');
+                $byCat[$key]['top_item_qty'] = $qty;
+                $byCat[$key]['top_item_amount'] = $lt;
+            }
+        }
+        $categories = array_values($byCat);
+        foreach ($categories as &$c) {
+            $c['total_amount'] = round((float) ($c['total_amount'] ?? 0), 2);
+            $c['quantity_total'] = round((float) ($c['quantity_total'] ?? 0), 2);
+            $c['pct_of_grand'] = $grand <= 0.0 ? 0.0 : round(100.0 * (float) ($c['total_amount'] ?? 0) / $grand, 2);
+        }
+        unset($c);
+        usort($categories, static fn (array $a, array $b): int => ((float) ($b['total_amount'] ?? 0) <=> (float) ($a['total_amount'] ?? 0)));
+
+        return ['categories' => $categories, 'grand_total' => round($grand, 2)];
     }
 
     /**

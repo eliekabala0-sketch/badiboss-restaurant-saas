@@ -5,6 +5,8 @@ $subscriptionTimezone = safe_timezone($subscription['timezone'] ?? ($restaurant[
 $restaurantCurrency = restaurant_currency($restaurant);
 $restaurantLogo = restaurant_media_url_or_default($restaurant['logo_url'] ?? null, 'logo');
 $restaurantCover = restaurant_media_url_or_default($restaurant['cover_image_url'] ?? null, 'photo');
+$cashTodaySnapshot = $cash_today_snapshot ?? null;
+$pendingLateRemittance = $pending_late_remittance_attributions ?? [];
 $printQuery = http_build_query(['print' => '1']);
 $decisionBadgeClass = static function (?string $status): string {
     return match ((string) $status) {
@@ -66,6 +68,52 @@ $decisionBadgeClass = static function (?string $status): string {
     <article class="card stat"><span>Paiement</span><strong><?= e(subscription_payment_label($subscription['payment_status'] ?? null)) ?></strong></article>
 </section>
 
+<?php if (!empty($cashTodaySnapshot)): ?>
+<section class="card" style="padding:22px; margin-bottom:24px;">
+    <div class="topbar" style="margin-bottom:14px;">
+        <div>
+            <h2 style="margin:0;">Situation actuelle / Aujourd’hui</h2>
+            <p class="muted" style="margin:6px 0 0;"><?= e((string) ($cashTodaySnapshot['period_label'] ?? '')) ?> · <?= e((string) ($cashTodaySnapshot['date_ymd'] ?? '')) ?></p>
+        </div>
+        <?php if (!empty($can_access_reports)): ?><a href="/rapport?report_preset=today" class="button-muted no-print">Ouvrir le rapport du jour</a><?php endif; ?>
+    </div>
+    <div class="grid stats">
+        <article class="card stat"><span>Total vendu (clôturé)</span><strong><?= e(format_money((float) ($cashTodaySnapshot['total_sold_closed'] ?? 0), $restaurantCurrency)) ?></strong></article>
+        <article class="card stat"><span>Remis à caisse</span><strong><?= e(format_money((float) ($cashTodaySnapshot['remitted_to_cash_physical'] ?? 0), $restaurantCurrency)) ?></strong></article>
+        <article class="card stat"><span>Reçu caisse</span><strong><?= e(format_money((float) ($cashTodaySnapshot['cashier_received_today'] ?? 0), $restaurantCurrency)) ?></strong></article>
+        <article class="card stat"><span>Non versé / manquant</span><strong><?= e(format_money((float) ($cashTodaySnapshot['shortfall_today_total'] ?? 0), $restaurantCurrency)) ?></strong></article>
+        <article class="card stat"><span>Dépenses</span><strong><?= e(format_money((float) ($cashTodaySnapshot['expenses_today'] ?? 0), $restaurantCurrency)) ?></strong></article>
+        <article class="card stat"><span>Solde caisse (cumul)</span><strong><?= e(format_money((float) ($cashTodaySnapshot['cash_balance_current'] ?? 0), $restaurantCurrency)) ?></strong></article>
+        <article class="card stat"><span>Écarts (jour)</span><strong><?= e(format_money((float) ($cashTodaySnapshot['discrepancies_today'] ?? 0), $restaurantCurrency)) ?></strong></article>
+    </div>
+    <?php $sfAgents = $cashTodaySnapshot['server_shortfall']['agents'] ?? []; ?>
+    <?php if (array_filter($sfAgents, static fn (array $a): bool => ((float) ($a['shortfall'] ?? 0)) > 0.0001)): ?>
+    <details class="compact-card no-print" data-autoclose-details style="margin-top:16px;">
+        <summary><strong>Manquants par serveur</strong> · détail articles</summary>
+        <?php foreach ($sfAgents as $ag): ?>
+            <?php if ((float) ($ag['shortfall'] ?? 0) <= 0.0001) { continue; } ?>
+            <article class="card" style="padding:14px; margin-top:12px; border-radius:14px;">
+                <strong><?= e(named_actor_label($ag['server_name'] ?? null, 'cashier_server')) ?></strong>
+                <p class="muted" style="margin:6px 0 0;">Vendu clôturé : <?= e(format_money((float) ($ag['sold_closed'] ?? 0),$restaurantCurrency)) ?> · Remis (effectif) : <?= e(format_money((float) ($ag['remitted_effective'] ?? 0),$restaurantCurrency)) ?> · Non versé : <strong><?= e(format_money((float) ($ag['shortfall'] ?? 0),$restaurantCurrency)) ?></strong></p>
+                <?php foreach (($ag['missing_sales'] ?? []) as $ms): ?>
+                    <div class="muted" style="margin-top:10px;">Vente #<?= e((string) ($ms['sale_id'] ?? '')) ?> — <?= e(format_money((float) ($ms['total_amount'] ?? 0),$restaurantCurrency)) ?></div>
+                    <ul style="margin:6px 0 0; padding-left:18px; line-height:1.65;">
+                        <?php foreach (($ms['lines'] ?? []) as $ln): ?>
+                            <li><?= e((string) ($ln['menu_item_name'] ?? '')) ?> × <?= e((string) ($ln['quantity'] ?? '')) ?> : <?= e(format_money((float) ($ln['line_total'] ?? 0),$restaurantCurrency)) ?></li>
+                        <?php endforeach; ?>
+                    </ul>
+                <?php endforeach; ?>
+            </article>
+        <?php endforeach; ?>
+    </details>
+    <?php endif; ?>
+</section>
+<?php endif; ?>
+
+<details class="card" style="padding:18px 22px; margin-bottom:24px;" id="owner-global-history">
+    <summary style="cursor:pointer; font-size:1.05rem;"><strong>Historique / Vue globale</strong> — rapports, périodes, totaux par serveur</summary>
+    <div style="padding-top:16px;">
+
 <?php if (!empty($report_detail_summary) && !empty($can_access_reports)): ?>
 <section class="card" style="padding:20px; margin-bottom:24px;">
     <details class="compact-card" data-autoclose-details>
@@ -119,6 +167,44 @@ $decisionBadgeClass = static function (?string $status): string {
 <?php endif; ?>
 
 <?php endif; ?>
+
+    <?php if (!empty($sales_period_totals)): ?>
+        <section class="card" style="padding:24px; margin-top:12px;">
+            <h3 style="margin-top:0;">Total vendu par serveur (périodes)</h3>
+            <p class="muted">Jour, semaine et mois — détail par serveur.</p>
+            <div class="grid">
+                <?php foreach ($sales_period_totals as $period): ?>
+                    <article class="card" style="padding:18px; border-radius:16px;">
+                        <div class="topbar" style="margin-bottom:12px;">
+                            <strong><?= e($period['label']) ?></strong>
+                            <span class="pill badge-gold"><?= e(format_money($period['total_general'] ?? 0, $restaurant)) ?></span>
+                        </div>
+                        <?php if (($period['sales_by_server'] ?? []) === []): ?>
+                            <p class="muted">Aucune vente validée sur cette période.</p>
+                        <?php else: ?>
+                            <div class="table-wrap">
+                                <table>
+                                    <thead><tr><th>Serveur</th><th>Ventes</th><th>Montant</th></tr></thead>
+                                    <tbody>
+                                    <?php foreach ($period['sales_by_server'] as $row): ?>
+                                        <tr>
+                                            <td><?= e(named_actor_label($row['server_name'] ?? null, 'cashier_server')) ?></td>
+                                            <td><?= e((string) $row['sales_count']) ?></td>
+                                            <td><?= e(format_money($row['total_amount'], $restaurant)) ?></td>
+                                        </tr>
+                                    <?php endforeach; ?>
+                                    </tbody>
+                                </table>
+                            </div>
+                        <?php endif; ?>
+                    </article>
+                <?php endforeach; ?>
+            </div>
+        </section>
+    <?php endif; ?>
+
+    </div>
+</details>
 
 <?php
 $restaurantAccessUrl = restaurant_generated_access_url($restaurant);
@@ -355,51 +441,30 @@ $saleRemittanceHist = $sale_remittance_history ?? [];
     </div>
 </section>
 
-<?php if (!empty($sales_period_totals)): ?>
-    <section class="card" style="padding:24px; margin-top:24px;">
-        <h2 style="margin-top:0;">Total vendu par serveur</h2>
-        <p class="muted">Jour, semaine et mois restent lisibles au même endroit, avec le total général et le détail par serveur.</p>
-
-        <div class="grid">
-            <?php foreach ($sales_period_totals as $period): ?>
-                <article class="card" style="padding:18px; border-radius:16px;">
-                    <div class="topbar" style="margin-bottom:12px;">
-                        <strong><?= e($period['label']) ?></strong>
-                        <span class="pill badge-gold"><?= e(format_money($period['total_general'] ?? 0, $restaurant)) ?></span>
-                    </div>
-
-                    <?php if (($period['sales_by_server'] ?? []) === []): ?>
-                        <p class="muted">Aucune vente validée sur cette période.</p>
-                    <?php else: ?>
-                        <div class="table-wrap">
-                            <table>
-                                <thead>
-                                <tr>
-                                    <th>Serveur</th>
-                                    <th>Ventes</th>
-                                    <th>Montant</th>
-                                </tr>
-                                </thead>
-                                <tbody>
-                                <?php foreach ($period['sales_by_server'] as $row): ?>
-                                    <tr>
-                                        <td><?= e(named_actor_label($row['server_name'] ?? null, 'cashier_server')) ?></td>
-                                        <td><?= e((string) $row['sales_count']) ?></td>
-                                        <td><?= e(format_money($row['total_amount'], $restaurant)) ?></td>
-                                    </tr>
-                                <?php endforeach; ?>
-                                </tbody>
-                            </table>
-                        </div>
-                    <?php endif; ?>
-                </article>
-            <?php endforeach; ?>
-        </div>
-    </section>
+<?php if ($pendingLateRemittance !== [] && in_array((string) ($user['role_code'] ?? ''), ['owner', 'manager'], true)): ?>
+<section class="card no-print" style="padding:24px; margin-top:24px;">
+    <h2 style="margin-top:0;">Remise tardive à décider</h2>
+    <p class="muted">La date de vente et la date de remise diffèrent : choisissez le jour de rattachement pour les totaux.</p>
+    <?php foreach ($pendingLateRemittance as $lat): ?>
+        <article class="card" style="padding:16px; margin-top:14px; border-radius:14px;">
+            <strong>Transfert #<?= e((string) ($lat['id'] ?? '')) ?></strong> · <?= e(format_money((float) ($lat['amount'] ?? 0), $restaurantCurrency)) ?>
+            <p class="muted" style="margin:8px 0 0;">Vente #<?= e((string) ($lat['sale_id'] ?? '')) ?> · <?= e(named_actor_label($lat['sale_server_name'] ?? $lat['from_user_name'] ?? null, 'cashier_server')) ?></p>
+            <p class="muted" style="margin:4px 0 0;">Date vente : <?= e((string) ($lat['sale_day_ymd'] ?? '—')) ?> · Date remise : <?= e((string) ($lat['remittance_day_ymd'] ?? '—')) ?></p>
+            <form method="post" action="/owner/caisse/remises-tardives/<?= e((string) ($lat['id'] ?? '0')) ?>/rattachement" style="margin-top:12px;" onsubmit="return confirm('Rattacher au jour de vente ?');">
+                <input type="hidden" name="basis" value="SALE_DAY">
+                <button type="submit">Rattacher au jour de vente</button>
+            </form>
+            <form method="post" action="/owner/caisse/remises-tardives/<?= e((string) ($lat['id'] ?? '0')) ?>/rattachement" style="margin-top:8px;" onsubmit="return confirm('Rattacher au jour de remise ?');">
+                <input type="hidden" name="basis" value="REMITTANCE_DAY">
+                <button type="submit" class="button-muted">Rattacher au jour de remise</button>
+            </form>
+        </article>
+    <?php endforeach; ?>
+</section>
 <?php endif; ?>
 
 <?php if ($manager_queue_cases !== []): ?>
-    <section class="card" style="padding:24px; margin-top:24px;">
+<section class="card" style="padding:24px; margin-top:24px;">
         <div class="topbar" style="margin-bottom:18px;">
             <div>
                 <h2 style="margin:0;">À décider par le gérant</h2>

@@ -230,7 +230,11 @@ final class DashboardController
             'restaurant' => $restaurant,
             'subscription' => $subscription,
             'pending_manager_sale_remittances' => $cashSvc->listPendingManagerSaleRemittances($restaurantId),
+            'pending_late_remittance_attributions' => $cashSvc->listPendingLateRemittanceAttributions($restaurantId),
             'sale_remittance_history' => $cashSvc->listSaleRemittanceHistory($restaurantId, 45),
+            'cash_today_snapshot' => $canAccessReports
+                ? Container::getInstance()->get('reportService')->cashTodayOperationalSnapshot($restaurantId)
+                : null,
             'correction_requests_pending' => Container::getInstance()->get('correctionService')->listPendingForRestaurant($restaurantId),
             'correction_requests_recent' => Container::getInstance()->get('correctionService')->listRecentForRestaurant($restaurantId, 12),
             'manager_queue_cases' => $incidentService->listManagerDecisionQueue($restaurantId),

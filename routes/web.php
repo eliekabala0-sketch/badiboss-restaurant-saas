@@ -119,6 +119,7 @@ $router->post('/caisse/remises-proprietaire', [OperationsController::class, 'tra
 $router->post('/caisse/transferts/{id}/reception-proprietaire', [OperationsController::class, 'receiveCashAtOwner'], [AuthMiddleware::class]);
 $router->post('/owner/correction-requests/{id}/decision', [OperationsController::class, 'decideCorrectionRequest'], [AuthMiddleware::class, OwnerOrManagerMiddleware::class]);
 $router->post('/owner/caisse/remises-vente/{id}/decision', [OperationsController::class, 'decideManagerSaleRemittance'], [AuthMiddleware::class, OwnerOrManagerMiddleware::class]);
+$router->post('/owner/caisse/remises-tardives/{id}/rattachement', [OperationsController::class, 'decideLateSaleRemittanceAttribution'], [AuthMiddleware::class, OwnerOrManagerMiddleware::class]);
 $router->get('/portal/register', [TenantPortalController::class, 'showRegistration']);
 $router->post('/portal/register', [TenantPortalController::class, 'register']);
 $router->get('/portal/{slug}/register', [TenantPortalController::class, 'showRegistration']);

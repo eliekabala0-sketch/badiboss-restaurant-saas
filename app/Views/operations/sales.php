@@ -17,6 +17,7 @@ $salesOverview = $sales_overview ?? [
     'active_requests_count' => 0,
     'remitted_requests_count' => 0,
 ];
+$agentServerCash = $agent_server_cash ?? null;
 $serverCashiers = $server_cashiers ?? [];
 $pendingCashRemittances = $pending_cash_remittances ?? [];
 $saleRemittanceTracking = $sale_remittance_tracking ?? [];
@@ -235,6 +236,57 @@ foreach ($historyEntries as $entry) {
 
 <?php if (!empty($flash_success)): ?><div class="flash-ok"><?= e($flash_success) ?></div><?php endif; ?>
 <?php if (!empty($flash_error)): ?><div class="flash-bad"><?= e($flash_error) ?></div><?php endif; ?>
+
+<?php if (is_array($agentServerCash) && is_array($agentServerCash['today'] ?? null)): ?>
+<?php
+$todayAgentCash = $agentServerCash['today'];
+$legacyShort = (float) ($agentServerCash['legacy_shortfall'] ?? 0);
+$legacyDetail = $agentServerCash['legacy_detail'] ?? [];
+$todayShort = (float) ($todayAgentCash['shortfall'] ?? 0);
+?>
+<section class="card" style="padding:18px; margin-bottom:24px;">
+    <h2 style="margin:0 0 8px;">Remises caisse &amp; manquants</h2>
+    <p class="muted" style="margin:0 0 14px;">Ventes clôturées du jour par rapport aux remises déjà prises en compte (hors remises tardives en attente de décision gérant).</p>
+    <div class="grid stats">
+        <article class="card stat"><span>Vendu clôturé (aujourd’hui)</span><strong><?= e(format_money((float) ($todayAgentCash['sold_closed'] ?? 0), $restaurantCurrency)) ?></strong></article>
+        <article class="card stat"><span>Remis caisse (aujourd’hui)</span><strong><?= e(format_money((float) ($todayAgentCash['remitted_effective'] ?? 0), $restaurantCurrency)) ?></strong></article>
+        <article class="card stat"><span>Non versé (aujourd’hui)</span><strong><?= e(format_money($todayShort, $restaurantCurrency)) ?></strong></article>
+        <article class="card stat"><span>Anciennes dettes (non régularisées)</span><strong><?= e(format_money($legacyShort, $restaurantCurrency)) ?></strong></article>
+    </div>
+    <?php if ($todayShort > 0.0001 && !empty($todayAgentCash['missing_sales'] ?? [])): ?>
+    <details class="compact-card" style="margin-top:14px;" data-autoclose-details>
+        <summary><strong>Détail manquant du jour</strong> · ventes &amp; articles</summary>
+        <?php foreach (($todayAgentCash['missing_sales'] ?? []) as $ms): ?>
+            <div class="remittance-card" style="margin-top:12px;">
+                <strong>Vente #<?= e((string) ($ms['sale_id'] ?? '')) ?></strong>
+                <span class="muted"> · <?= e(format_money((float) ($ms['total_amount'] ?? 0), $restaurantCurrency)) ?></span>
+                <ul style="margin:8px 0 0; padding-left:18px; line-height:1.65;">
+                    <?php foreach (($ms['lines'] ?? []) as $ln): ?>
+                        <li><?= e((string) ($ln['menu_item_name'] ?? '')) ?> × <?= e((string) ($ln['quantity'] ?? '')) ?> : <?= e(format_money((float) ($ln['line_total'] ?? 0), $restaurantCurrency)) ?></li>
+                    <?php endforeach; ?>
+                </ul>
+            </div>
+        <?php endforeach; ?>
+    </details>
+    <?php endif; ?>
+    <?php if ($legacyShort > 0.0001 && $legacyDetail !== []): ?>
+    <details class="compact-card" style="margin-top:12px;" data-autoclose-details>
+        <summary><strong>Anciennes dettes</strong> · détail</summary>
+        <?php foreach ($legacyDetail as $ms): ?>
+            <div class="remittance-card" style="margin-top:12px;">
+                <strong>Vente #<?= e((string) ($ms['sale_id'] ?? '')) ?></strong>
+                <span class="muted"> · <?= e(format_money((float) ($ms['total_amount'] ?? 0), $restaurantCurrency)) ?></span>
+                <ul style="margin:8px 0 0; padding-left:18px; line-height:1.65;">
+                    <?php foreach (($ms['lines'] ?? []) as $ln): ?>
+                        <li><?= e((string) ($ln['menu_item_name'] ?? '')) ?> × <?= e((string) ($ln['quantity'] ?? '')) ?> : <?= e(format_money((float) ($ln['line_total'] ?? 0), $restaurantCurrency)) ?></li>
+                    <?php endforeach; ?>
+                </ul>
+            </div>
+        <?php endforeach; ?>
+    </details>
+    <?php endif; ?>
+</section>
+<?php endif; ?>
 
 <section class="card" style="padding:18px; margin-bottom:24px;">
     <div class="menu-thumb">
