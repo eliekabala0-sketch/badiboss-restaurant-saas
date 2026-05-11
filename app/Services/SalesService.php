@@ -944,11 +944,41 @@ final class SalesService
      *
      * @return array<string, int>
      */
-    public function regularizationBacklogCounts(int $restaurantId): array
+    public function regularizationBacklogCounts(int $restaurantId, ?int $restrictToServerUserId = null): array
     {
         $timezone = $this->restaurantTimezone($restaurantId);
         $todayStart = (new \DateTimeImmutable('now', $timezone))->setTime(0, 0, 0)->format('Y-m-d H:i:s');
         $pdo = $this->database->pdo();
+
+        if ($restrictToServerUserId !== null && $restrictToServerUserId > 0) {
+            $st = $pdo->prepare(
+                'SELECT COUNT(*) FROM server_requests
+                 WHERE restaurant_id = :rid
+                   AND server_id = :sid
+                   AND status = "REMIS_SERVEUR"
+                   AND total_supplied_amount > 0
+                   AND COALESCE(received_at, supplied_at, updated_at, created_at) < :today_start'
+            );
+            $st->execute(['rid' => $restaurantId, 'sid' => $restrictToServerUserId, 'today_start' => $todayStart]);
+            $overdueServerRemis = (int) $st->fetchColumn();
+
+            $st = $pdo->prepare(
+                'SELECT COUNT(*) FROM cash_transfers
+                 WHERE restaurant_id = :rid
+                   AND source_type = "sale"
+                   AND from_user_id = :fid
+                   AND status = "REMIS_A_CAISSE"
+                   AND COALESCE(requested_at, created_at) < :today_start'
+            );
+            $st->execute(['rid' => $restaurantId, 'fid' => $restrictToServerUserId, 'today_start' => $todayStart]);
+            $overdueRemisCaisse = (int) $st->fetchColumn();
+
+            return [
+                'overdue_server_remis_serveur' => $overdueServerRemis,
+                'overdue_remis_a_caisse' => $overdueRemisCaisse,
+                'overdue_kitchen_production_returns' => 0,
+            ];
+        }
 
         $st = $pdo->prepare(
             'SELECT COUNT(*) FROM server_requests

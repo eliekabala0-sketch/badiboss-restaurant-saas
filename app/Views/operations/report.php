@@ -55,6 +55,7 @@ $dash_tab_extra_qs .= '&date=' . rawurlencode((string) ($date ?? ''));
 $dash_tab_extra_qs .= '&period=' . rawurlencode((string) ($period ?? 'daily'));
 $regularizationBacklog = $regularization_backlog ?? [];
 $module_today_pulse = $module_today_pulse ?? [];
+$reportAgentFilterLocked = !empty($report_agent_filter_locked);
 ?>
 <style>
 @media print {
@@ -210,7 +211,9 @@ $mPulse = $module_today_pulse ?? [];
     <h3 style="margin:0 0 8px;">Activité opérationnelle (aperçu)</h3>
     <p class="muted" style="margin:0 0 12px;"><?= e((string) ($mPulse['period_label'] ?? '')) ?><?php if (!empty($mPulse['range_start_ymd']) && !empty($mPulse['range_end_ymd'])): ?> · <?= e((string) $mPulse['range_start_ymd']) ?> → <?= e((string) $mPulse['range_end_ymd']) ?><?php endif; ?></p>
     <div class="grid stats">
+        <?php if (empty($mPulse['hide_sales_closure_kpis'])): ?>
         <article class="card stat"><span>Ventes clôturées</span><strong><?= e((string) (int) ($mPulse['sales_closed_count_today'] ?? 0)) ?></strong></article>
+        <?php endif; ?>
         <article class="card stat"><span>Stock (mouv.)</span><strong><?= e((string) (int) ($mPulse['stock_movements_count_today'] ?? 0)) ?></strong></article>
         <article class="card stat"><span>Cuisine (prod.)</span><strong><?= e((string) (int) ($mPulse['kitchen_production_count_today'] ?? 0)) ?></strong></article>
         <article class="card stat"><span>Service (file)</span><strong><?= e((string) (int) ($mPulse['open_service_requests'] ?? 0)) ?></strong></article>
@@ -378,13 +381,22 @@ $reportCanDecideLateRemittance = in_array((string) (current_user()['role_code'] 
             <option value="weekly" <?= ($period ?? 'daily') === 'weekly' ? 'selected' : '' ?>>Hebdomadaire</option>
             <option value="monthly" <?= ($period ?? 'daily') === 'monthly' ? 'selected' : '' ?>>Mensuel</option>
         </select>
-        <label>Utilisateur</label>
+        <label>Agent</label>
+        <?php if ($reportAgentFilterLocked): ?>
+            <input type="hidden" name="user_id" value="<?= e((string) (int) ($viewFilters['user_id'] ?? 0)) ?>">
+            <select aria-label="Agent (fixé)"><?php /* option unique — compte connecté */ ?>
+                <?php foreach (($report_users ?? []) as $ru): ?>
+                    <option selected><?= e(named_actor_label($ru['full_name'] ?? null, $ru['role_code'] ?? null)) ?></option>
+                <?php endforeach; ?>
+            </select>
+        <?php else: ?>
         <select name="user_id">
             <option value="0">Tous</option>
             <?php foreach (($report_users ?? []) as $ru): ?>
                 <option value="<?= e((string) $ru['id']) ?>" <?= (int) ($viewFilters['user_id'] ?? 0) === (int) $ru['id'] ? 'selected' : '' ?>><?= e(named_actor_label($ru['full_name'] ?? null, $ru['role_code'] ?? null)) ?></option>
             <?php endforeach; ?>
         </select>
+        <?php endif; ?>
         <label>Rôle</label>
         <select name="role_code">
             <option value="">Tous</option>
@@ -400,8 +412,8 @@ $reportCanDecideLateRemittance = in_array((string) (current_user()['role_code'] 
             <option value="stock" <?= (($viewFilters['action_scope'] ?? '') === 'stock') ? 'selected' : '' ?>>Stock</option>
             <option value="kitchen" <?= (($viewFilters['action_scope'] ?? '') === 'kitchen') ? 'selected' : '' ?>>Cuisine</option>
         </select>
-        <label>Type d’action (code audit)</label>
-        <input type="text" name="action_name" value="<?= e((string) ($viewFilters['action_name'] ?? '')) ?>" placeholder="sale_closed, cash_server_remitted…">
+        <label>Type d’action (journal)</label>
+        <input type="text" name="action_name" value="<?= e((string) ($viewFilters['action_name'] ?? '')) ?>" placeholder="ex. vente enregistrée, remise caisse">
         <label style="display:flex; align-items:center; gap:8px; margin-top:10px;">
             <input type="checkbox" name="closed_sales_only" value="1" <?= !empty($viewFilters['closed_sales_only']) ? 'checked' : '' ?>>
             Ventes clôturées uniquement (totaux ventes par serveur)

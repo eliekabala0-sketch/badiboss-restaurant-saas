@@ -237,8 +237,13 @@ final class ReportService
      *
      * @return array<string, mixed>
      */
-    public function moduleOperationalPulse(int $restaurantId, string $preset, string $anchorYmd): array
-    {
+    public function moduleOperationalPulse(
+        int $restaurantId,
+        string $preset,
+        string $anchorYmd,
+        ?int $restrictToServerUserId = null,
+        bool $hideRestaurantSalesClosureKpis = false,
+    ): array {
         $timezone = $this->reportTimezone($restaurantId);
         $todayYmd = $this->todayForRestaurant($restaurantId);
         $win = $this->operationalPeriodWindow($restaurantId, $preset, $anchorYmd);
@@ -252,54 +257,96 @@ final class ReportService
         $closedIn = '"VALIDE","CLOTURE","VENDU_TOTAL","VENDU_PARTIEL"';
         $pdo = $this->database->pdo();
 
-        $salesStmt = $pdo->prepare(
-            'SELECT COUNT(*) AS c, COALESCE(SUM(s.total_amount), 0) AS t
-             FROM sales s
-             WHERE s.restaurant_id = :rid
-               AND s.status IN (' . $closedIn . ')
-               AND COALESCE(s.validated_at, s.created_at) >= :s AND COALESCE(s.validated_at, s.created_at) < :e'
-        );
-        $salesStmt->execute(['rid' => $restaurantId, 's' => $s, 'e' => $e]);
-        $salesRow = $salesStmt->fetch(PDO::FETCH_ASSOC) ?: [];
+        $salesRow = ['c' => 0, 't' => 0];
+        if ($hideRestaurantSalesClosureKpis && $restrictToServerUserId === null) {
+            $salesRow = ['c' => 0, 't' => 0];
+        } elseif ($restrictToServerUserId !== null && $restrictToServerUserId > 0) {
+            $salesStmt = $pdo->prepare(
+                'SELECT COUNT(*) AS c, COALESCE(SUM(s.total_amount), 0) AS t
+                 FROM sales s
+                 WHERE s.restaurant_id = :rid
+                   AND s.server_id = :srv
+                   AND s.status IN (' . $closedIn . ')
+                   AND COALESCE(s.validated_at, s.created_at) >= :s AND COALESCE(s.validated_at, s.created_at) < :e'
+            );
+            $salesStmt->execute(['rid' => $restaurantId, 'srv' => $restrictToServerUserId, 's' => $s, 'e' => $e]);
+            $salesRow = $salesStmt->fetch(PDO::FETCH_ASSOC) ?: ['c' => 0, 't' => 0];
+        } else {
+            $salesStmt = $pdo->prepare(
+                'SELECT COUNT(*) AS c, COALESCE(SUM(s.total_amount), 0) AS t
+                 FROM sales s
+                 WHERE s.restaurant_id = :rid
+                   AND s.status IN (' . $closedIn . ')
+                   AND COALESCE(s.validated_at, s.created_at) >= :s AND COALESCE(s.validated_at, s.created_at) < :e'
+            );
+            $salesStmt->execute(['rid' => $restaurantId, 's' => $s, 'e' => $e]);
+            $salesRow = $salesStmt->fetch(PDO::FETCH_ASSOC) ?: ['c' => 0, 't' => 0];
+        }
 
-        $movStmt = $pdo->prepare(
-            'SELECT COUNT(*) FROM stock_movements WHERE restaurant_id = :rid AND created_at >= :s AND created_at < :e'
-        );
-        $movStmt->execute(['rid' => $restaurantId, 's' => $s, 'e' => $e]);
-        $stockMovementsToday = (int) $movStmt->fetchColumn();
+        $stockMovementsToday = 0;
+        $kitchenProductionToday = 0;
+        if ($restrictToServerUserId === null) {
+            $movStmt = $pdo->prepare(
+                'SELECT COUNT(*) FROM stock_movements WHERE restaurant_id = :rid AND created_at >= :s AND created_at < :e'
+            );
+            $movStmt->execute(['rid' => $restaurantId, 's' => $s, 'e' => $e]);
+            $stockMovementsToday = (int) $movStmt->fetchColumn();
 
-        $kProdStmt = $pdo->prepare(
-            'SELECT COUNT(*) FROM kitchen_production WHERE restaurant_id = :rid AND created_at >= :s AND created_at < :e'
-        );
-        $kProdStmt->execute(['rid' => $restaurantId, 's' => $s, 'e' => $e]);
-        $kitchenProductionToday = (int) $kProdStmt->fetchColumn();
+            $kProdStmt = $pdo->prepare(
+                'SELECT COUNT(*) FROM kitchen_production WHERE restaurant_id = :rid AND created_at >= :s AND created_at < :e'
+            );
+            $kProdStmt->execute(['rid' => $restaurantId, 's' => $s, 'e' => $e]);
+            $kitchenProductionToday = (int) $kProdStmt->fetchColumn();
+        }
 
         $now = new DateTimeImmutable('now', $timezone);
         $includeLiveQueues = $now >= $startAt && $now < $endAt;
         $openServiceRequests = 0;
         $openKitchenStockRequests = 0;
         if ($includeLiveQueues) {
-            $pendSrv = $pdo->prepare(
-                'SELECT COUNT(*) FROM server_requests
-                 WHERE restaurant_id = :rid
-                   AND status IN ("DEMANDE","EN_PREPARATION","PRET_A_SERVIR","FOURNI_PARTIEL","FOURNI_TOTAL","REMIS_SERVEUR")'
-            );
-            $pendSrv->execute(['rid' => $restaurantId]);
-            $openServiceRequests = (int) $pendSrv->fetchColumn();
+            if ($restrictToServerUserId !== null && $restrictToServerUserId > 0) {
+                $pendSrv = $pdo->prepare(
+                    'SELECT COUNT(*) FROM server_requests
+                     WHERE restaurant_id = :rid AND server_id = :srv
+                       AND status IN ("DEMANDE","EN_PREPARATION","PRET_A_SERVIR","FOURNI_PARTIEL","FOURNI_TOTAL","REMIS_SERVEUR")'
+                );
+                $pendSrv->execute(['rid' => $restaurantId, 'srv' => $restrictToServerUserId]);
+                $openServiceRequests = (int) $pendSrv->fetchColumn();
+            } else {
+                $pendSrv = $pdo->prepare(
+                    'SELECT COUNT(*) FROM server_requests
+                     WHERE restaurant_id = :rid
+                       AND status IN ("DEMANDE","EN_PREPARATION","PRET_A_SERVIR","FOURNI_PARTIEL","FOURNI_TOTAL","REMIS_SERVEUR")'
+                );
+                $pendSrv->execute(['rid' => $restaurantId]);
+                $openServiceRequests = (int) $pendSrv->fetchColumn();
+            }
 
-            $pendMagasin = $pdo->prepare(
-                'SELECT COUNT(*) FROM kitchen_stock_requests
-                 WHERE restaurant_id = :rid AND status NOT IN ("ANNULE","REFUSE_STOCK","CLOTURE")'
-            );
-            $pendMagasin->execute(['rid' => $restaurantId]);
-            $openKitchenStockRequests = (int) $pendMagasin->fetchColumn();
+            if ($restrictToServerUserId === null) {
+                $pendMagasin = $pdo->prepare(
+                    'SELECT COUNT(*) FROM kitchen_stock_requests
+                     WHERE restaurant_id = :rid AND status NOT IN ("ANNULE","REFUSE_STOCK","CLOTURE")'
+                );
+                $pendMagasin->execute(['rid' => $restaurantId]);
+                $openKitchenStockRequests = (int) $pendMagasin->fetchColumn();
+            }
         }
 
-        $auditStmt = $pdo->prepare(
-            'SELECT COUNT(*) FROM audit_logs WHERE restaurant_id = :rid AND created_at >= :s AND created_at < :e'
-        );
-        $auditStmt->execute(['rid' => $restaurantId, 's' => $s, 'e' => $e]);
-        $auditActionsToday = (int) $auditStmt->fetchColumn();
+        $auditActionsToday = 0;
+        if ($restrictToServerUserId !== null && $restrictToServerUserId > 0) {
+            $auditStmt = $pdo->prepare(
+                'SELECT COUNT(*) FROM audit_logs
+                 WHERE restaurant_id = :rid AND user_id = :uid AND created_at >= :s AND created_at < :e'
+            );
+            $auditStmt->execute(['rid' => $restaurantId, 'uid' => $restrictToServerUserId, 's' => $s, 'e' => $e]);
+            $auditActionsToday = (int) $auditStmt->fetchColumn();
+        } else {
+            $auditStmt = $pdo->prepare(
+                'SELECT COUNT(*) FROM audit_logs WHERE restaurant_id = :rid AND created_at >= :s AND created_at < :e'
+            );
+            $auditStmt->execute(['rid' => $restaurantId, 's' => $s, 'e' => $e]);
+            $auditActionsToday = (int) $auditStmt->fetchColumn();
+        }
 
         return [
             'dash_preset' => $preset,
@@ -309,6 +356,7 @@ final class ReportService
             'date_ymd' => $todayYmd,
             'period_label' => $label,
             'include_live_queues' => $includeLiveQueues,
+            'hide_sales_closure_kpis' => $hideRestaurantSalesClosureKpis && $restrictToServerUserId === null,
             'sales_closed_count_today' => (int) ($salesRow['c'] ?? 0),
             'sales_closed_total_today' => round((float) ($salesRow['t'] ?? 0), 2),
             'stock_movements_count_today' => $stockMovementsToday,
@@ -657,6 +705,11 @@ final class ReportService
 
     public function reportForPeriod(int $restaurantId, string $date, string $period, array $viewFilters = []): array
     {
+        $serverReportScopeUserId = (int) ($viewFilters['__financial_scope_server_id'] ?? 0);
+        if (isset($viewFilters['__financial_scope_server_id'])) {
+            unset($viewFilters['__financial_scope_server_id']);
+        }
+
         $timezone = $this->reportTimezone($restaurantId);
         $selectedDate = $this->normalizeDate($date, $timezone);
         [$startAt, $endAt, $label] = $this->periodBounds($selectedDate, $period, $timezone);
@@ -664,11 +717,12 @@ final class ReportService
         $currentStock = Container::getInstance()->get('stockService')->sumActiveStockQuantity($restaurantId);
         $closedOnly = (bool) ($viewFilters['closed_sales_only'] ?? false);
         $userId = (int) ($viewFilters['user_id'] ?? 0);
+        $financeScope = $serverReportScopeUserId > 0 ? $serverReportScopeUserId : null;
         $salesByServer = $this->salesByServer($restaurantId, $startAt, $endAt, $closedOnly, $userId);
         $reportActivityIndex = $this->activityIndex($restaurantId, $startAt, $endAt, $viewFilters);
         $reportSalesDetailByServer = $this->salesDetailByServerProduct($restaurantId, $startAt, $endAt, $closedOnly, $userId, $viewFilters);
         $reportExecutiveSummary = $this->executiveSummaryRollup($restaurantId, $startAt, $endAt, $label, $viewFilters, $reportSalesDetailByServer, $reportActivityIndex);
-        $summary = ['period' => $period, 'period_label' => $label, 'selected_date' => $selectedDate->format('Y-m-d'), 'timezone' => $timezone->getName(), 'range_start' => $startAt->format('Y-m-d H:i:s'), 'range_end' => $displayEndAt->format('Y-m-d H:i:s'), 'opening_stock_total' => $this->openingStock($restaurantId, $startAt, $currentStock), 'current_stock_total' => $currentStock, 'kitchen_outputs' => $this->sumMovement($restaurantId, $startAt, $endAt, 'SORTIE_CUISINE'), 'stock_returns' => $this->sumMovement($restaurantId, $startAt, $endAt, 'RETOUR_STOCK'), 'kitchen_production' => $this->sumProduction($restaurantId, $startAt, $endAt), 'stock_report' => $this->stockReport($restaurantId, $startAt, $endAt), 'kitchen_report' => $this->kitchenReport($restaurantId, $startAt, $endAt), 'server_report' => $this->serverReport($restaurantId, $startAt, $endAt), 'financial_report' => $this->financialReport($restaurantId, $startAt, $endAt, $displayEndAt), 'product_margins' => $this->productMargins($restaurantId, $startAt, $endAt), 'sales_by_server' => $salesByServer, 'sales_by_type' => $this->salesByType($restaurantId, $startAt, $endAt), 'material_losses' => $this->sumLosses($restaurantId, $startAt, $endAt, 'MATIERE_PREMIERE'), 'financial_losses' => $this->sumLosses($restaurantId, $startAt, $endAt, 'ARGENT'), 'dish_yields' => $this->dishYields($restaurantId, $startAt, $endAt), 'product_issues' => $this->productIssues($restaurantId, $startAt, $endAt), 'incident_statuses' => $this->incidentsByField($restaurantId, $startAt, $endAt, 'status'), 'incident_qualifications' => $this->incidentsByField($restaurantId, $startAt, $endAt, 'final_qualification'), 'incident_responsibilities' => $this->incidentsByField($restaurantId, $startAt, $endAt, 'responsibility_scope'), 'incident_cases' => $this->incidentCases($restaurantId, $startAt, $endAt), 'fraud_alerts' => $this->fraudAlerts($restaurantId, $startAt, $endAt), 'view_filters' => $viewFilters, 'people_overview' => $this->peopleOverview($restaurantId, $startAt, $endAt, $userId, $salesByServer, $viewFilters), 'activity_index' => $reportActivityIndex, 'nominative_timeline' => $this->nominativeTimeline($restaurantId, $startAt, $endAt, $viewFilters), 'sales_detail_by_server' => $reportSalesDetailByServer, 'executive_summary' => $reportExecutiveSummary, 'kitchen_detail_by_cook' => $this->kitchenDetailByCook($restaurantId, $startAt, $endAt, $userId, $viewFilters), 'stock_detail_by_person' => $this->stockDetailByPerson($restaurantId, $startAt, $endAt, $userId, $viewFilters)];
+        $summary = ['period' => $period, 'period_label' => $label, 'selected_date' => $selectedDate->format('Y-m-d'), 'timezone' => $timezone->getName(), 'range_start' => $startAt->format('Y-m-d H:i:s'), 'range_end' => $displayEndAt->format('Y-m-d H:i:s'), 'opening_stock_total' => $this->openingStock($restaurantId, $startAt, $currentStock), 'current_stock_total' => $currentStock, 'kitchen_outputs' => $this->sumMovement($restaurantId, $startAt, $endAt, 'SORTIE_CUISINE'), 'stock_returns' => $this->sumMovement($restaurantId, $startAt, $endAt, 'RETOUR_STOCK'), 'kitchen_production' => $this->sumProduction($restaurantId, $startAt, $endAt), 'stock_report' => $this->stockReport($restaurantId, $startAt, $endAt), 'kitchen_report' => $this->kitchenReport($restaurantId, $startAt, $endAt), 'server_report' => $this->serverReport($restaurantId, $startAt, $endAt), 'financial_report' => $this->financialReport($restaurantId, $startAt, $endAt, $displayEndAt, $financeScope), 'product_margins' => $this->productMargins($restaurantId, $startAt, $endAt), 'sales_by_server' => $salesByServer, 'sales_by_type' => $this->salesByType($restaurantId, $startAt, $endAt), 'material_losses' => $this->sumLosses($restaurantId, $startAt, $endAt, 'MATIERE_PREMIERE'), 'financial_losses' => $this->sumLosses($restaurantId, $startAt, $endAt, 'ARGENT'), 'dish_yields' => $this->dishYields($restaurantId, $startAt, $endAt), 'product_issues' => $this->productIssues($restaurantId, $startAt, $endAt), 'incident_statuses' => $this->incidentsByField($restaurantId, $startAt, $endAt, 'status'), 'incident_qualifications' => $this->incidentsByField($restaurantId, $startAt, $endAt, 'final_qualification'), 'incident_responsibilities' => $this->incidentsByField($restaurantId, $startAt, $endAt, 'responsibility_scope'), 'incident_cases' => $this->incidentCases($restaurantId, $startAt, $endAt), 'fraud_alerts' => $this->fraudAlerts($restaurantId, $startAt, $endAt), 'view_filters' => $viewFilters, 'people_overview' => $this->peopleOverview($restaurantId, $startAt, $endAt, $userId, $salesByServer, $viewFilters), 'activity_index' => $reportActivityIndex, 'nominative_timeline' => $this->nominativeTimeline($restaurantId, $startAt, $endAt, $viewFilters), 'sales_detail_by_server' => $reportSalesDetailByServer, 'executive_summary' => $reportExecutiveSummary, 'kitchen_detail_by_cook' => $this->kitchenDetailByCook($restaurantId, $startAt, $endAt, $userId, $viewFilters), 'stock_detail_by_person' => $this->stockDetailByPerson($restaurantId, $startAt, $endAt, $userId, $viewFilters)];
         $salesTotal = 0.0; foreach ($summary['sales_by_type'] as $row) { $salesTotal += (float) $row['total_amount']; }
         $summary['general_report'] = ['total_product_value' => (float) $summary['kitchen_report']['value_produced'], 'total_sold_value' => $salesTotal, 'real_material_cost_value' => (float) $summary['kitchen_report']['real_material_cost_of_sales'], 'total_losses_value' => (float) $summary['stock_report']['stock_losses_value'] + (float) $summary['kitchen_report']['kitchen_losses_value'] + (float) $summary['server_report']['server_loss_value'] + (float) $summary['financial_losses'], 'stock_loss_value' => (float) $summary['stock_report']['stock_losses_value'], 'kitchen_loss_value' => (float) $summary['kitchen_report']['kitchen_losses_value'], 'server_loss_value' => (float) $summary['server_report']['server_loss_value']];
         $summary['estimated_profit'] = $salesTotal - (float) $summary['kitchen_report']['real_material_cost_of_sales'] - (float) $summary['stock_report']['stock_losses_value'] - (float) $summary['kitchen_report']['kitchen_losses_value'] - (float) $summary['server_report']['server_loss_value'] - (float) $summary['financial_losses'];
@@ -681,6 +735,16 @@ final class ReportService
         $needleArt = mb_strtolower(trim((string) ($viewFilters['article_search'] ?? '')), 'UTF-8');
         if ($needleArt !== '') {
             $summary['sales_detail_by_server'] = $this->filterSalesDetailByArticleSubstring($summary['sales_detail_by_server'], $needleArt);
+        }
+
+        if ($serverReportScopeUserId > 0) {
+            $summary = $this->applyServerFinancialIsolationToReportSummary(
+                $summary,
+                $serverReportScopeUserId,
+                $restaurantId,
+                $startAt,
+                $endAt,
+            );
         }
 
         return $summary;
@@ -769,21 +833,31 @@ final class ReportService
         $incidents->execute(['restaurant_id' => $restaurantId, 'start_at' => $startAt->format('Y-m-d H:i:s'), 'end_at' => $endAt->format('Y-m-d H:i:s')]);
         return ['total_requested' => (float) ($totals['total_requested'] ?? 0), 'total_supplied' => (float) ($totals['total_supplied'] ?? 0), 'total_sold' => (float) ($totals['total_sold'] ?? 0), 'total_returned' => (float) ($totals['total_returned'] ?? 0), 'server_loss_value' => (float) ($totals['total_server_loss'] ?? 0), 'incidents_by_server' => $incidents->fetchAll(PDO::FETCH_ASSOC)];
     }
-    private function financialReport(int $restaurantId, DateTimeImmutable $startAt, DateTimeImmutable $endAt, DateTimeImmutable $displayEndAt): array
-    {
+    private function financialReport(
+        int $restaurantId,
+        DateTimeImmutable $startAt,
+        DateTimeImmutable $endAt,
+        DateTimeImmutable $displayEndAt,
+        ?int $restrictRemittancesFromServerUserId = null,
+    ): array {
         $dateTo = $displayEndAt->format('Y-m-d');
-        $transfers = Container::getInstance()->get('cashService')->dashboard($restaurantId, [
+        $dashFilters = [
             'date_from' => $startAt->format('Y-m-d'),
             'date_to' => $dateTo,
-        ]);
+        ];
+        if ($restrictRemittancesFromServerUserId !== null && $restrictRemittancesFromServerUserId > 0) {
+            $dashFilters['user_id'] = $restrictRemittancesFromServerUserId;
+            $dashFilters['scope_closed_sales_server_user_id'] = $restrictRemittancesFromServerUserId;
+        }
+        $transfers = Container::getInstance()->get('cashService')->dashboard($restaurantId, $dashFilters);
         $cashClarity = Container::getInstance()->get('cashService')->periodCashClarity(
             $restaurantId,
             $startAt->format('Y-m-d'),
-            $dateTo
+            $dateTo,
+            $restrictRemittancesFromServerUserId,
         );
 
-        $byServer = $this->database->pdo()->prepare(
-            'SELECT COALESCE(u.full_name, "Utilisateur non identifie") AS server_name,
+        $sql = 'SELECT COALESCE(u.full_name, "Utilisateur non identifie") AS server_name,
                     COUNT(ct.id) AS transfer_count,
                     COALESCE(SUM(ct.amount), 0) AS total_amount
              FROM cash_transfers ct
@@ -791,15 +865,19 @@ final class ReportService
              WHERE ct.restaurant_id = :restaurant_id
                AND ct.source_type = "sale"
                AND COALESCE(ct.received_at, ct.requested_at, ct.created_at) >= :start_at
-               AND COALESCE(ct.received_at, ct.requested_at, ct.created_at) < :end_at
-             GROUP BY COALESCE(u.full_name, "Utilisateur non identifie")
-             ORDER BY total_amount DESC'
-        );
-        $byServer->execute([
+               AND COALESCE(ct.received_at, ct.requested_at, ct.created_at) < :end_at';
+        $params = [
             'restaurant_id' => $restaurantId,
             'start_at' => $startAt->format('Y-m-d H:i:s'),
             'end_at' => $endAt->format('Y-m-d H:i:s'),
-        ]);
+        ];
+        if ($restrictRemittancesFromServerUserId !== null && $restrictRemittancesFromServerUserId > 0) {
+            $sql .= ' AND ct.from_user_id = :scope_srv';
+            $params['scope_srv'] = $restrictRemittancesFromServerUserId;
+        }
+        $sql .= ' GROUP BY COALESCE(u.full_name, "Utilisateur non identifie") ORDER BY total_amount DESC';
+        $byServer = $this->database->pdo()->prepare($sql);
+        $byServer->execute($params);
 
         return [
             'summary' => $transfers['summary'] ?? [],
@@ -835,6 +913,126 @@ final class ReportService
         $statement = $this->database->pdo()->prepare('SELECT sale_type, COUNT(*) AS sales_count, COALESCE(SUM(total_amount), 0) AS total_amount FROM sales WHERE restaurant_id = :restaurant_id AND COALESCE(validated_at, created_at) >= :start_at AND COALESCE(validated_at, created_at) < :end_at GROUP BY sale_type ORDER BY sale_type ASC');
         $statement->execute(['restaurant_id' => $restaurantId, 'start_at' => $startAt->format('Y-m-d H:i:s'), 'end_at' => $endAt->format('Y-m-d H:i:s')]); return $statement->fetchAll(PDO::FETCH_ASSOC);
     }
+
+    /**
+     * Ventes par type limitées à un serveur (rapport « contour serveur »).
+     *
+     * @return list<array<string, mixed>>
+     */
+    private function salesByTypeForServer(
+        int $restaurantId,
+        DateTimeImmutable $startAt,
+        DateTimeImmutable $endAt,
+        int $serverUserId,
+    ): array {
+        $statement = $this->database->pdo()->prepare(
+            'SELECT sale_type, COUNT(*) AS sales_count, COALESCE(SUM(total_amount), 0) AS total_amount
+             FROM sales
+             WHERE restaurant_id = :restaurant_id AND server_id = :srv
+               AND COALESCE(validated_at, created_at) >= :start_at AND COALESCE(validated_at, created_at) < :end_at
+             GROUP BY sale_type ORDER BY sale_type ASC'
+        );
+        $statement->execute([
+            'restaurant_id' => $restaurantId,
+            'srv' => $serverUserId,
+            'start_at' => $startAt->format('Y-m-d H:i:s'),
+            'end_at' => $endAt->format('Y-m-d H:i:s'),
+        ]);
+
+        return $statement->fetchAll(PDO::FETCH_ASSOC);
+    }
+
+    /**
+     * Retire les agrégats « tout restaurant » d’un rapport lorsque la consultation est côté serveur.
+     *
+     * @param array<string, mixed> $summary
+     *
+     * @return array<string, mixed>
+     */
+    private function applyServerFinancialIsolationToReportSummary(
+        array $summary,
+        int $serverUserId,
+        int $restaurantId,
+        DateTimeImmutable $startAt,
+        DateTimeImmutable $endAt,
+    ): array {
+        $summary['opening_stock_total'] = 0.0;
+        $summary['current_stock_total'] = 0.0;
+        $summary['kitchen_outputs'] = 0.0;
+        $summary['stock_returns'] = 0.0;
+        $summary['kitchen_production'] = 0.0;
+        $summary['stock_report'] = [
+            'total_entered_quantity' => 0.0,
+            'total_entered_value' => 0.0,
+            'total_output_quantity' => 0.0,
+            'total_output_value' => 0.0,
+            'stock_value' => 0.0,
+            'stock_losses_value' => 0.0,
+            'urgent_requests' => 0,
+            'planned_requests' => 0,
+            'ruptures' => 0,
+        ];
+        $summary['kitchen_report'] = [
+            'total_produced' => 0.0,
+            'real_material_cost_produced' => 0.0,
+            'value_produced' => 0.0,
+            'total_supplied_to_servers' => 0.0,
+            'value_supplied' => 0.0,
+            'real_material_cost_of_sales' => 0.0,
+            'kitchen_losses_value' => 0.0,
+            'kitchen_incidents' => 0,
+        ];
+        $summary['server_report'] = [
+            'total_requested' => 0.0,
+            'total_supplied' => 0.0,
+            'total_sold' => 0.0,
+            'total_returned' => 0.0,
+            'server_loss_value' => 0.0,
+            'incidents_by_server' => [],
+        ];
+        $summary['product_margins'] = [];
+        $summary['material_losses'] = 0.0;
+        $summary['financial_losses'] = 0.0;
+        $summary['dish_yields'] = [];
+        $summary['product_issues'] = [];
+        $summary['incident_statuses'] = [];
+        $summary['incident_qualifications'] = [];
+        $summary['incident_responsibilities'] = [];
+        $summary['incident_cases'] = [];
+        $summary['fraud_alerts'] = [];
+        $summary['leaderboards'] = [];
+        $summary['auto_closed_operations'] = [];
+        $summary['agents_activity'] = [
+            'pool_total_actions' => 0.0,
+            'servers' => [],
+            'kitchen' => [],
+            'stock' => [],
+            'cashiers' => [],
+            'other_roles' => [],
+        ];
+        $summary['activity_index'] = ['grand_total_actions' => 0, 'agents' => []];
+
+        $summary['sales_by_type'] = $this->salesByTypeForServer($restaurantId, $startAt, $endAt, $serverUserId);
+        $salesTotal = 0.0;
+        foreach ($summary['sales_by_type'] as $row) {
+            $salesTotal += (float) ($row['total_amount'] ?? 0);
+        }
+        $summary['general_report'] = [
+            'total_product_value' => 0.0,
+            'total_sold_value' => $salesTotal,
+            'real_material_cost_value' => 0.0,
+            'total_losses_value' => 0.0,
+            'stock_loss_value' => 0.0,
+            'kitchen_loss_value' => 0.0,
+            'server_loss_value' => 0.0,
+            'estimated_gross_profit' => $salesTotal,
+        ];
+        $summary['estimated_profit'] = $salesTotal;
+        $summary['general_report']['estimated_gross_profit'] = $salesTotal;
+
+        return $summary;
+    }
+
     private function sumLosses(int $restaurantId, DateTimeImmutable $startAt, DateTimeImmutable $endAt, string $type): float
     {
         return (float) $this->scalar('SELECT COALESCE(SUM(amount), 0) FROM losses WHERE restaurant_id = :restaurant_id AND loss_type = :loss_type AND COALESCE(validated_at, created_at) >= :start_at AND COALESCE(validated_at, created_at) < :end_at', ['restaurant_id' => $restaurantId, 'loss_type' => $type, 'start_at' => $startAt->format('Y-m-d H:i:s'), 'end_at' => $endAt->format('Y-m-d H:i:s')]);

@@ -483,7 +483,9 @@ $stockBadgeClass = static function (?string $status): string {
         <article class="card stat"><span>Productions</span><strong><?= e((string) (int) ($module_today_pulse['kitchen_production_count_today'] ?? 0)) ?></strong></article>
         <article class="card stat"><span>Service (file)</span><strong><?= e((string) (int) ($module_today_pulse['open_service_requests'] ?? 0)) ?></strong></article>
         <article class="card stat"><span>Mouv. stock</span><strong><?= e((string) (int) ($module_today_pulse['stock_movements_count_today'] ?? 0)) ?></strong></article>
+        <?php if (empty($module_today_pulse['hide_sales_closure_kpis'])): ?>
         <article class="card stat"><span>Ventes clôturées</span><strong><?= e((string) (int) ($module_today_pulse['sales_closed_count_today'] ?? 0)) ?></strong></article>
+        <?php endif; ?>
     </div>
     <?php if (empty($module_today_pulse['include_live_queues'])): ?>
         <p class="muted" style="margin:10px 0 0;">La file service « en direct » n’est affichée que lorsque la période inclut aujourd’hui.</p>

@@ -350,7 +350,9 @@ $priorityBadgeClass = static function (?string $priority): string {
         <article class="card stat"><span>Mouvements magasin</span><strong><?= e((string) (int) ($module_today_pulse['stock_movements_count_today'] ?? 0)) ?></strong></article>
         <article class="card stat"><span>Productions cuisine</span><strong><?= e((string) (int) ($module_today_pulse['kitchen_production_count_today'] ?? 0)) ?></strong></article>
         <article class="card stat"><span>Demandes magasin ouvertes</span><strong><?= e((string) (int) ($module_today_pulse['open_kitchen_stock_requests'] ?? 0)) ?></strong></article>
+        <?php if (empty($module_today_pulse['hide_sales_closure_kpis'])): ?>
         <article class="card stat"><span>Ventes clôturées</span><strong><?= e((string) (int) ($module_today_pulse['sales_closed_count_today'] ?? 0)) ?></strong></article>
+        <?php endif; ?>
     </div>
     <?php if (empty($module_today_pulse['include_live_queues'])): ?>
         <p class="muted" style="margin:10px 0 0;">Les demandes magasin « ouvertes » sont un instantané disponible seulement lorsque la période inclut aujourd’hui.</p>

@@ -25,6 +25,7 @@ $regBacklogV = $regularization_backlog ?? [];
 $serverCashiers = $server_cashiers ?? [];
 $pendingCashRemittances = $pending_cash_remittances ?? [];
 $saleRemittanceTracking = $sale_remittance_tracking ?? [];
+$salesViewScope = $sales_view_scope ?? 'full';
 
 $serviceBadgeClass = static function (?string $status): string {
     return match ((string) $status) {
@@ -246,13 +247,15 @@ foreach ($historyEntries as $entry) {
 
 <?php if ($modulePulse !== []): ?>
 <section class="card" style="padding:18px; margin-bottom:24px;">
-    <h2 style="margin:0 0 10px;">Situation opérationnelle</h2>
+    <h2 style="margin:0 0 10px;"><?= $salesViewScope === 'self' ? 'Mes activités (période choisie)' : 'Situation opérationnelle' ?></h2>
     <p class="muted" style="margin:0 0 12px;"><?= e((string) ($modulePulse['period_label'] ?? 'Période')) ?><?php if (!empty($modulePulse['range_start_ymd']) && !empty($modulePulse['range_end_ymd'])): ?> · <?= e((string) $modulePulse['range_start_ymd']) ?> → <?= e((string) $modulePulse['range_end_ymd']) ?><?php endif; ?></p>
     <div class="grid stats">
-        <article class="card stat"><span>Ventes clôturées</span><strong><?= e((string) (int) ($modulePulse['sales_closed_count_today'] ?? 0)) ?></strong></article>
-        <article class="card stat"><span>Montant clôturé</span><strong><?= e(format_money((float) ($modulePulse['sales_closed_total_today'] ?? 0), $restaurantCurrency)) ?></strong></article>
-        <article class="card stat"><span>Service (file)</span><strong><?= e((string) (int) ($modulePulse['open_service_requests'] ?? 0)) ?></strong></article>
-        <article class="card stat"><span>Mouv. stock</span><strong><?= e((string) (int) ($modulePulse['stock_movements_count_today'] ?? 0)) ?></strong></article>
+        <article class="card stat"><span><?= $salesViewScope === 'self' ? 'Mes ventes clôturées' : 'Ventes clôturées' ?></span><strong><?= e((string) (int) ($modulePulse['sales_closed_count_today'] ?? 0)) ?></strong></article>
+        <article class="card stat"><span><?= $salesViewScope === 'self' ? 'Montant clôturé (mes ventes)' : 'Montant clôturé' ?></span><strong><?= e(format_money((float) ($modulePulse['sales_closed_total_today'] ?? 0), $restaurantCurrency)) ?></strong></article>
+        <article class="card stat"><span><?= $salesViewScope === 'self' ? 'Ma file service' : 'Service (file)' ?></span><strong><?= e((string) (int) ($modulePulse['open_service_requests'] ?? 0)) ?></strong></article>
+        <?php if ($salesViewScope !== 'self'): ?>
+        <article class="card stat"><span>Mouvements magasin (restaurant)</span><strong><?= e((string) (int) ($modulePulse['stock_movements_count_today'] ?? 0)) ?></strong></article>
+        <?php endif; ?>
     </div>
     <?php if (empty($modulePulse['include_live_queues'])): ?>
         <p class="muted" style="margin:12px 0 0;">La file service et les demandes stock « en direct » ne s’affichent que lorsque la période inclut aujourd’hui.</p>
@@ -262,7 +265,7 @@ foreach ($historyEntries as $entry) {
 
 <?php if (is_array($cashSnapAll) && $cashSnapAll !== []): ?>
 <section class="card" style="padding:18px; margin-bottom:24px;">
-    <h2 style="margin:0 0 10px;">Caisse · vérité du jour (tous rôles)</h2>
+    <h2 style="margin:0 0 10px;">Caisse · synthèse du jour (équipe)</h2>
     <div class="grid stats">
         <article class="card stat"><span>Vendu clôturé</span><strong><?= e(format_money((float) ($cashSnapAll['total_sold_closed'] ?? 0), $restaurantCurrency)) ?></strong></article>
         <article class="card stat"><span>Reçu caisse</span><strong><?= e(format_money((float) ($cashSnapAll['cashier_received_today'] ?? 0), $restaurantCurrency)) ?></strong></article>

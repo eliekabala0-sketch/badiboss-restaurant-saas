@@ -37,7 +37,7 @@ final class OperationsController
         ksort($stockCategoryLabels, SORT_NATURAL | SORT_FLAG_CASE);
         $stockCategoryLabels = array_keys($stockCategoryLabels);
 
-        $dash = $this->operationalDashboardBundle($request, $restaurantId);
+        $dash = $this->operationalDashboardBundle($request, $restaurantId, null, true);
         $hold = Container::getInstance()->get('regularizationGate')->assessForUser($restaurantId, current_user() ?? []);
         $disc = $this->staffDisciplineOperationalExtras($dash, $restaurantId, current_user(), ['stock_manager']);
 
@@ -365,7 +365,7 @@ final class OperationsController
 
         $allCases = Container::getInstance()->get('incidentService')->listCases($restaurantId);
 
-        $dash = $this->operationalDashboardBundle($request, $restaurantId);
+        $dash = $this->operationalDashboardBundle($request, $restaurantId, null, true);
         $hold = Container::getInstance()->get('regularizationGate')->assessForUser($restaurantId, current_user() ?? []);
         $disc = $this->staffDisciplineOperationalExtras($dash, $restaurantId, current_user(), ['kitchen']);
 
@@ -608,10 +608,14 @@ final class OperationsController
         $incidentCatalog = $this->incidentCatalog();
 
         $actor = current_user();
-        $dash = $this->operationalDashboardBundle($request, $restaurantId);
+        $serverScopeId = null;
+        if (is_array($actor) && ($actor['role_code'] ?? null) === 'cashier_server' && (int) ($actor['id'] ?? 0) > 0) {
+            $serverScopeId = (int) $actor['id'];
+        }
+        $dash = $this->operationalDashboardBundle($request, $restaurantId, $serverScopeId, false);
         $selfDisc = $this->staffDisciplineOperationalExtras($dash, $restaurantId, is_array($actor) ? $actor : null, ['cashier_server']);
-        $agentCash = (is_array($actor) && ($actor['role_code'] ?? null) === 'cashier_server')
-            ? Container::getInstance()->get('reportService')->agentServerCashAccountReadModel($restaurantId, (int) ($actor['id'] ?? 0))
+        $agentCash = $serverScopeId !== null
+            ? Container::getInstance()->get('reportService')->agentServerCashAccountReadModel($restaurantId, $serverScopeId)
             : null;
 
         view('operations/sales', array_merge($dash, $selfDisc, [
@@ -630,8 +634,11 @@ final class OperationsController
             'agent_server_cash' => $agentCash,
             'incident_types' => $incidentCatalog['incident_types'],
             'day_start_hold' => Container::getInstance()->get('regularizationGate')->assessForUser($restaurantId, current_user() ?? []),
-            'regularization_backlog' => Container::getInstance()->get('salesService')->regularizationBacklogCounts($restaurantId),
-            'cash_today_snapshot' => Container::getInstance()->get('reportService')->cashTodayOperationalSnapshot($restaurantId),
+            'regularization_backlog' => Container::getInstance()->get('salesService')->regularizationBacklogCounts($restaurantId, $serverScopeId),
+            'cash_today_snapshot' => $serverScopeId !== null
+                ? null
+                : Container::getInstance()->get('reportService')->cashTodayOperationalSnapshot($restaurantId),
+            'sales_view_scope' => $serverScopeId !== null ? 'self' : 'full',
             'staff_gauges_panel_title' => 'Discipline · service et ventes',
             'flash_success' => flash('success'),
             'flash_error' => flash('error'),
@@ -1182,7 +1189,21 @@ final class OperationsController
             'timeline_limit' => (int) ($request->query['timeline_limit'] ?? 350),
         ];
 
+        $actor = current_user() ?? [];
+        $isServerReporter = ($actor['role_code'] ?? '') === 'cashier_server' && (int) ($actor['id'] ?? 0) > 0;
+        if ($isServerReporter) {
+            $viewFilters['user_id'] = (int) $actor['id'];
+            $viewFilters['__financial_scope_server_id'] = (int) $actor['id'];
+        }
+
         $reportUsers = Container::getInstance()->get('roleAdmin')->listUsersForRestaurant($restaurantId);
+        if ($isServerReporter) {
+            $selfId = (int) $actor['id'];
+            $reportUsers = array_values(array_filter(
+                $reportUsers,
+                static fn (array $u): bool => (int) ($u['id'] ?? 0) === $selfId
+            ));
+        }
         $reportRoleCodes = [];
         foreach ($reportUsers as $ru) {
             $rc = (string) ($ru['role_code'] ?? '');
@@ -1198,7 +1219,12 @@ final class OperationsController
             default => 'Rapport journalier',
         };
 
-        $dash = $this->operationalDashboardBundle($request, $restaurantId);
+        $dash = $this->operationalDashboardBundle(
+            $request,
+            $restaurantId,
+            $isServerReporter ? (int) $actor['id'] : null,
+            false,
+        );
 
         view('operations/report', array_merge($dash, [
             'title' => $title,
@@ -1214,10 +1240,16 @@ final class OperationsController
                 static fn (array $row): bool => empty($row['archived_at'])
             )),
             'report' => Container::getInstance()->get('reportService')->dailyReport($restaurantId, $date, $period, $viewFilters),
-            'cash_today_snapshot' => Container::getInstance()->get('reportService')->cashTodayOperationalSnapshot($restaurantId),
+            'cash_today_snapshot' => $isServerReporter
+                ? null
+                : Container::getInstance()->get('reportService')->cashTodayOperationalSnapshot($restaurantId),
             'pending_late_remittance_attributions' => Container::getInstance()->get('cashService')->listPendingLateRemittanceAttributions($restaurantId),
             'today_ymd_restaurant' => $todayYmd,
-            'regularization_backlog' => Container::getInstance()->get('salesService')->regularizationBacklogCounts($restaurantId),
+            'regularization_backlog' => Container::getInstance()->get('salesService')->regularizationBacklogCounts(
+                $restaurantId,
+                $isServerReporter ? (int) $actor['id'] : null,
+            ),
+            'report_agent_filter_locked' => $isServerReporter,
             'day_start_hold' => Container::getInstance()->get('regularizationGate')->assessForUser($restaurantId, current_user() ?? []),
         ]));
 
@@ -1251,8 +1283,12 @@ final class OperationsController
     /**
      * @return array{dash_preset: string, dash_date: string, today_ymd_restaurant: string, module_today_pulse: array<string, mixed>}
      */
-    private function operationalDashboardBundle(Request $request, int $restaurantId): array
-    {
+    private function operationalDashboardBundle(
+        Request $request,
+        int $restaurantId,
+        ?int $pulseRestrictServerUserId = null,
+        bool $pulseHideRestaurantSalesClosureKpis = false,
+    ): array {
         $rs = Container::getInstance()->get('reportService');
         $todayY = $rs->todayForRestaurant($restaurantId);
         $preset = strtolower(trim((string) ($request->query['dash_preset'] ?? 'today')));
@@ -1262,7 +1298,13 @@ final class OperationsController
         }
         $dRaw = trim((string) ($request->query['dash_date'] ?? ''));
         $d = preg_match('/^\d{4}-\d{2}-\d{2}$/', $dRaw) ? $dRaw : $todayY;
-        $pulse = $rs->moduleOperationalPulse($restaurantId, $preset, $d);
+        $pulse = $rs->moduleOperationalPulse(
+            $restaurantId,
+            $preset,
+            $d,
+            $pulseRestrictServerUserId,
+            $pulseHideRestaurantSalesClosureKpis,
+        );
 
         return [
             'dash_preset' => $preset,

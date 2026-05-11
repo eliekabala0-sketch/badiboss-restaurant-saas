@@ -37,10 +37,16 @@ final class CashService
      * Synthèse des flux caisse sur une plage de dates (inclus) : remises vente, réceptions, chaîne gérant/propriétaire, écarts.
      * Les montants suivent les enregistrements réels (entrées +, sorties - au niveau métier dans l’affichage).
      */
-    public function periodCashClarity(int $restaurantId, string $dateFromYmd, string $dateToYmd): array
+    public function periodCashClarity(int $restaurantId, string $dateFromYmd, string $dateToYmd, ?int $onlySaleRemittancesFromUserId = null): array
     {
         $this->ensureSchema();
         $periodWhere = $this->sqlCashTransferPeriodPredicate('ct');
+        $scopeSql = '';
+        $scopeParams = [];
+        if ($onlySaleRemittancesFromUserId !== null && $onlySaleRemittancesFromUserId > 0) {
+            $scopeSql = ' AND ct.source_type = "sale" AND ct.from_user_id = :scope_srv_uid';
+            $scopeParams['scope_srv_uid'] = $onlySaleRemittancesFromUserId;
+        }
         $statement = $this->database->pdo()->prepare(
             'SELECT
                 COALESCE(SUM(CASE WHEN ct.source_type = "sale" THEN ct.amount ELSE 0 END), 0) AS server_remittance_total,
@@ -53,14 +59,15 @@ final class CashService
              FROM cash_transfers ct
              WHERE ct.restaurant_id = :restaurant_id
                AND ' . $periodWhere
+                . $scopeSql
                 );
-        $statement->execute([
+        $statement->execute(array_merge([
             'restaurant_id' => $restaurantId,
             'start_at' => $dateFromYmd . ' 00:00:00',
             'end_at' => $dateToYmd . ' 23:59:59',
             'dfrom' => $dateFromYmd,
             'dto' => $dateToYmd,
-        ]);
+        ], $scopeParams));
         $row = $statement->fetch(PDO::FETCH_ASSOC) ?: [];
         $filters = ['date_from' => $dateFromYmd, 'date_to' => $dateToYmd];
         $summary = $this->summary($restaurantId, $filters);
@@ -719,13 +726,31 @@ final class CashService
         $transfers = $this->listTransfers($restaurantId, $filters);
         $movements = $this->listMovements($restaurantId, $filters);
 
-        $soldStatement = $this->database->pdo()->prepare(
-            'SELECT COALESCE(SUM(total_amount), 0) FROM sales
-             WHERE restaurant_id = :restaurant_id
-               AND status IN ("VALIDE", "CLOTURE", "VENDU_TOTAL", "VENDU_PARTIEL")'
-        );
-        $soldStatement->execute(['restaurant_id' => $restaurantId]);
-        $soldTotal = (float) $soldStatement->fetchColumn();
+        $scopeSrv = (int) ($filters['scope_closed_sales_server_user_id'] ?? 0);
+        if ($scopeSrv > 0 && !empty($filters['date_from']) && !empty($filters['date_to'])) {
+            $soldStatement = $this->database->pdo()->prepare(
+                'SELECT COALESCE(SUM(total_amount), 0) FROM sales
+                 WHERE restaurant_id = :restaurant_id AND server_id = :srv
+                   AND status IN ("VALIDE", "CLOTURE", "VENDU_TOTAL", "VENDU_PARTIEL")
+                   AND COALESCE(validated_at, created_at) >= :sfrom
+                   AND COALESCE(validated_at, created_at) <= :sto'
+            );
+            $soldStatement->execute([
+                'restaurant_id' => $restaurantId,
+                'srv' => $scopeSrv,
+                'sfrom' => (string) $filters['date_from'] . ' 00:00:00',
+                'sto' => (string) $filters['date_to'] . ' 23:59:59',
+            ]);
+            $soldTotal = (float) $soldStatement->fetchColumn();
+        } else {
+            $soldStatement = $this->database->pdo()->prepare(
+                'SELECT COALESCE(SUM(total_amount), 0) FROM sales
+                 WHERE restaurant_id = :restaurant_id
+                   AND status IN ("VALIDE", "CLOTURE", "VENDU_TOTAL", "VENDU_PARTIEL")'
+            );
+            $soldStatement->execute(['restaurant_id' => $restaurantId]);
+            $soldTotal = (float) $soldStatement->fetchColumn();
+        }
 
         $totalRemittedToCash = 0.0;
         $totalReceivedByCash = 0.0;
