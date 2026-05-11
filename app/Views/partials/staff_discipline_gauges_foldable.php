@@ -53,8 +53,22 @@ if ($periodHint === '') {
             $apZoneLabel = $apZone === 'non_evalue' ? 'Non évalué' : ucfirst($apZone);
             $sb = is_array($ap['score_breakdown'] ?? null) ? $ap['score_breakdown'] : [];
             $sbEvaluated = ($sb['evaluated'] ?? false) === true;
+            $monthStats = is_array($sb['month_stats'] ?? null) ? $sb['month_stats'] : [];
             ?>
             <p style="margin:10px 0 0;"><strong>Score : <?= $apScore === null ? 'Non évalué' : e((string) $apScore) ?> <?= $apScore === null ? '' : '%' ?></strong> · zone <?= e($apZoneLabel) ?></p>
+            <?php if ($monthStats !== []): ?>
+                <p class="muted" style="margin:10px 0 0;">
+                    <strong>Tableau de mois (provisoire)</strong> :
+                    jours notés <?= (int) ($monthStats['days_scored'] ?? 0) ?>,
+                    avec activité mesurée <?= (int) ($monthStats['days_with_activity'] ?? 0) ?>,
+                    sans activité mesurée <?= (int) ($monthStats['days_without_measured_activity'] ?? 0) ?>,
+                    repos neutre <?= (int) ($monthStats['days_rest_neutral'] ?? 0) ?>,
+                    exon. <?= (int) ($monthStats['days_exempt_neutral'] ?? 0) ?>,
+                    abs. just. / maladie <?= (int) ($monthStats['days_soft_absence'] ?? 0) ?>,
+                    absence / inactivité <?= (int) ($monthStats['days_unjustified_absence'] ?? 0) ?>.
+                    <strong>Écart à 100 % (Σ)</strong> : −<?= e((string) (int) ($monthStats['penalty_points_off_base'] ?? 0)) ?> pts
+                </p>
+            <?php endif; ?>
             <?php if ($sb !== []): ?>
                 <?php if ($sbEvaluated): ?>
                     <p class="muted" style="margin:8px 0 0;">
@@ -88,15 +102,15 @@ if ($periodHint === '') {
                     <?php endif; ?>
                 <?php elseif (isset($sb['evaluated_days'])): ?>
                     <p class="muted" style="margin:8px 0 0;">
-                        <strong>Jours évalués (avec activité) :</strong> <?= e((string) (int) ($sb['evaluated_days'] ?? 0)) ?>
+                        <strong>Jours évalués :</strong> <?= e((string) (int) ($sb['evaluated_days'] ?? 0)) ?>
                         <?php if (array_key_exists('window_days', $sb)): ?>
-                            · <strong>Fenêtre (jours calendaires) :</strong> <?= e((string) (int) ($sb['window_days'] ?? 0)) ?>
+                            · <strong>Jours applicables (fenêtre) :</strong> <?= e((string) (int) ($sb['window_days'] ?? 0)) ?>
                         <?php elseif (array_key_exists('calendar_days', $sb)): ?>
                             · <strong>Jours calendaires (mois) :</strong> <?= e((string) (int) ($sb['calendar_days'] ?? 0)) ?>
                         <?php endif; ?>
                         · <strong>Actions cumulées :</strong> <?= e((string) (int) ($sb['actions_total'] ?? 0)) ?>
                     </p>
-                    <p class="muted" style="margin:6px 0 0;">Moyenne sur les seuls jours avec activité mesurable (pas de 100 % implicite).</p>
+                    <p class="muted" style="margin:6px 0 0;">Moyenne sur les jours pris en compte depuis l’entrée en service (activité, repos neutre, absences pénalisées).</p>
                 <?php endif; ?>
             <?php endif; ?>
             <?php if (!empty($ap['note'])): ?>

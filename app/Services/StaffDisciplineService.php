@@ -15,6 +15,9 @@ use PDO;
  */
 final class StaffDisciplineService
 {
+    /** @var array<string, ?string> */
+    private array $userFirstActivityYmdCache = [];
+
     public function __construct(private readonly Database $database)
     {
     }
@@ -82,6 +85,48 @@ final class StaffDisciplineService
             'INSERT INTO permissions (module_name, action_name, code, description, is_sensitive, created_at, updated_at)
              VALUES ("staff", "gauges_view", "staff.gauges.view", "Voir les jauges des autres agents du restaurant.", 0, NOW(), NOW())'
         )->execute();
+    }
+
+    /**
+     * Première trace d’activité (audit) pour cet agent dans le restaurant — jour calendaire (fuseau rapports).
+     * Null = aucune activité historique : la jauge reste « non évalué ».
+     */
+    public function userFirstActivityDayYmd(int $restaurantId, int $userId, DateTimeZone $tz): ?string
+    {
+        if ($userId <= 0) {
+            return null;
+        }
+        $k = $restaurantId . ':' . $userId;
+        if (array_key_exists($k, $this->userFirstActivityYmdCache)) {
+            return $this->userFirstActivityYmdCache[$k];
+        }
+        $st = $this->database->pdo()->prepare(
+            'SELECT MIN(created_at) AS t FROM audit_logs WHERE restaurant_id = :rid AND user_id = :uid'
+        );
+        $st->execute(['rid' => $restaurantId, 'uid' => $userId]);
+        $t = $st->fetchColumn();
+        if (!is_string($t) || $t === '') {
+            $this->userFirstActivityYmdCache[$k] = null;
+
+            return null;
+        }
+        try {
+            $utc = new DateTimeZone('UTC');
+            $dt = new DateTimeImmutable($t, $utc);
+        } catch (\Throwable) {
+            $this->userFirstActivityYmdCache[$k] = null;
+
+            return null;
+        }
+        $ymd = $dt->setTimezone($tz)->format('Y-m-d');
+        if (str_starts_with($ymd, '0000')) {
+            $this->userFirstActivityYmdCache[$k] = null;
+
+            return null;
+        }
+        $this->userFirstActivityYmdCache[$k] = $ymd;
+
+        return $ymd;
     }
 
     /**
@@ -243,8 +288,12 @@ final class StaffDisciplineService
             return null;
         }
         $glob = $this->effectiveGlobalStartYmd($restaurantId);
+        $userFirst = $this->userFirstActivityDayYmd($restaurantId, $userId, $tz);
+        if ($userFirst === null) {
+            return null;
+        }
         try {
-            $start = max($fromYmd, $glob);
+            $start = max($fromYmd, $glob, $userFirst);
             $endD = new DateTimeImmutable($toYmd . ' 00:00:00', $tz);
             $cur = new DateTimeImmutable($start . ' 00:00:00', $tz);
         } catch (\Throwable) {
@@ -609,6 +658,97 @@ final class StaffDisciplineService
         return $map[$key] ?? ($module . ' · ' . $action);
     }
 
+    /** @param list<array<string, mixed>> $ledgerLines */
+    private function ledgerDeclaresDayExempt(array $ledgerLines): bool
+    {
+        foreach ($ledgerLines as $ln) {
+            $c = strtoupper(trim((string) ($ln['reason_code'] ?? '')));
+            if (in_array($c, ['DISCIPLINE_DAY_EXEMPT', 'DISCIPLINE_EXEMPT_DAY', 'DISCIPLINE_EXONERATION'], true)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function attendancePlannedStatusForDay(int $restaurantId, int $userId, string $dayYmd): string
+    {
+        $this->ensureSchema();
+        $st = $this->database->pdo()->prepare(
+            'SELECT planned_status FROM staff_attendance_day
+             WHERE restaurant_id = :rid AND user_id = :uid AND day_ymd = :d
+             LIMIT 1'
+        );
+        $st->execute(['rid' => $restaurantId, 'uid' => $userId, 'd' => $dayYmd]);
+        $raw = $st->fetchColumn();
+        if (!is_string($raw) || trim($raw) === '') {
+            return 'TRAVAIL';
+        }
+
+        return $this->normalizeAttendanceStatus($raw);
+    }
+
+    private function normalizeAttendanceStatus(string $raw): string
+    {
+        $u = strtoupper(str_replace([' ', '-'], '_', trim($raw)));
+        $aliases = [
+            'TRAVAIL' => 'TRAVAIL',
+            'WORK' => 'TRAVAIL',
+            'REPOS' => 'REPOS',
+            'REST' => 'REPOS',
+            'OFF' => 'REPOS',
+            'CONGE' => 'REPOS',
+            'EXONERE' => 'EXONERE',
+            'EXONÉRÉ' => 'EXONERE',
+            'EXEMPT' => 'EXONERE',
+            'ABSENCE_AUTORISEE' => 'ABSENCE_AUTORISEE',
+            'ABSENCE_AUTORISÉE' => 'ABSENCE_AUTORISEE',
+            'ABS_AUTORISEE' => 'ABSENCE_AUTORISEE',
+            'MALADIE' => 'MALADIE',
+            'SICK' => 'MALADIE',
+        ];
+
+        return $aliases[$u] ?? (str_starts_with($u, 'REPOS') ? 'REPOS' : 'TRAVAIL');
+    }
+
+    /**
+     * @param list<array{label:string,points:int}> $extraPenalties
+     *
+     * @return array{evaluated:bool, score:?int, action_count:int, activity_breakdown: list<array{label:string,count:int}>, ledger_delta:int, ledger_lines: list<array<string,mixed>>, extra_penalties: list<array{label:string,points:int}>, base_score:int, evaluation_kind:string, synthetic_adjustment:int}
+     */
+    private function finalizeEvaluatedDay(
+        int $actionCount,
+        array $breakdown,
+        int $ledgerDelta,
+        array $ledgerLines,
+        array $extraPenalties,
+        string $evaluationKind,
+        int $syntheticAdjustment,
+    ): array {
+        $extraSum = 0;
+        foreach ($extraPenalties as $ep) {
+            $extraSum += (int) ($ep['points'] ?? 0);
+        }
+        $raw = 100 + $ledgerDelta + $extraSum + $syntheticAdjustment;
+        if (!is_finite($raw)) {
+            $raw = 100.0;
+        }
+        $score = max(0, min(100, (int) round($raw)));
+
+        return [
+            'evaluated' => true,
+            'score' => $score,
+            'action_count' => $actionCount,
+            'activity_breakdown' => $breakdown,
+            'ledger_delta' => $ledgerDelta,
+            'ledger_lines' => $ledgerLines,
+            'extra_penalties' => $extraPenalties,
+            'base_score' => 100,
+            'evaluation_kind' => $evaluationKind,
+            'synthetic_adjustment' => $syntheticAdjustment,
+        ];
+    }
+
     /**
      * Évaluation d’un jour calendrier (restaurant) : activité réelle + journal des points + pénalités complémentaires.
      *
@@ -707,53 +847,92 @@ final class StaffDisciplineService
             $ledgerReasons[(string) ($ln['reason_code'] ?? '')] = true;
         }
 
-        $extraPenalties = $this->metricExtraPenalties(
-            $restaurantId,
-            $userId,
-            $roleCode,
-            $dayYmd,
-            $s,
-            $e,
-            $ledgerReasons,
-            $pdo,
-        );
-
-        $extraSum = 0;
-        foreach ($extraPenalties as $ep) {
-            $extraSum += (int) ($ep['points'] ?? 0);
-        }
-
-        // Évaluation uniquement sur activité mesurable (audit + signaux domaine). Le ledger affine le score ce jour-là.
-        $evaluated = $actionCount > 0;
-        if (!$evaluated) {
+        $glob = $this->effectiveGlobalStartYmd($restaurantId);
+        if ($dayYmd < $glob) {
             return [
                 'evaluated' => false,
                 'score' => null,
                 'action_count' => 0,
                 'activity_breakdown' => [],
-                'ledger_delta' => 0,
-                'ledger_lines' => [],
+                'ledger_delta' => $ledgerDelta,
+                'ledger_lines' => $ledgerLines,
                 'extra_penalties' => [],
                 'base_score' => 100,
+                'evaluation_kind' => 'pre_reset',
+                'synthetic_adjustment' => 0,
             ];
         }
 
-        $raw = 100 + $ledgerDelta + $extraSum;
-        if (!is_finite($raw)) {
-            $raw = 100.0;
+        $firstEver = $this->userFirstActivityDayYmd($restaurantId, $userId, $tz);
+        if ($firstEver === null || $dayYmd < $firstEver) {
+            return [
+                'evaluated' => false,
+                'score' => null,
+                'action_count' => 0,
+                'activity_breakdown' => [],
+                'ledger_delta' => $ledgerDelta,
+                'ledger_lines' => $ledgerLines,
+                'extra_penalties' => [],
+                'base_score' => 100,
+                'evaluation_kind' => $firstEver === null ? 'never_active' : 'pre_hire',
+                'synthetic_adjustment' => 0,
+            ];
         }
-        $score = max(0, min(100, (int) round($raw)));
 
-        return [
-            'evaluated' => true,
-            'score' => $score,
-            'action_count' => $actionCount,
-            'activity_breakdown' => $breakdown,
-            'ledger_delta' => $ledgerDelta,
-            'ledger_lines' => $ledgerLines,
-            'extra_penalties' => $extraPenalties,
-            'base_score' => 100,
-        ];
+        if ($actionCount > 0) {
+            $extraPenalties = $this->metricExtraPenalties(
+                $restaurantId,
+                $userId,
+                $roleCode,
+                $dayYmd,
+                $s,
+                $e,
+                $ledgerReasons,
+                $pdo,
+            );
+
+            return $this->finalizeEvaluatedDay(
+                $actionCount,
+                $breakdown,
+                $ledgerDelta,
+                $ledgerLines,
+                $extraPenalties,
+                'audit_activity',
+                0,
+            );
+        }
+
+        if ($this->ledgerDeclaresDayExempt($ledgerLines)) {
+            $bd = [['label' => 'Exonération discipline (journal) · jour neutre', 'count' => 0]];
+
+            return $this->finalizeEvaluatedDay(0, $bd, $ledgerDelta, $ledgerLines, [], 'neutral_exempt', 0);
+        }
+
+        $planned = $this->attendancePlannedStatusForDay($restaurantId, $userId, $dayYmd);
+        if ($planned === 'REPOS') {
+            $bd = [['label' => 'Jour de repos (planning) · neutre', 'count' => 0]];
+
+            return $this->finalizeEvaluatedDay(0, $bd, $ledgerDelta, $ledgerLines, [], 'neutral_rest', 0);
+        }
+        if ($planned === 'EXONERE') {
+            $bd = [['label' => 'Exonéré (planning) · neutre', 'count' => 0]];
+
+            return $this->finalizeEvaluatedDay(0, $bd, $ledgerDelta, $ledgerLines, [], 'neutral_exempt', 0);
+        }
+        if ($planned === 'ABSENCE_AUTORISEE') {
+            $bd = [['label' => 'Absence autorisée (planning) · pénalité légère', 'count' => 0]];
+
+            return $this->finalizeEvaluatedDay(0, $bd, $ledgerDelta, $ledgerLines, [], 'absence_authorized', -8);
+        }
+        if ($planned === 'MALADIE') {
+            $bd = [['label' => 'Maladie (planning) · pénalité légère', 'count' => 0]];
+
+            return $this->finalizeEvaluatedDay(0, $bd, $ledgerDelta, $ledgerLines, [], 'absence_illness', -10);
+        }
+
+        $bd = [['label' => 'Aucune activité mesurée (jour ouvré) · absence / inactivité', 'count' => 0]];
+
+        return $this->finalizeEvaluatedDay(0, $bd, $ledgerDelta, $ledgerLines, [], 'absence_unjustified', -25);
     }
 
     /**
@@ -949,6 +1128,11 @@ final class StaffDisciplineService
     private function averageLastDaysNullable(int $restaurantId, int $userId, string $todayYmd, int $days, DateTimeZone $tz): ?float
     {
         $glob = $this->effectiveGlobalStartYmd($restaurantId);
+        $userFirst = $this->userFirstActivityDayYmd($restaurantId, $userId, $tz);
+        if ($userFirst === null) {
+            return null;
+        }
+        $floor = max($glob, $userFirst);
         try {
             $cursor = new DateTimeImmutable($todayYmd . ' 00:00:00', $tz);
         } catch (\Throwable) {
@@ -958,7 +1142,7 @@ final class StaffDisciplineService
         $evalDays = 0;
         for ($i = 0; $i < $days; $i++) {
             $d = $cursor->modify('-' . $i . ' days')->format('Y-m-d');
-            if ($d < $glob) {
+            if ($d < $floor) {
                 continue;
             }
             $sc = $this->scoreForDayOrNull($restaurantId, $userId, $d, $tz);
@@ -985,7 +1169,20 @@ final class StaffDisciplineService
             return null;
         }
         $glob = $this->effectiveGlobalStartYmd($restaurantId);
-        $start = $monthFirst->format('Y-m-d') >= $glob ? $monthFirst : new DateTimeImmutable($glob . ' 00:00:00', $tz);
+        $userFirst = $this->userFirstActivityDayYmd($restaurantId, $userId, $tz);
+        if ($userFirst === null) {
+            return null;
+        }
+        $monthStartYmd = $monthFirst->format('Y-m-d') >= $glob ? $monthFirst->format('Y-m-d') : $glob;
+        $startYmd = max($monthStartYmd, $userFirst);
+        try {
+            $start = new DateTimeImmutable($startYmd . ' 00:00:00', $tz);
+        } catch (\Throwable) {
+            return null;
+        }
+        if ($start > $end) {
+            return null;
+        }
         $sum = 0.0;
         $evalDays = 0;
         for ($d = $start; $d <= $end; $d = $d->modify('+1 day')) {
@@ -1049,6 +1246,21 @@ final class StaffDisciplineService
                 'label' => (string) ($ep['label'] ?? ''),
             ];
         }
+        $syn = (int) ($ev['synthetic_adjustment'] ?? 0);
+        if ($syn !== 0) {
+            $ek = (string) ($ev['evaluation_kind'] ?? '');
+            $synLabel = match ($ek) {
+                'absence_authorized' => 'Ajustement discipline · absence autorisée',
+                'absence_illness' => 'Ajustement discipline · maladie',
+                'absence_unjustified' => 'Ajustement discipline · absence / inactivité non justifiée',
+                default => 'Ajustement discipline (jour sans mesure d’activité)',
+            };
+            $rows[] = [
+                'kind' => 'synthetic',
+                'delta_points' => $syn,
+                'label' => $synLabel,
+            ];
+        }
 
         return $rows;
     }
@@ -1074,6 +1286,14 @@ final class StaffDisciplineService
         $role = $this->resolveRoleCodeForUser($restaurantId, $userId);
         $ev = $this->evaluateCalendarDay($restaurantId, $userId, $role, $dayYmd, $tz);
         if (!$ev['evaluated']) {
+            $why = (string) ($ev['evaluation_kind'] ?? '');
+            $note = match ($why) {
+                'never_active' => 'Non évalué — aucune activité historique dans ce restaurant.',
+                'pre_hire' => 'Non évalué — agent pas encore en service à cette date.',
+                'pre_reset' => 'Non évalué — période avant donnée exploitable après réinitialisation.',
+                default => 'Non évalué.',
+            };
+
             return [
                 'titre' => $titre,
                 'jour' => $dayYmd,
@@ -1081,7 +1301,7 @@ final class StaffDisciplineService
                 'zone' => 'non_evalue',
                 'points_detail' => [],
                 'score_breakdown' => $ev,
-                'note' => 'Non évalué — aucune activité mesurable sur cette période.',
+                'note' => $note,
             ];
         }
 
@@ -1107,6 +1327,20 @@ final class StaffDisciplineService
         $titre = (string) ($win['label'] ?? 'Semaine');
         $start = $win['start'];
         $endExcl = $win['end'];
+        $userFirst = $this->userFirstActivityDayYmd($restaurantId, $userId, $tz);
+        if ($userFirst === null) {
+            return [
+                'titre' => $titre,
+                'jour' => null,
+                'score' => null,
+                'zone' => 'non_evalue',
+                'points_detail' => [],
+                'jours_moyennes' => 0,
+                'score_breakdown' => ['evaluated_days' => 0, 'actions_total' => 0, 'window_days' => 0],
+                'note' => 'Aucune activité historique pour cet agent : non évalué.',
+            ];
+        }
+        $floor = max($glob, $userFirst);
         $role = $this->resolveRoleCodeForUser($restaurantId, $userId);
         $sum = 0.0;
         $inWindow = 0;
@@ -1115,7 +1349,7 @@ final class StaffDisciplineService
         $actionsSum = 0;
         for ($d = $start; $d < $endExcl; $d = $d->modify('+1 day')) {
             $ymd = $d->format('Y-m-d');
-            if ($ymd < $glob) {
+            if ($ymd < $floor) {
                 continue;
             }
             $inWindow++;
@@ -1140,8 +1374,8 @@ final class StaffDisciplineService
                 'jours_moyennes' => $inWindow,
                 'score_breakdown' => ['evaluated_days' => 0, 'actions_total' => 0, 'window_days' => $inWindow],
                 'note' => $inWindow <= 0
-                    ? 'Aucun jour calendaire dans la semaine : non évalué.'
-                    : 'Aucun jour avec activité mesurée sur cette semaine : non évalué.',
+                    ? 'Aucun jour applicable dans cette semaine (avant entrée en service ou reset).'
+                    : 'Aucune journée évaluable sur cette semaine : non évalué.',
             ];
         }
 
@@ -1171,6 +1405,20 @@ final class StaffDisciplineService
     private function snapshotRollingAverageGauge(int $restaurantId, int $userId, string $anchorYmd, int $days, string $titre, DateTimeZone $tz): array
     {
         $glob = $this->effectiveGlobalStartYmd($restaurantId);
+        $userFirst = $this->userFirstActivityDayYmd($restaurantId, $userId, $tz);
+        if ($userFirst === null) {
+            return [
+                'titre' => $titre,
+                'jour' => null,
+                'score' => null,
+                'zone' => 'non_evalue',
+                'points_detail' => [],
+                'jours_moyennes' => 0,
+                'score_breakdown' => ['evaluated_days' => 0, 'actions_total' => 0, 'window_days' => 0],
+                'note' => 'Aucune activité historique pour cet agent : non évalué.',
+            ];
+        }
+        $floor = max($glob, $userFirst);
         try {
             $end = new DateTimeImmutable($anchorYmd . ' 00:00:00', $tz);
         } catch (\Throwable) {
@@ -1184,7 +1432,7 @@ final class StaffDisciplineService
         $actionsSum = 0;
         for ($i = 0; $i < $days; $i++) {
             $d = $end->modify('-' . $i . ' days')->format('Y-m-d');
-            if ($d < $glob) {
+            if ($d < $floor) {
                 continue;
             }
             $inWindow++;
@@ -1209,8 +1457,8 @@ final class StaffDisciplineService
                 'jours_moyennes' => $inWindow,
                 'score_breakdown' => ['evaluated_days' => 0, 'actions_total' => 0, 'window_days' => $inWindow],
                 'note' => $inWindow <= 0
-                    ? 'Aucun jour calendaire dans la fenêtre : non évalué.'
-                    : 'Aucun jour avec activité mesurée sur cette période : non évalué.',
+                    ? 'Aucun jour applicable dans la fenêtre (avant entrée en service).'
+                    : 'Aucune journée évaluable sur cette période : non évalué.',
             ];
         }
 
@@ -1257,12 +1505,55 @@ final class StaffDisciplineService
         }
         $glob = $this->effectiveGlobalStartYmd($restaurantId);
         $cursor = $start->format('Y-m-d') >= $glob ? $start : new DateTimeImmutable($glob . ' 00:00:00', $tz);
+        $userFirst = $this->userFirstActivityDayYmd($restaurantId, $userId, $tz);
+        if ($userFirst === null) {
+            return [
+                'titre' => $label,
+                'jour' => null,
+                'score' => null,
+                'zone' => 'non_evalue',
+                'points_detail' => [],
+                'jours_moyennes' => 0,
+                'score_breakdown' => [
+                    'evaluated_days' => 0,
+                    'actions_total' => 0,
+                    'calendar_days' => 0,
+                    'month_stats' => [],
+                ],
+                'note' => 'Aucune activité historique pour cet agent : non évalué.',
+            ];
+        }
+        $cursorY = max($cursor->format('Y-m-d'), $userFirst);
+        try {
+            $cursor = new DateTimeImmutable($cursorY . ' 00:00:00', $tz);
+        } catch (\Throwable) {
+            return ['titre' => $label, 'jour' => null, 'score' => null, 'zone' => 'non_evalue', 'points_detail' => [], 'jours_moyennes' => 0, 'note' => 'Période invalide : non évalué.'];
+        }
+        if ($cursor > $end) {
+            return [
+                'titre' => $label,
+                'jour' => null,
+                'score' => null,
+                'zone' => 'non_evalue',
+                'points_detail' => [],
+                'jours_moyennes' => 0,
+                'score_breakdown' => ['evaluated_days' => 0, 'actions_total' => 0, 'calendar_days' => 0, 'month_stats' => []],
+                'note' => 'Période entièrement avant l’entrée en service de l’agent : non évalué.',
+            ];
+        }
         $role = $this->resolveRoleCodeForUser($restaurantId, $userId);
         $sum = 0.0;
         $calendarDays = 0;
         $evalDays = 0;
         $details = [];
         $actionsSum = 0;
+        $stActivity = 0;
+        $stRest = 0;
+        $stExempt = 0;
+        $stSoft = 0;
+        $stUnj = 0;
+        $stZeroAct = 0;
+        $penOff = 0;
         for ($d = $cursor; $d <= $end; $d = $d->modify('+1 day')) {
             $ymd = $d->format('Y-m-d');
             $calendarDays++;
@@ -1270,12 +1561,42 @@ final class StaffDisciplineService
             if ($ev['evaluated']) {
                 $sum += (float) ($ev['score'] ?? 0);
                 $evalDays++;
-                $actionsSum += (int) ($ev['action_count'] ?? 0);
+                $ac = (int) ($ev['action_count'] ?? 0);
+                $actionsSum += $ac;
+                if ($ac === 0) {
+                    $stZeroAct++;
+                }
+                $sc = (int) ($ev['score'] ?? 0);
+                $penOff += max(0, 100 - $sc);
+                $ek = (string) ($ev['evaluation_kind'] ?? '');
+                if ($ek === 'audit_activity') {
+                    $stActivity++;
+                } elseif ($ek === 'neutral_rest') {
+                    $stRest++;
+                } elseif ($ek === 'neutral_exempt') {
+                    $stExempt++;
+                } elseif ($ek === 'absence_authorized' || $ek === 'absence_illness') {
+                    $stSoft++;
+                } elseif ($ek === 'absence_unjustified') {
+                    $stUnj++;
+                }
                 foreach ($this->ledgerPenaltyRowsForGauge($ev) as $row) {
                     $details[] = $row;
                 }
             }
         }
+
+        $monthStats = [
+            'days_scored' => $evalDays,
+            'days_with_activity' => $stActivity,
+            'days_without_measured_activity' => $stZeroAct,
+            'days_rest_neutral' => $stRest,
+            'days_exempt_neutral' => $stExempt,
+            'days_soft_absence' => $stSoft,
+            'days_unjustified_absence' => $stUnj,
+            'days_no_activity_measured' => $stRest + $stExempt + $stSoft + $stUnj,
+            'penalty_points_off_base' => $penOff,
+        ];
 
         if ($evalDays === 0) {
             return [
@@ -1285,8 +1606,8 @@ final class StaffDisciplineService
                 'zone' => 'non_evalue',
                 'points_detail' => array_slice($details, -40),
                 'jours_moyennes' => $calendarDays,
-                'score_breakdown' => ['evaluated_days' => 0, 'actions_total' => 0, 'calendar_days' => $calendarDays],
-                'note' => 'Aucun jour avec activité mesurée sur ce mois : non évalué.',
+                'score_breakdown' => ['evaluated_days' => 0, 'actions_total' => 0, 'calendar_days' => $calendarDays, 'month_stats' => $monthStats],
+                'note' => 'Aucune journée évaluable sur ce mois : non évalué.',
             ];
         }
 
@@ -1306,7 +1627,9 @@ final class StaffDisciplineService
                 'evaluated_days' => $evalDays,
                 'actions_total' => $actionsSum,
                 'calendar_days' => $calendarDays,
+                'month_stats' => $monthStats,
             ],
+            'note' => 'Moyenne provisoire du mois sur les jours depuis l’entrée en service (activité, repos neutre, absences pénalisées).',
         ];
     }
 
