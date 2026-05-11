@@ -371,6 +371,7 @@ final class RegularizationGateService
                 if (in_array($st, ['REMISE_REJETEE_CAISSE', 'REMISE_REJETEE_GERANT'], true)) {
                     $saleId = (int) ($row['sale_id'] ?? 0);
                     $rawTs = (string) ($row['remitted_at'] ?? $row['cash_received_at'] ?? $row['validated_at'] ?? $row['sale_created_at'] ?? '');
+                    $gerantFinal = $st === 'REMISE_REJETEE_GERANT';
                     $tasks[] = [
                         'audience' => ['server', 'manager', 'owner'],
                         'server_user_id' => $sid,
@@ -380,9 +381,11 @@ final class RegularizationGateService
                         'happened_at' => $this->formatTs($rawTs, $restaurantId),
                         'agent_label' => (string) ($row['server_name'] ?? ''),
                         'amount_label' => $this->moneyHint((float) ($row['transfer_amount'] ?? $row['sale_total_amount'] ?? 0), $currency),
-                        'detail_label' => 'Remise rejetée',
-                        'status_label' => 'Rejeté · montant à votre charge',
-                        'action_label' => 'Refaire une remise ou demander aide au gérant sur Ventes',
+                        'detail_label' => $gerantFinal ? 'Décision responsable (non reçu)' : 'Remise refusée à la caisse',
+                        'status_label' => $gerantFinal ? 'À charge agent (hors nouvelle remise)' : 'Rejeté · une nouvelle remise peut être attendue',
+                        'action_label' => $gerantFinal
+                            ? 'Voir le détail sur Ventes (décision enregistrée)'
+                            : 'Refaire une remise ou demander l’aide du responsable sur Ventes',
                         'href' => '/ventes?focus=sale:' . $saleId,
                         'focus' => 'sale:' . $saleId,
                         'manquant_a_charge' => true,
@@ -494,7 +497,7 @@ final class RegularizationGateService
                 continue;
             }
             $st = (string) ($row['transfer_status'] ?? '');
-            if (in_array($st, ['REMISE_REJETEE_CAISSE', 'REMISE_REJETEE_GERANT'], true)) {
+            if ($st === 'REMISE_REJETEE_CAISSE') {
                 return true;
             }
         }

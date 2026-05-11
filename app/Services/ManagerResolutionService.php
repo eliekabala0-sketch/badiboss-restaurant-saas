@@ -212,11 +212,11 @@ final class ManagerResolutionService
         $sup = (float) ($row['total_supplied_amount'] ?? 0);
         $out = [];
         if ($sup > 0.0001) {
-            $out[] = ['code' => 'served_sale', 'label' => 'Valider comme servie (vente réelle si besoin)'];
+            $out[] = ['code' => 'served_sale', 'label' => 'Valider comme servie'];
             $out[] = ['code' => 'close_no_sale', 'label' => 'Clôturer sans vente'];
-            $out[] = ['code' => 'server_shortage', 'label' => 'Mettre en manquant serveur'];
+            $out[] = ['code' => 'server_shortage', 'label' => 'Mettre en manquant (à charge agent)'];
         }
-        $out[] = ['code' => 'reject_cancel', 'label' => 'Rejeter / annuler la commande'];
+        $out[] = ['code' => 'reject_cancel', 'label' => 'Rejeter ou annuler'];
 
         return $out;
     }
@@ -321,7 +321,7 @@ final class ManagerResolutionService
         }
         if ($status === 'EN_ATTENTE_PROPRIETAIRE') {
             return [
-                ['code' => 'receive_full', 'label' => 'Valider comme reçue (total)'],
+                ['code' => 'receive_full', 'label' => 'Valider comme reçue (argent en caisse)'],
                 ['code' => 'partial_accept', 'label' => 'Accepter partiellement'],
                 ['code' => 'reject_final', 'label' => 'Rejeter définitivement'],
             ];

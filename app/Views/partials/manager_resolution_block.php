@@ -16,8 +16,9 @@ $eid = (int) ($mr['entity_id'] ?? 0);
 $restaurantCurrency = restaurant_currency((isset($restaurant) && is_array($restaurant)) ? $restaurant : null);
 ?>
 <section class="card no-print manager-resolution-block" style="padding:18px 22px; margin-bottom:22px; border-left:4px solid var(--brand, #d4af37);">
-    <h3 style="margin:0 0 10px;">Résolution responsable</h3>
-    <p class="muted" style="margin:0 0 12px;"><strong>Opération :</strong> <?= e((string) ($mr['operation_label'] ?? '')) ?></p>
+    <h3 style="margin:0 0 6px;">Décision du responsable</h3>
+    <p class="muted" style="margin:0 0 12px; font-size:0.95rem;">Cas bloqué ou litigieux — vous tranchez pour l’équipe, sans repasser par l’agent.</p>
+    <p class="muted" style="margin:0 0 12px;"><strong>Situation :</strong> <?= e((string) ($mr['operation_label'] ?? '')) ?></p>
     <dl style="margin:0 0 14px; display:grid; gap:6px;">
         <div><span class="muted">Agent</span> <?= e((string) ($mr['agent_label'] ?? '—')) ?></div>
         <div><span class="muted">Date d’origine</span> <?= e(format_date_fr($mr['origin_at'] ?? null)) ?></div>
@@ -28,7 +29,7 @@ $restaurantCurrency = restaurant_currency((isset($restaurant) && is_array($resta
     <?php
     $preview = $mr['sanction_preview']['ledger_preview'] ?? [];
     if (is_array($preview) && $preview !== []): ?>
-        <p class="muted" style="margin:0 0 8px;"><strong>Sanctions / score (aperçu)</strong></p>
+        <p class="muted" style="margin:0 0 8px;"><strong>Historique discipline (aperçu)</strong></p>
         <ul style="margin:0 0 14px; padding-left:20px; line-height:1.5;">
             <?php foreach (array_slice($preview, -5) as $ln): ?>
                 <li><?= e((string) ($ln['label'] ?? '')) ?> · <?= e((string) ($ln['delta_points'] ?? '')) ?> pts · <?= e((string) ($ln['day_ymd'] ?? '')) ?></li>
@@ -43,22 +44,22 @@ $restaurantCurrency = restaurant_currency((isset($restaurant) && is_array($resta
             <input type="hidden" name="entity_kind" value="server_request">
             <input type="hidden" name="entity_id" value="<?= e((string) $eid) ?>">
             <input type="hidden" name="return_focus" value="<?= e($focusReturn) ?>">
-            <label>Décision</label>
+            <label>Votre décision</label>
             <select name="decision" required>
                 <?php foreach ($decisions as $d): ?>
                     <option value="<?= e((string) ($d['code'] ?? '')) ?>"><?= e((string) ($d['label'] ?? '')) ?></option>
                 <?php endforeach; ?>
             </select>
-            <label>Motif (obligatoire sauf « servie »)</label>
-            <textarea name="reason" placeholder="Contexte et justification"></textarea>
-            <label>Indicateur d’imputation (optionnel, texte)</label>
-            <input type="text" name="imputation_basis" placeholder="Référence interne">
+            <label>Motif (obligatoire sauf « servie ») — vous pouvez garder le texte proposé</label>
+            <textarea name="reason" placeholder="Décision du responsable">Décision du responsable</textarea>
+            <label>Référence interne (optionnel)</label>
+            <input type="text" name="imputation_basis" placeholder="Ex. réunion, appel">
             <label style="display:flex; align-items:center; gap:10px;">
-                <input type="checkbox" name="grant_clemency" value="1"> Accorder clémence (motif obligatoire, audit propriétaire)
+                <input type="checkbox" name="grant_clemency" value="1"> Clémence (efface la pénalité de retard — motif et audit obligatoires)
             </label>
-            <label>Motif clémence</label>
-            <textarea name="clemency_reason" placeholder="Si clémence cochée"></textarea>
-            <button type="submit">Enregistrer la décision responsable</button>
+            <label>Motif de clémence</label>
+            <textarea name="clemency_reason" placeholder="Si clémence est cochée"></textarea>
+            <button type="submit">Enregistrer la décision</button>
         </form>
     <?php elseif ($kind === 'cash_transfer' || $kind === 'sale'):
         $tid = (int) ($mr['cash_transfer_id'] ?? 0);
@@ -72,28 +73,28 @@ $restaurantCurrency = restaurant_currency((isset($restaurant) && is_array($resta
         <form method="post" action="/caisse/resolution-responsable" style="padding-top:12px; border-top:1px solid var(--line);">
             <input type="hidden" name="transfer_id" value="<?= e((string) $tid) ?>">
             <input type="hidden" name="return_focus" value="<?= e($focusR) ?>">
-            <label>Décision</label>
+            <label>Votre décision</label>
             <select name="decision" required>
                 <?php foreach ($decisions as $d): ?>
                     <option value="<?= e((string) ($d['code'] ?? '')) ?>"><?= e((string) ($d['label'] ?? '')) ?></option>
                 <?php endforeach; ?>
             </select>
-            <label>Montant accepté (partiel uniquement)</label>
+            <label>Montant accepté (uniquement si vous choisissez « partiel »)</label>
             <input type="number" step="0.01" name="amount_accepted" value="">
-            <label>Motif</label>
-            <textarea name="reason" required placeholder="Obligatoire"></textarea>
-            <label>Date d’imputation (rapports / caisse)</label>
+            <label>Motif — vous pouvez garder le texte proposé</label>
+            <textarea name="reason" required placeholder="Décision du responsable">Décision du responsable</textarea>
+            <label>Rattachement pour les rapports</label>
             <select name="imputation_basis">
-                <option value="">—</option>
+                <option value="">— Par défaut fichier courant —</option>
                 <option value="SALE_DAY">Jour de la vente</option>
-                <option value="REMITTANCE_DAY">Jour de remise caisse</option>
-                <option value="RESOLUTION_DAY">Jour de résolution</option>
+                <option value="REMITTANCE_DAY">Jour de la remise</option>
+                <option value="RESOLUTION_DAY">Jour de cette décision</option>
             </select>
             <label style="display:flex; align-items:center; gap:10px;">
                 <input type="checkbox" name="grant_clemency" value="1"> Clémence discipline
             </label>
-            <textarea name="clemency_reason" placeholder="Motif clémence"></textarea>
-            <button type="submit">Valider décision caisse (responsable)</button>
+            <textarea name="clemency_reason" placeholder="Motif clémence si besoin"></textarea>
+            <button type="submit">Enregistrer la décision</button>
         </form>
         <?php endif; ?>
     <?php endif; ?>

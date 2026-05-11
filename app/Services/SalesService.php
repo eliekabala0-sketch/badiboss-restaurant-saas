@@ -609,10 +609,14 @@ final class SalesService
             throw new \RuntimeException('Cette demande a ete annulee ou refusee par la cuisine.');
         }
 
-        if (!in_array((string) $request['status'], ['REMIS_SERVEUR', 'VENDU_PARTIEL', 'VENDU_TOTAL'], true)) {
+        $reqStatus = (string) $request['status'];
+        $suppliedHeader = (float) ($request['total_supplied_amount'] ?? 0);
+        $closureStatusOk = in_array($reqStatus, ['REMIS_SERVEUR', 'VENDU_PARTIEL', 'VENDU_TOTAL'], true)
+            || ($isResponsible && $suppliedHeader > 0.0001);
+        if (!$closureStatusOk) {
             throw new \RuntimeException('La demande doit d abord etre remise au serveur avant la cloture.');
         }
-        if ((float) $request['total_supplied_amount'] <= 0) {
+        if ($suppliedHeader <= 0) {
             throw new \RuntimeException('Aucune fourniture cuisine validee sur cette demande.');
         }
 
