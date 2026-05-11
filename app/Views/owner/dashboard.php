@@ -144,12 +144,34 @@ $staffGauges = $staff_gauges_overview ?? [];
 <?php endif; ?>
 
 <?php if ($staffGauges !== []): ?>
+<?php
+$disciplineZoneLabelFr = static function (string $z): string {
+    return match ($z) {
+        'non_evalue' => 'Non évalué',
+        'vert' => 'Excellent',
+        'jaune' => 'Bon',
+        'orange' => 'Moyen',
+        'rouge' => 'Problématique',
+        'rouge_critique' => 'Très problématique',
+        default => $z === '' ? '—' : ucfirst($z),
+    };
+};
+$disciplineZonePillClass = static function (string $z): string {
+    return match ($z) {
+        'vert' => 'badge-closed',
+        'jaune' => 'badge-ready',
+        'orange' => 'badge-progress',
+        'rouge', 'rouge_critique' => 'badge-bad',
+        default => 'badge-neutral',
+    };
+};
+?>
 <details class="card no-print" style="padding:18px 22px; margin-bottom:24px;">
     <summary style="cursor:pointer;"><strong>Discipline et jauges</strong> · selon l’onglet période ci-dessus</summary>
-    <p class="muted" style="margin:10px 0 14px;">Score affiché = période choisie (jour, semaine, mois, etc.). Retenue indicative : selon la moyenne du mois en cours (zone mois).</p>
+    <p class="muted" style="margin:10px 0 14px;">Score affiché = période choisie (jour, semaine, mois, etc.). Retenue indicative : selon la moyenne du mois en cours (zone mois). Classement : serveurs, cuisine, stock, caisse, puis autres rôles ; dans chaque groupe, meilleur score en haut.</p>
     <div class="table-wrap">
         <table>
-            <thead><tr><th>Agent</th><th>Rôle</th><th>Score (période)</th><th>Zone</th><th>Moy. 7 j.</th><th>Mois</th><th>Retenue</th></tr></thead>
+            <thead><tr><th>Agent</th><th>Rôle</th><th>Score (période)</th><th>Statut</th><th>Activité (actions)</th><th>Abs. injust. (mois<sup>*</sup>)</th><th>Sans activité (mois<sup>*</sup>)</th><th>Manquants caisse (période)</th><th>Prép. moy. (min)</th><th>Moy. 7 j.</th><th>Mois</th><th>Retenue</th></tr></thead>
             <tbody>
             <?php foreach ($staffGauges as $sg): ?>
                 <?php
@@ -158,7 +180,14 @@ $staffGauges = $staff_gauges_overview ?? [];
                 $periodScore = $ap['score'] ?? ($g['daily'] ?? null);
                 $scoreDisplay = $periodScore === null ? 'Non évalué' : (string) $periodScore . ' %';
                 $zoneRaw = (string) ($ap['zone'] ?? ($g['zone'] ?? ''));
-                $zoneP = $zoneRaw === 'non_evalue' ? 'Non évalué' : ucfirst($zoneRaw);
+                $zoneP = $disciplineZoneLabelFr($zoneRaw);
+                $zoneClass = $disciplineZonePillClass($zoneRaw);
+                $rm = is_array($g['row_metrics'] ?? null) ? $g['row_metrics'] : [];
+                $actDisp = array_key_exists('activite_actions', $rm) && $rm['activite_actions'] !== null ? (string) (int) $rm['activite_actions'] : '—';
+                $abuDisp = array_key_exists('absences_injustifiees', $rm) && $rm['absences_injustifiees'] !== null ? (string) (int) $rm['absences_injustifiees'] : '—';
+                $zeroActDisp = array_key_exists('jours_sans_activite_mesuree', $rm) && $rm['jours_sans_activite_mesuree'] !== null ? (string) (int) $rm['jours_sans_activite_mesuree'] : '—';
+                $manqDisp = array_key_exists('manquants_caisse_hits', $rm) ? (string) (int) $rm['manquants_caisse_hits'] : '—';
+                $prepDisp = array_key_exists('preparation_moy_min', $rm) && $rm['preparation_moy_min'] !== null ? (string) $rm['preparation_moy_min'] : '—';
                 $wAvg = $g['weekly_avg'] ?? null;
                 $mAvg = $g['monthly_avg'] ?? null;
                 $wDisplay = $wAvg === null ? 'Non évalué' : (string) $wAvg . ' %';
@@ -170,14 +199,19 @@ $staffGauges = $staff_gauges_overview ?? [];
                     <td><?= e((string) ($sg['full_name'] ?? '')) ?></td>
                     <td><?= e(restaurant_role_label($sg['role_code'] ?? null)) ?></td>
                     <td><?= e($scoreDisplay) ?></td>
-                    <td><?= e($zoneP) ?></td>
+                    <td><span class="pill <?= e($zoneClass) ?>"><?= e($zoneP) ?></span></td>
+                    <td><?= e($actDisp) ?></td>
+                    <td><?= e($abuDisp) ?></td>
+                    <td><?= e($zeroActDisp) ?></td>
+                    <td><?= e($manqDisp) ?></td>
+                    <td><?= e($prepDisp) ?></td>
                     <td><?= e($wDisplay) ?></td>
                     <td><?= e($mDisplay) ?></td>
                     <td><?= e($ret) ?><?= $ret === '—' ? '' : ' %' ?></td>
                 </tr>
                 <?php if (!empty($ap['points_detail']) && is_array($ap['points_detail'])): ?>
                 <tr>
-                    <td colspan="7" class="muted" style="font-size:0.92rem;">
+                    <td colspan="12" class="muted" style="font-size:0.92rem;">
                         <strong><?= e((string) ($ap['titre'] ?? '')) ?></strong><?php if (!empty($ap['jour'])): ?> · <?= e((string) $ap['jour']) ?><?php endif; ?>
                         <?php if (!empty($ap['note'])): ?><span> — <?= e((string) $ap['note']) ?></span><?php endif; ?>
                         <?php if (!empty($ap['jours_moyennes'])): ?><span> — <?= e((string) (int) $ap['jours_moyennes']) ?> jour(s) pris en compte</span><?php endif; ?>
@@ -196,6 +230,7 @@ $staffGauges = $staff_gauges_overview ?? [];
             </tbody>
         </table>
     </div>
+    <p class="muted" style="margin:10px 0 0; font-size:0.9rem;"><sup>*</sup> Colonnes « mois » : données du tableau de mois lorsque la période active est un mois (mois en cours ou mois précédent) ; sinon « — ».</p>
 </details>
 <?php endif; ?>
 

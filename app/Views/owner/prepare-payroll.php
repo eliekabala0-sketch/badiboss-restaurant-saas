@@ -28,6 +28,7 @@ $periodLabel = (string) ($preview['period_label'] ?? '');
         <button type="submit">Actualiser</button>
     </form>
     <p class="muted" style="margin:14px 0 0;">Période calcul : <?= e($periodLabel) ?> · <?= e($periodStart) ?> → <?= e($periodEnd) ?></p>
+    <p class="muted" style="margin:8px 0 0;">Ordre : serveurs, cuisine, stock, caisse, autres ; meilleure moyenne mensuelle en haut.</p>
 </section>
 
 <section class="card" style="padding:0; margin-bottom:24px; overflow:auto;">
@@ -38,6 +39,7 @@ $periodLabel = (string) ($preview['period_label'] ?? '');
             <th>Rôle</th>
             <th>Salaire base</th>
             <th>Jauge mois (moy.)</th>
+            <th>Profil</th>
             <th>Présences (lignes)</th>
             <th>Pts pénalité (ledger)</th>
             <th>Retenue proposée</th>
@@ -46,15 +48,41 @@ $periodLabel = (string) ($preview['period_label'] ?? '');
         </tr>
         </thead>
         <tbody>
+        <?php
+        $payrollZoneLabel = static function (mixed $z): string {
+            $s = (string) $z;
+
+            return match ($s) {
+                'non_evalue' => 'Non évalué',
+                'vert' => 'Excellent',
+                'jaune' => 'Bon',
+                'orange' => 'Moyen',
+                'rouge' => 'Problématique',
+                'rouge_critique' => 'Très problématique',
+                default => $s === '' ? '—' : ucfirst($s),
+            };
+        };
+        $payrollZonePill = static function (string $z): string {
+            return match ($z) {
+                'vert' => 'badge-closed',
+                'jaune' => 'badge-ready',
+                'orange' => 'badge-progress',
+                'rouge', 'rouge_critique' => 'badge-bad',
+                default => 'badge-neutral',
+            };
+        };
+        ?>
         <?php foreach ($rows as $r): ?>
             <?php if (!is_array($r)) {
                 continue;
             } ?>
+            <?php $zRaw = (string) ($r['monthly_score_zone'] ?? 'non_evalue'); ?>
             <tr>
                 <td><?= e((string) ($r['full_name'] ?? '')) ?></td>
                 <td><?= e(restaurant_role_label($r['role_code'] ?? null)) ?></td>
                 <td><?= e(format_money((float) ($r['base_salary_monthly'] ?? 0), (string) ($r['currency'] ?? 'USD'))) ?></td>
                 <td><?= ($r['monthly_score_avg'] ?? null) === null ? 'Non évalué' : e((string) $r['monthly_score_avg']) . ' %' ?></td>
+                <td><span class="pill <?= e($payrollZonePill($zRaw)) ?>"><?= e($payrollZoneLabel($zRaw)) ?></span></td>
                 <td><?= e((string) (int) ($r['attendance_days_recorded'] ?? 0)) ?></td>
                 <td><?= e((string) (int) ($r['ledger_penalty_points_month'] ?? 0)) ?></td>
                 <td><?= e((string) (float) ($r['retention_proposed_pct'] ?? 0)) ?> %</td>

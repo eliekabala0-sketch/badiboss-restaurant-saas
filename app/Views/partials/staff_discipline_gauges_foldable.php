@@ -25,7 +25,15 @@ $formatGaugeVal = static function (mixed $v): string {
 $formatZone = static function (mixed $z): string {
     $s = (string) $z;
 
-    return $s === 'non_evalue' ? 'Non évalué' : ucfirst($s);
+    return match ($s) {
+        'non_evalue' => 'Non évalué',
+        'vert' => 'Excellent',
+        'jaune' => 'Bon',
+        'orange' => 'Moyen',
+        'rouge' => 'Problématique',
+        'rouge_critique' => 'Très problématique',
+        default => ucfirst($s),
+    };
 };
 $ap = is_array($g['active_period'] ?? null) ? $g['active_period'] : [];
 $periodHint = (string) ($ap['titre'] ?? '');
