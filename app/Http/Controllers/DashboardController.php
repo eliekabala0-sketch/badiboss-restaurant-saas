@@ -258,7 +258,7 @@ final class DashboardController
             'regularization_backlog' => Container::getInstance()->get('salesService')->regularizationBacklogCounts($restaurantId),
             'restaurant_reg_tasks' => $wideTasks,
             'day_start_hold' => $hold,
-            'staff_gauges_overview' => in_array((string) ($_SESSION['user']['role_code'] ?? ''), ['owner', 'manager'], true)
+            'staff_gauges_overview' => can_access('staff.team_gauges.view')
                 ? $staffDisc->gaugesSnapshotRestaurantOperational(
                     $restaurantId,
                     (string) ($dash['dash_preset'] ?? 'today'),
@@ -270,6 +270,33 @@ final class DashboardController
         ]));
 
         audit_access('dashboard', $restaurantId, 'screens', 'owner-dashboard', 'Consultation tableau de bord restaurant');
+    }
+
+    public function preparePayroll(Request $request): void
+    {
+        authorize_access('payroll.prepare.view');
+        $restaurantId = current_restaurant_id();
+        $restaurant = Container::getInstance()->get('restaurantAdmin')->findRestaurant($restaurantId);
+        $staffDisc = Container::getInstance()->get('staffDiscipline');
+        $staffDisc->ensureSchema();
+        $todayY = Container::getInstance()->get('reportService')->todayForRestaurant($restaurantId);
+        $monthIn = trim((string) ($request->query['month'] ?? ''));
+        if ($monthIn === '') {
+            $monthIn = substr($todayY, 0, 7);
+        }
+        $preview = $staffDisc->payrollMonthPreview($restaurantId, $monthIn);
+
+        view('owner/prepare-payroll', [
+            'title' => 'Préparer la paie',
+            'user' => $_SESSION['user'],
+            'restaurant' => $restaurant,
+            'payroll_preview' => $preview,
+            'month_query' => $preview['month'],
+            'flash_success' => flash('success'),
+            'flash_error' => flash('error'),
+        ]);
+
+        audit_access('payroll', $restaurantId, 'screens', 'prepare-payroll', 'Consultation préparation paie');
     }
 
     /**

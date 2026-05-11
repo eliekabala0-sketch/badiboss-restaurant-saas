@@ -57,6 +57,12 @@ final class AuthorizationService
         'kitchen.stock.request' => ['roles' => ['kitchen'], 'permissions' => ['kitchen.manage']],
         'stock.request.respond' => ['roles' => ['stock_manager', 'manager'], 'permissions' => ['stock.manage']],
         'reports.view' => ['roles' => ['owner', 'manager'], 'permissions' => ['reports.view', 'reports.daily']],
+        /** Propriétaire / gérant : accès par défaut. Autres rôles : uniquement si permission « staff.gauges.view » accordée. */
+        'staff.team_gauges.view' => [
+            'roles' => ['owner', 'manager'],
+            'permissions' => ['staff.gauges.view'],
+        ],
+        'payroll.prepare.view' => ['roles' => ['owner', 'manager']],
     ];
 
     private const SUPER_ADMIN_AUDIT_ABILITIES = [
@@ -104,6 +110,8 @@ final class AuthorizationService
         'kitchen.stock.request',
         'stock.request.respond',
         'reports.view',
+        'staff.team_gauges.view',
+        'payroll.prepare.view',
     ];
 
     private ?array $permissionCache = null;

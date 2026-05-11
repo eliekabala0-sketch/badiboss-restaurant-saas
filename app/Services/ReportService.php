@@ -218,7 +218,7 @@ final class ReportService
             'date' => $this->periodBounds($anchor, 'daily', $timezone),
             'week' => $this->periodBounds($anchor, 'weekly', $timezone),
             'month' => $this->periodBounds($anchor, 'monthly', $timezone),
-            'prev_month' => $this->previousMonthBounds($this->normalizeDate($todayYmd, $timezone), $timezone),
+            'prev_month' => $this->previousMonthBounds($anchor, $timezone),
             default => $this->periodBounds($this->normalizeDate($todayYmd, $timezone), 'daily', $timezone),
         };
 
@@ -412,6 +412,155 @@ final class ReportService
         }
 
         return $out;
+    }
+
+    /**
+     * Données « même base que Activité des agents » (rapport), pour les jauges discipline — un utilisateur et une fenêtre [start, end).
+     *
+     * @return list<array{label:string,count:int}>
+     */
+    public function disciplineDomainActivityLinesForUser(
+        int $restaurantId,
+        int $userId,
+        string $roleCode,
+        string $rangeStartDatetime,
+        string $rangeEndDatetime,
+    ): array {
+        if ($userId <= 0) {
+            return [];
+        }
+        $pdo = $this->database->pdo();
+        $s = $rangeStartDatetime;
+        $e = $rangeEndDatetime;
+        $lines = [];
+        $closedStatuses = ['VALIDE', 'CLOTURE', 'VENDU_TOTAL', 'VENDU_PARTIEL'];
+        $inClosed = implode(',', array_map(static fn (string $st): string => '"' . $st . '"', $closedStatuses));
+
+        if ($roleCode === 'cashier_server') {
+            $st = $pdo->prepare(
+                'SELECT COUNT(*) FROM server_requests sr
+                 WHERE sr.restaurant_id = :rid AND sr.server_id = :uid
+                   AND sr.created_at >= :s AND sr.created_at < :e
+                   AND sr.status NOT IN ("ANNULE","REFUSE_CUISINE")'
+            );
+            $st->execute(['rid' => $restaurantId, 'uid' => $userId, 's' => $s, 'e' => $e]);
+            $c = (int) $st->fetchColumn();
+            if ($c > 0) {
+                $lines[] = ['label' => 'Commandes service (activité agents)', 'count' => $c];
+            }
+            $st2 = $pdo->prepare(
+                'SELECT COUNT(*) FROM sales s
+                 WHERE s.restaurant_id = :rid AND s.server_id = :uid
+                   AND s.validated_at IS NOT NULL
+                   AND s.validated_at >= :s AND s.validated_at < :e
+                   AND s.status IN (' . $inClosed . ')'
+            );
+            $st2->execute(['rid' => $restaurantId, 'uid' => $userId, 's' => $s, 'e' => $e]);
+            $c2 = (int) $st2->fetchColumn();
+            if ($c2 > 0) {
+                $lines[] = ['label' => 'Ventes clôturées (activité agents)', 'count' => $c2];
+            }
+            $st3 = $pdo->prepare(
+                'SELECT COUNT(*) FROM cash_transfers ct
+                 WHERE ct.restaurant_id = :rid AND ct.source_type = "sale" AND ct.from_user_id = :uid
+                   AND COALESCE(ct.received_at, ct.requested_at, ct.created_at) >= :s
+                   AND COALESCE(ct.received_at, ct.requested_at, ct.created_at) < :e'
+            );
+            $st3->execute(['rid' => $restaurantId, 'uid' => $userId, 's' => $s, 'e' => $e]);
+            $c3 = (int) $st3->fetchColumn();
+            if ($c3 > 0) {
+                $lines[] = ['label' => 'Remises caisse (activité agents)', 'count' => $c3];
+            }
+
+            return $lines;
+        }
+
+        if ($roleCode === 'kitchen') {
+            $st = $pdo->prepare(
+                'SELECT COUNT(*) AS lines_done
+                 FROM server_request_items sri
+                 INNER JOIN server_requests sr ON sr.id = sri.request_id
+                 WHERE sr.restaurant_id = :rid AND sri.technical_confirmed_by = :uid
+                   AND sri.prepared_at IS NOT NULL
+                   AND sri.prepared_at >= :s AND sri.prepared_at < :e'
+            );
+            $st->execute(['rid' => $restaurantId, 'uid' => $userId, 's' => $s, 'e' => $e]);
+            $c = (int) $st->fetchColumn();
+            if ($c > 0) {
+                $lines[] = ['label' => 'Lignes préparées cuisine (activité agents)', 'count' => $c];
+            }
+
+            return $lines;
+        }
+
+        if ($roleCode === 'stock_manager') {
+            $st1 = $pdo->prepare(
+                'SELECT COUNT(*) FROM audit_logs
+                 WHERE restaurant_id = :rid AND module_name = "stock"
+                   AND action_name = "kitchen_stock_request_processing_started"
+                   AND user_id = :uid
+                   AND created_at >= :s AND created_at < :e'
+            );
+            $st1->execute(['rid' => $restaurantId, 'uid' => $userId, 's' => $s, 'e' => $e]);
+            $c1 = (int) $st1->fetchColumn();
+            if ($c1 > 0) {
+                $lines[] = ['label' => 'Prises en charge demandes magasin (activité agents)', 'count' => $c1];
+            }
+            $st2 = $pdo->prepare(
+                'SELECT COUNT(*) FROM kitchen_stock_requests
+                 WHERE restaurant_id = :rid AND responded_by = :uid
+                   AND responded_at IS NOT NULL
+                   AND responded_at >= :s AND responded_at < :e'
+            );
+            $st2->execute(['rid' => $restaurantId, 'uid' => $userId, 's' => $s, 'e' => $e]);
+            $c2 = (int) $st2->fetchColumn();
+            if ($c2 > 0) {
+                $lines[] = ['label' => 'Demandes magasin traitées (activité agents)', 'count' => $c2];
+            }
+            $st3 = $pdo->prepare(
+                'SELECT COUNT(*) FROM stock_movements
+                 WHERE restaurant_id = :rid AND user_id = :uid AND status = "VALIDE"
+                   AND movement_type IN ("SORTIE","SORTIE_CUISINE")
+                   AND created_at >= :s AND created_at < :e'
+            );
+            $st3->execute(['rid' => $restaurantId, 'uid' => $userId, 's' => $s, 'e' => $e]);
+            $c3 = (int) $st3->fetchColumn();
+            if ($c3 > 0) {
+                $lines[] = ['label' => 'Sorties stock (activité agents)', 'count' => $c3];
+            }
+            $st4 = $pdo->prepare(
+                'SELECT COUNT(*) FROM stock_movements
+                 WHERE restaurant_id = :rid AND user_id = :uid AND status = "VALIDE"
+                   AND created_at >= :s AND created_at < :e'
+            );
+            $st4->execute(['rid' => $restaurantId, 'uid' => $userId, 's' => $s, 'e' => $e]);
+            $c4 = (int) $st4->fetchColumn();
+            if ($c4 > 0) {
+                $lines[] = ['label' => 'Mouvements stock validés (activité agents)', 'count' => $c4];
+            }
+
+            return $lines;
+        }
+
+        if ($roleCode === 'cashier_accountant') {
+            $st = $pdo->prepare(
+                'SELECT COUNT(*) FROM cash_transfers
+                 WHERE restaurant_id = :rid AND source_type = "sale"
+                   AND received_by = :uid
+                   AND received_at IS NOT NULL
+                   AND received_at >= :s AND received_at < :e
+                   AND requested_at IS NOT NULL'
+            );
+            $st->execute(['rid' => $restaurantId, 'uid' => $userId, 's' => $s, 'e' => $e]);
+            $c = (int) $st->fetchColumn();
+            if ($c > 0) {
+                $lines[] = ['label' => 'Réceptions remises vente (activité agents)', 'count' => $c];
+            }
+
+            return $lines;
+        }
+
+        return $lines;
     }
 
     private function publicAuditLabelForRole(string $module, string $action, string $roleCode): ?string

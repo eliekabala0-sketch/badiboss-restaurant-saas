@@ -526,6 +526,7 @@ $saleRemittanceHist = $sale_remittance_history ?? [];
         <?php if (!restaurant_status_blocks_operations($restaurant['status'] ?? null) && $can_access_reports): ?><a href="/rapport">Voir les rapports</a><?php endif; ?>
         <?php if (!restaurant_status_blocks_operations($restaurant['status'] ?? null) && $can_access_cash): ?><a href="/caisse">Ouvrir Caisse</a><?php endif; ?>
         <?php if (!restaurant_status_blocks_operations($restaurant['status'] ?? null)): ?><a href="/owner/menu">Voir le menu</a><?php endif; ?>
+        <?php if (can_access('payroll.prepare.view')): ?><a href="/owner/paie/preparer">Préparer la paie</a><?php endif; ?>
         <?php if (can_access('tenant.access.manage')): ?><a href="/owner/access">Rôles et accès</a><?php endif; ?>
     </div>
 </section>

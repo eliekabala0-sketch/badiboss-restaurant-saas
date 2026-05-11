@@ -59,6 +59,7 @@ $router->post('/super-admin/menu/items', [MenuAdminController::class, 'storeItem
 $router->post('/super-admin/menu/items/{id}/update', [MenuAdminController::class, 'updateItem'], [AuthMiddleware::class, SuperAdminMiddleware::class]);
 $router->post('/super-admin/menu/items/{id}/status', [MenuAdminController::class, 'markStatus'], [AuthMiddleware::class, SuperAdminMiddleware::class]);
 $router->get('/owner', [DashboardController::class, 'owner'], [AuthMiddleware::class, OwnerAreaMiddleware::class]);
+$router->get('/owner/paie/preparer', [DashboardController::class, 'preparePayroll'], [AuthMiddleware::class, OwnerAreaMiddleware::class]);
 $router->post('/owner/subscription/pay', [RestaurantAdminController::class, 'declarePayment'], [AuthMiddleware::class, OwnerAreaMiddleware::class]);
 $router->post('/owner/settings/currency', [RestaurantAdminController::class, 'updateOwnerCurrency'], [AuthMiddleware::class, OwnerOrManagerMiddleware::class]);
 $router->get('/owner/menu', [MenuAdminController::class, 'ownerIndex'], [AuthMiddleware::class, OwnerAreaMiddleware::class]);

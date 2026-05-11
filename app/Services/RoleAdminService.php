@@ -105,7 +105,7 @@ final class RoleAdminService
             $groups[$module]['permissions'][] = $permission;
         }
 
-        $orderedCodes = ['dashboard', 'stock', 'kitchen', 'sales', 'cash', 'reports', 'menu', 'users', 'roles', 'incidents'];
+        $orderedCodes = ['dashboard', 'stock', 'kitchen', 'sales', 'cash', 'reports', 'staff', 'menu', 'users', 'roles', 'incidents'];
         $ordered = [];
 
         foreach ($orderedCodes as $code) {

@@ -67,6 +67,21 @@ final class StaffDisciplineService
                 KEY idx_score_reason (reason_code)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci'
         );
+        $this->ensureStaffDisciplinePermissions();
+    }
+
+    private function ensureStaffDisciplinePermissions(): void
+    {
+        $pdo = $this->database->pdo();
+        $st = $pdo->prepare('SELECT id FROM permissions WHERE code = :c LIMIT 1');
+        $st->execute(['c' => 'staff.gauges.view']);
+        if ($st->fetchColumn() !== false) {
+            return;
+        }
+        $pdo->prepare(
+            'INSERT INTO permissions (module_name, action_name, code, description, is_sensitive, created_at, updated_at)
+             VALUES ("staff", "gauges_view", "staff.gauges.view", "Voir les jauges des autres agents du restaurant.", 0, NOW(), NOW())'
+        )->execute();
     }
 
     /**
@@ -143,8 +158,117 @@ final class StaffDisciplineService
             'weekly_avg' => $weekly,
             'monthly_avg' => $monthly,
             'zone' => $this->zoneFromScoreNullable($monthly),
-            'ledger_preview' => array_slice($this->listLedgerForUserMonth($restaurantId, $userId, $todayYmd), -12),
+            'ledger_preview' => array_slice($this->listLedgerForUserMonth($restaurantId, $userId, substr($todayYmd, 0, 7) . '-01'), -12),
         ];
+    }
+
+    /**
+     * Bandeaux jour / 7 j. / mois alignés sur la période opérationnelle (pas figés à « aujourd’hui » seul).
+     *
+     * @return array{daily:?int, weekly_avg:?float, monthly_avg:?float, zone:string, ledger_preview: list<array<string,mixed>>}
+     */
+    private function gaugesOperationalSummaryStats(
+        int $restaurantId,
+        int $userId,
+        string $preset,
+        string $anchorYmd,
+        string $todayY,
+        DateTimeZone $tz,
+    ): array {
+        $rs = Container::getInstance()->get('reportService');
+        $refY = $this->operationalReferenceDayYmd($restaurantId, $preset, $anchorYmd, $todayY, $tz);
+        $daily = $this->scoreForDayOrNull($restaurantId, $userId, $refY, $tz);
+        $glob = $this->effectiveGlobalStartYmd($restaurantId);
+        if ($preset === 'week') {
+            $win = $rs->operationalPeriodWindow($restaurantId, 'week', $anchorYmd);
+            $first = max($glob, $win['start']->format('Y-m-d'));
+            $last = $win['end']->modify('-1 day')->format('Y-m-d');
+            $weekly = $first <= $last
+                ? $this->averageEvaluatedDaysInRange($restaurantId, $userId, $first, $last, $tz)
+                : null;
+        } else {
+            $weekly = $this->averageLastDaysNullable($restaurantId, $userId, $refY, 7, $tz);
+        }
+
+        if ($preset === 'prev_month') {
+            $win = $rs->operationalPeriodWindow($restaurantId, 'prev_month', $anchorYmd);
+            $first = $win['start']->format('Y-m-d');
+            $last = $win['end']->modify('-1 day')->format('Y-m-d');
+            $monthly = $this->averageEvaluatedDaysInRange($restaurantId, $userId, $first, $last, $tz);
+        } else {
+            $monthEnd = min($refY, $todayY);
+            $monthly = $this->averageMonthToDateNullable($restaurantId, $userId, $monthEnd, $tz);
+        }
+
+        $ledgerMonthKey = substr($refY, 0, 7) . '-01';
+
+        return [
+            'daily' => $daily,
+            'weekly_avg' => $weekly,
+            'monthly_avg' => $monthly,
+            'zone' => $this->zoneFromScoreNullable($monthly),
+            'ledger_preview' => array_slice($this->listLedgerForUserMonth($restaurantId, $userId, $ledgerMonthKey), -12),
+        ];
+    }
+
+    private function operationalReferenceDayYmd(
+        int $restaurantId,
+        string $preset,
+        string $anchorYmd,
+        string $todayY,
+        DateTimeZone $tz,
+    ): string {
+        $rs = Container::getInstance()->get('reportService');
+        try {
+            return match ($preset) {
+                'today' => $todayY,
+                'yesterday' => (new DateTimeImmutable($todayY . ' 00:00:00', $tz))->modify('-1 day')->format('Y-m-d'),
+                'date', 'week', 'month' => $anchorYmd,
+                'prev_month' => $rs->operationalPeriodWindow($restaurantId, 'prev_month', $anchorYmd)['end']->modify('-1 day')->format('Y-m-d'),
+                default => $todayY,
+            };
+        } catch (\Throwable) {
+            return $todayY;
+        }
+    }
+
+    private function averageEvaluatedDaysInRange(
+        int $restaurantId,
+        int $userId,
+        string $fromYmd,
+        string $toYmd,
+        DateTimeZone $tz,
+    ): ?float {
+        if ($fromYmd > $toYmd) {
+            return null;
+        }
+        $glob = $this->effectiveGlobalStartYmd($restaurantId);
+        try {
+            $start = max($fromYmd, $glob);
+            $endD = new DateTimeImmutable($toYmd . ' 00:00:00', $tz);
+            $cur = new DateTimeImmutable($start . ' 00:00:00', $tz);
+        } catch (\Throwable) {
+            return null;
+        }
+        if ($start > $toYmd) {
+            return null;
+        }
+        $sum = 0.0;
+        $n = 0;
+        for ($d = $cur; $d <= $endD; $d = $d->modify('+1 day')) {
+            $sc = $this->scoreForDayOrNull($restaurantId, $userId, $d->format('Y-m-d'), $tz);
+            if ($sc !== null) {
+                $sum += $sc;
+                $n++;
+            }
+        }
+
+        if ($n <= 0) {
+            return null;
+        }
+        $r = round($sum / $n, 1);
+
+        return is_finite($r) ? $r : null;
     }
 
     /**
@@ -168,13 +292,13 @@ final class StaffDisciplineService
         }
         $anchor = $anchorYmd !== '' && preg_match('/^\d{4}-\d{2}-\d{2}$/', $anchorYmd) ? $anchorYmd : $todayY;
         $yesterday = (new DateTimeImmutable($todayY . ' 00:00:00', $tz))->modify('-1 day')->format('Y-m-d');
-        $base = $this->gaugesForUser($restaurantId, $userId, $todayY);
+        $base = $this->gaugesOperationalSummaryStats($restaurantId, $userId, $preset, $anchor, $todayY, $tz);
 
         $active = match ($preset) {
             'today' => $this->snapshotDayGauge($restaurantId, $userId, $todayY, 'Aujourd’hui', $tz),
             'yesterday' => $this->snapshotDayGauge($restaurantId, $userId, $yesterday, 'Hier', $tz),
             'date' => $this->snapshotDayGauge($restaurantId, $userId, $anchor, 'Jour au calendrier', $tz),
-            'week' => $this->snapshotRollingAverageGauge($restaurantId, $userId, $anchor, 7, 'Moyenne sur 7 jours', $tz),
+            'week' => $this->snapshotOperationalWeekGauge($restaurantId, $userId, $anchor, $tz),
             'month' => $this->snapshotCalendarMonthGauge($restaurantId, $userId, $anchor, false, $tz, $todayY),
             'prev_month' => $this->snapshotCalendarMonthGauge($restaurantId, $userId, $anchor, true, $tz, $todayY),
             default => $this->snapshotDayGauge($restaurantId, $userId, $todayY, 'Aujourd’hui', $tz),
@@ -285,6 +409,94 @@ final class StaffDisciplineService
         }
 
         return 25.0;
+    }
+
+    /**
+     * Aperçu paie (lecture) : mois, agents, base, jauge, présences, retenue indicative, net proposé.
+     *
+     * @return array{month:string, period_label:string, period_start:string, period_end:string, rows: list<array<string,mixed>>}
+     */
+    public function payrollMonthPreview(int $restaurantId, string $monthInput): array
+    {
+        $this->ensureSchema();
+        $rs = Container::getInstance()->get('reportService');
+        $tz = $rs->timezoneForRestaurantReports($restaurantId);
+        $todayY = $rs->todayForRestaurant($restaurantId);
+        $trim = trim($monthInput);
+        if (preg_match('/^(\d{4}-\d{2})/', $trim, $m)) {
+            $monthKey = $m[1];
+        } else {
+            $monthKey = substr($todayY, 0, 7);
+        }
+        $start = $monthKey . '-01';
+        try {
+            $endMonth = (new DateTimeImmutable($start . ' 00:00:00', $tz))->modify('last day of this month')->format('Y-m-d');
+        } catch (\Throwable) {
+            $endMonth = $todayY;
+        }
+        $end = substr($todayY, 0, 7) === $monthKey ? $todayY : $endMonth;
+
+        $pdo = $this->database->pdo();
+        $profSt = $pdo->prepare(
+            'SELECT user_id, base_salary_monthly, currency FROM staff_payroll_profiles WHERE restaurant_id = :rid'
+        );
+        $profSt->execute(['rid' => $restaurantId]);
+        $profiles = [];
+        foreach ($profSt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            $profiles[(int) ($row['user_id'] ?? 0)] = $row;
+        }
+
+        $rows = [];
+        foreach (Container::getInstance()->get('roleAdmin')->listUsersForRestaurant($restaurantId) as $u) {
+            $uid = (int) ($u['id'] ?? 0);
+            if ($uid <= 0) {
+                continue;
+            }
+            $roleCode = (string) ($u['role_code'] ?? '');
+            $monthlyScore = $this->averageEvaluatedDaysInRange($restaurantId, $uid, $start, $end, $tz);
+            $retentionPct = $this->proposedSalaryRetentionPercent($monthlyScore);
+            $base = (float) ($profiles[$uid]['base_salary_monthly'] ?? 0);
+            $currency = (string) ($profiles[$uid]['currency'] ?? 'USD');
+            $bonus = 0.0;
+            $net = round($base * (1 - $retentionPct / 100) + $bonus, 2);
+
+            $attSt = $pdo->prepare(
+                'SELECT COUNT(*) FROM staff_attendance_day
+                 WHERE restaurant_id = :rid AND user_id = :uid AND DATE_FORMAT(day_ymd, "%Y-%m") = :m'
+            );
+            $attSt->execute(['rid' => $restaurantId, 'uid' => $uid, 'm' => $monthKey]);
+            $attDays = (int) $attSt->fetchColumn();
+
+            $penSt = $pdo->prepare(
+                'SELECT COALESCE(SUM(LEAST(0, delta_points)), 0) AS pts
+                 FROM staff_score_ledger
+                 WHERE restaurant_id = :rid AND user_id = :uid AND DATE_FORMAT(day_ymd, "%Y-%m") = :m'
+            );
+            $penSt->execute(['rid' => $restaurantId, 'uid' => $uid, 'm' => $monthKey]);
+            $ledgerPenaltyPts = (int) $penSt->fetchColumn();
+
+            $rows[] = [
+                'user_id' => $uid,
+                'full_name' => (string) ($u['full_name'] ?? ''),
+                'role_code' => $roleCode,
+                'base_salary_monthly' => $base,
+                'currency' => $currency,
+                'monthly_score_avg' => $monthlyScore,
+                'retention_proposed_pct' => $retentionPct,
+                'bonus_monthly' => $bonus,
+                'net_pay_proposed' => $net,
+                'attendance_days_recorded' => $attDays,
+                'ledger_penalty_points_month' => $ledgerPenaltyPts,
+            ];
+        }
+
+        return [
+            'month' => $monthKey,
+            'period_label' => 'Mois ' . $monthKey,
+            'period_start' => $start,
+            'period_end' => $end,
+            'rows' => $rows,
+        ];
     }
 
     private function resolveRoleCodeForUser(int $restaurantId, int $userId): string
@@ -471,10 +683,20 @@ final class StaffDisciplineService
             }
         }
 
-        $supplement = $this->supplementDomainActivityCounts($restaurantId, $userId, $roleCode, $s, $e, $pdo);
-        foreach ($supplement as $row) {
+        $auditOnlyCount = $actionCount;
+
+        $rs = Container::getInstance()->get('reportService');
+        $domainLines = [];
+        if (in_array($roleCode, ['cashier_server', 'kitchen', 'stock_manager', 'cashier_accountant'], true)) {
+            $domainLines = $rs->disciplineDomainActivityLinesForUser($restaurantId, $userId, $roleCode, $s, $e);
+        }
+        $domainSum = 0;
+        foreach ($domainLines as $row) {
             $breakdown[] = $row;
-            $actionCount += (int) ($row['count'] ?? 0);
+            $domainSum += (int) ($row['count'] ?? 0);
+        }
+        if (in_array($roleCode, ['cashier_server', 'kitchen', 'stock_manager', 'cashier_accountant'], true)) {
+            $actionCount = max($auditOnlyCount, $domainSum);
         }
 
         $ledgerLines = $this->ledgerLinesForDay($restaurantId, $userId, $dayYmd);
@@ -517,7 +739,10 @@ final class StaffDisciplineService
         }
 
         $raw = 100 + $ledgerDelta + $extraSum;
-        $score = max(0, min(100, $raw));
+        if (!is_finite($raw)) {
+            $raw = 100.0;
+        }
+        $score = max(0, min(100, (int) round($raw)));
 
         return [
             'evaluated' => true,
@@ -529,94 +754,6 @@ final class StaffDisciplineService
             'extra_penalties' => $extraPenalties,
             'base_score' => 100,
         ];
-    }
-
-    /**
-     * @return list<array{label:string,count:int}>
-     */
-    private function supplementDomainActivityCounts(
-        int $restaurantId,
-        int $userId,
-        string $roleCode,
-        string $s,
-        string $e,
-        PDO $pdo,
-    ): array {
-        $out = [];
-        if ($roleCode === 'cashier_server') {
-            $st = $pdo->prepare(
-                'SELECT COUNT(*) FROM server_requests
-                 WHERE restaurant_id = :rid AND server_id = :uid
-                   AND created_at >= :s AND created_at < :e'
-            );
-            $st->execute(['rid' => $restaurantId, 'uid' => $userId, 's' => $s, 'e' => $e]);
-            $c = (int) $st->fetchColumn();
-            if ($c > 0) {
-                $out[] = ['label' => 'Fiches commande (création en base)', 'count' => $c];
-            }
-            $st2 = $pdo->prepare(
-                'SELECT COUNT(*) FROM sales
-                 WHERE restaurant_id = :rid AND server_id = :uid
-                   AND COALESCE(validated_at, created_at) >= :s AND COALESCE(validated_at, created_at) < :e
-                   AND status = "VALIDE"'
-            );
-            $st2->execute(['rid' => $restaurantId, 'uid' => $userId, 's' => $s, 'e' => $e]);
-            $c2 = (int) $st2->fetchColumn();
-            if ($c2 > 0) {
-                $out[] = ['label' => 'Ventes clôturées (base)', 'count' => $c2];
-            }
-        } elseif ($roleCode === 'kitchen') {
-            $st = $pdo->prepare(
-                'SELECT COUNT(*) FROM server_request_items sri
-                 INNER JOIN server_requests sr ON sr.id = sri.request_id
-                 WHERE sr.restaurant_id = :rid AND sri.technical_confirmed_by = :uid
-                   AND sri.prepared_at IS NOT NULL
-                   AND sri.prepared_at >= :s AND sri.prepared_at < :e'
-            );
-            $st->execute(['rid' => $restaurantId, 'uid' => $userId, 's' => $s, 'e' => $e]);
-            $c = (int) $st->fetchColumn();
-            if ($c > 0) {
-                $out[] = ['label' => 'Lignes préparées (traçabilité cuisine)', 'count' => $c];
-            }
-        } elseif ($roleCode === 'stock_manager') {
-            $st = $pdo->prepare(
-                'SELECT COUNT(*) FROM stock_movements
-                 WHERE restaurant_id = :rid AND user_id = :uid
-                   AND created_at >= :s AND created_at < :e'
-            );
-            $st->execute(['rid' => $restaurantId, 'uid' => $userId, 's' => $s, 'e' => $e]);
-            $c = (int) $st->fetchColumn();
-            if ($c > 0) {
-                $out[] = ['label' => 'Mouvements stock (base)', 'count' => $c];
-            }
-            $st2 = $pdo->prepare(
-                'SELECT COUNT(*) FROM kitchen_stock_requests
-                 WHERE restaurant_id = :rid AND responded_by = :uid
-                   AND responded_at IS NOT NULL
-                   AND responded_at >= :s AND responded_at < :e'
-            );
-            $st2->execute(['rid' => $restaurantId, 'uid' => $userId, 's' => $s, 'e' => $e]);
-            $c2 = (int) $st2->fetchColumn();
-            if ($c2 > 0) {
-                $out[] = ['label' => 'Demandes magasin traitées (base)', 'count' => $c2];
-            }
-        } elseif ($roleCode === 'cashier_accountant') {
-            $st = $pdo->prepare(
-                'SELECT COUNT(*) FROM cash_transfers
-                 WHERE restaurant_id = :rid AND source_type = "sale"
-                   AND received_by = :uid
-                   AND received_at IS NOT NULL
-                   AND received_at >= :s AND received_at < :e
-                   AND status IN ("RECU_CAISSE","ECART_SIGNALE")'
-            );
-            $st->execute(['rid' => $restaurantId, 'uid' => $userId, 's' => $s, 'e' => $e]);
-            $c = (int) $st->fetchColumn();
-            if ($c > 0) {
-                $out[] = ['label' => 'Remises vente reçues (base)', 'count' => $c];
-            }
-        }
-
-        return $out;
     }
 
     /**
@@ -831,7 +968,12 @@ final class StaffDisciplineService
             }
         }
 
-        return $evalDays > 0 ? round($sum / $evalDays, 1) : null;
+        if ($evalDays <= 0) {
+            return null;
+        }
+        $r = round($sum / $evalDays, 1);
+
+        return is_finite($r) ? $r : null;
     }
 
     private function averageMonthToDateNullable(int $restaurantId, int $userId, string $todayYmd, DateTimeZone $tz): ?float
@@ -854,7 +996,12 @@ final class StaffDisciplineService
             }
         }
 
-        return $evalDays > 0 ? round($sum / $evalDays, 1) : null;
+        if ($evalDays <= 0) {
+            return null;
+        }
+        $r = round($sum / $evalDays, 1);
+
+        return is_finite($r) ? $r : null;
     }
 
     private function effectiveGlobalStartYmd(int $restaurantId): string
@@ -949,6 +1096,76 @@ final class StaffDisciplineService
     }
 
     /**
+     * Moyenne sur la même semaine calendaire que le pulse opérationnel (lundi → lundi exclus).
+     *
+     * @return array{titre: string, jour: null, score: float|null, zone: string, points_detail: list<array<string, mixed>>, jours_moyennes: int, note?: string, score_breakdown?: array<string, mixed>}
+     */
+    private function snapshotOperationalWeekGauge(int $restaurantId, int $userId, string $anchorYmd, DateTimeZone $tz): array
+    {
+        $glob = $this->effectiveGlobalStartYmd($restaurantId);
+        $win = Container::getInstance()->get('reportService')->operationalPeriodWindow($restaurantId, 'week', $anchorYmd);
+        $titre = (string) ($win['label'] ?? 'Semaine');
+        $start = $win['start'];
+        $endExcl = $win['end'];
+        $role = $this->resolveRoleCodeForUser($restaurantId, $userId);
+        $sum = 0.0;
+        $inWindow = 0;
+        $evalDays = 0;
+        $details = [];
+        $actionsSum = 0;
+        for ($d = $start; $d < $endExcl; $d = $d->modify('+1 day')) {
+            $ymd = $d->format('Y-m-d');
+            if ($ymd < $glob) {
+                continue;
+            }
+            $inWindow++;
+            $ev = $this->evaluateCalendarDay($restaurantId, $userId, $role, $ymd, $tz);
+            if ($ev['evaluated']) {
+                $sum += (float) ($ev['score'] ?? 0);
+                $evalDays++;
+                $actionsSum += (int) ($ev['action_count'] ?? 0);
+                foreach ($this->ledgerPenaltyRowsForGauge($ev) as $row) {
+                    $details[] = $row;
+                }
+            }
+        }
+
+        if ($evalDays === 0) {
+            return [
+                'titre' => $titre,
+                'jour' => null,
+                'score' => null,
+                'zone' => 'non_evalue',
+                'points_detail' => array_slice($details, -24),
+                'jours_moyennes' => $inWindow,
+                'score_breakdown' => ['evaluated_days' => 0, 'actions_total' => 0, 'window_days' => $inWindow],
+                'note' => $inWindow <= 0
+                    ? 'Aucun jour calendaire dans la semaine : non évalué.'
+                    : 'Aucun jour avec activité mesurée sur cette semaine : non évalué.',
+            ];
+        }
+
+        $avg = round($sum / $evalDays, 1);
+        if (!is_finite($avg)) {
+            $avg = 0.0;
+        }
+
+        return [
+            'titre' => $titre,
+            'jour' => null,
+            'score' => $avg,
+            'zone' => $this->zoneFromScore($avg),
+            'points_detail' => array_slice($details, -24),
+            'jours_moyennes' => $evalDays,
+            'score_breakdown' => [
+                'evaluated_days' => $evalDays,
+                'actions_total' => $actionsSum,
+                'window_days' => $inWindow,
+            ],
+        ];
+    }
+
+    /**
      * @return array{titre: string, jour: null, score: float|null, zone: string, points_detail: list<array<string, mixed>>, jours_moyennes: int, note?: string, score_breakdown?: array<string, mixed>}
      */
     private function snapshotRollingAverageGauge(int $restaurantId, int $userId, string $anchorYmd, int $days, string $titre, DateTimeZone $tz): array
@@ -998,6 +1215,9 @@ final class StaffDisciplineService
         }
 
         $avg = round($sum / $evalDays, 1);
+        if (!is_finite($avg)) {
+            $avg = 0.0;
+        }
 
         return [
             'titre' => $titre,
@@ -1071,6 +1291,9 @@ final class StaffDisciplineService
         }
 
         $avg = round($sum / $evalDays, 1);
+        if (!is_finite($avg)) {
+            $avg = 0.0;
+        }
 
         return [
             'titre' => $label,
@@ -1103,6 +1326,9 @@ final class StaffDisciplineService
     /** Vert / Jaune / Orange / Rouge */
     private function zoneFromScore(float $s): string
     {
+        if (!is_finite($s)) {
+            return 'non_evalue';
+        }
         if ($s >= 90) {
             return 'vert';
         }
@@ -1118,7 +1344,7 @@ final class StaffDisciplineService
 
     private function zoneFromScoreNullable(?float $s): string
     {
-        if ($s === null) {
+        if ($s === null || !is_finite($s)) {
             return 'non_evalue';
         }
 
