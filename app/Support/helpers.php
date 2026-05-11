@@ -737,6 +737,7 @@ function cash_transfer_status_label(?string $status): string
     return match ((string) $status) {
         'REMIS_A_CAISSE' => 'Remis par le serveur',
         'SOUMIS_GERANT' => 'Soumis au gerant (decision en attente)',
+        'EN_ATTENTE_PROPRIETAIRE' => 'En attente decision proprietaire',
         'REMISE_REJETEE_CAISSE' => 'Remise rejetee par la caisse',
         'REMISE_REJETEE_GERANT' => 'Remise rejetee par le gerant',
         'RECU_CAISSE' => 'Recu par la caisse',
@@ -909,6 +910,7 @@ function cash_transfer_public_label(?string $status): string
         'REMISE_REJETEE_CAISSE', 'REMISE_REJETEE_GERANT' => 'Rejeté',
         'ECART_SIGNALE' => 'Écart signalé',
         'SOUMIS_GERANT' => 'Soumis au gérant',
+        'EN_ATTENTE_PROPRIETAIRE' => 'Décision propriétaire',
         'REMIS_A_GERANT' => 'En attente gérant',
         'RECU_GERANT' => 'Reçu gérant',
         'REMIS_A_PROPRIETAIRE' => 'En attente propriétaire',

@@ -24,6 +24,7 @@ $cashRegBack = $regularization_backlog ?? [];
 <?php if (!empty($flash_error)): ?><div class="flash-bad"><?= e($flash_error) ?></div><?php endif; ?>
 
 <?php require base_path('app/Views/partials/regularization_hold_banner.php'); ?>
+<?php require base_path('app/Views/partials/manager_resolution_block.php'); ?>
 <?php require base_path('app/Views/partials/operational_period_tabs.php'); ?>
 
 <?php if (is_array($cashTodaySnapC) && $cashTodaySnapC !== []): ?>

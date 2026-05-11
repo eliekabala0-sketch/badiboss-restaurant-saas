@@ -642,6 +642,7 @@ final class OperationsController
             'staff_gauges_panel_title' => 'Discipline · service et ventes',
             'flash_success' => flash('success'),
             'flash_error' => flash('error'),
+            'manager_resolution_panel' => $this->buildManagerResolutionPanelFromRequest($request, $restaurantId),
         ]));
 
         audit_access('sales', $restaurantId, 'screens', 'sales', 'Consultation module ventes');
@@ -688,6 +689,7 @@ final class OperationsController
             'staff_gauges_panel_title' => 'Discipline · caisse',
             'flash_success' => flash('success'),
             'flash_error' => flash('error'),
+            'manager_resolution_panel' => $this->buildManagerResolutionPanelFromRequest($request, $restaurantId),
         ]));
 
         audit_access('cash', $restaurantId, 'screens', 'cash', 'Consultation module caisse');
@@ -812,6 +814,101 @@ final class OperationsController
 
         flash('success', 'Remise cuisine confirmée par le serveur.');
         redirect($this->moduleUrl('/ventes', $restaurantId));
+    }
+
+    public function postManagerResolutionSales(Request $request): void
+    {
+        $restaurantId = $this->resolveRestaurantId($request);
+        authorize_access('sales.view');
+        $actor = current_user();
+        if (!\App\Services\ManagerResolutionService::actorCanResolve(is_array($actor) ? $actor : null)) {
+            flash('error', 'Action reservee au responsable.');
+            redirect($this->moduleUrl('/ventes', $restaurantId));
+        }
+        $redirectExtra = trim((string) $request->input('return_focus', ''));
+        try {
+            $kind = (string) $request->input('entity_kind', '');
+            if ($kind !== 'server_request') {
+                throw new \RuntimeException('Type d entite non gere.');
+            }
+            Container::getInstance()->get('salesService')->managerResolveServerRequest(
+                $restaurantId,
+                (int) $request->input('entity_id', 0),
+                (string) $request->input('decision', ''),
+                (string) $request->input('reason', ''),
+                is_array($actor) ? $actor : [],
+                [
+                    'grant_clemency' => $request->input('grant_clemency', ''),
+                    'clemency_reason' => $request->input('clemency_reason', ''),
+                    'imputation_basis' => $request->input('imputation_basis', ''),
+                ],
+            );
+            flash('success', 'Decision responsable enregistree sur la commande.');
+        } catch (\Throwable $e) {
+            flash('error', ui_safe_message($e->getMessage()));
+        }
+        $this->redirectWithQuerySuffix($this->moduleUrl('/ventes', $restaurantId), $redirectExtra);
+    }
+
+    public function postManagerResolutionCash(Request $request): void
+    {
+        $restaurantId = $this->resolveRestaurantId($request);
+        authorize_access('cash.view');
+        $actor = current_user();
+        if (!\App\Services\ManagerResolutionService::actorCanResolve(is_array($actor) ? $actor : null)) {
+            flash('error', 'Action reservee au responsable.');
+            redirect($this->moduleUrl('/caisse', $restaurantId));
+        }
+        $redirectExtra = trim((string) $request->input('return_focus', ''));
+        try {
+            Container::getInstance()->get('cashService')->managerResolveSaleRemittance(
+                $restaurantId,
+                (int) $request->input('transfer_id', 0),
+                [
+                    'decision' => $request->input('decision', ''),
+                    'reason' => $request->input('reason', ''),
+                    'amount_accepted' => $request->input('amount_accepted', 0),
+                    'imputation_basis' => $request->input('imputation_basis', ''),
+                    'grant_clemency' => $request->input('grant_clemency', ''),
+                    'clemency_reason' => $request->input('clemency_reason', ''),
+                ],
+                is_array($actor) ? $actor : [],
+            );
+            flash('success', 'Decision responsable enregistree sur la remise caisse.');
+        } catch (\Throwable $e) {
+            flash('error', ui_safe_message($e->getMessage()));
+        }
+        $this->redirectWithQuerySuffix($this->moduleUrl('/caisse', $restaurantId), $redirectExtra);
+    }
+
+    private function buildManagerResolutionPanelFromRequest(Request $request, int $restaurantId): ?array
+    {
+        $focusRaw = trim((string) ($request->query['focus'] ?? ''));
+        if ($focusRaw === '' || !str_contains($focusRaw, ':')) {
+            return null;
+        }
+        [$fk, $fid] = explode(':', $focusRaw, 2);
+        $fk = trim($fk);
+        $fid = (int) trim($fid);
+        if ($fk === '' || $fid <= 0) {
+            return null;
+        }
+
+        return Container::getInstance()->get('managerResolution')->buildPanelContext(
+            $restaurantId,
+            $fk,
+            $fid,
+            current_user()
+        );
+    }
+
+    private function redirectWithQuerySuffix(string $base, string $extraQuery): void
+    {
+        if ($extraQuery !== '') {
+            $q = ltrim($extraQuery, '?&');
+            $base .= (str_contains($base, '?') ? '&' : '?') . $q;
+        }
+        redirect($base);
     }
 
     public function confirmKitchenStockReceipt(Request $request): void

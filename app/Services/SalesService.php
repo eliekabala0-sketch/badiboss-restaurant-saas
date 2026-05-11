@@ -590,7 +590,10 @@ final class SalesService
         }
 
         $isSystemActor = ($actor['role_code'] ?? null) === 'system';
-        if (!$isSystemActor && (int) $request['server_id'] !== (int) ($actor['id'] ?? 0) && ($actor['role_code'] ?? null) !== 'manager') {
+        $isResponsible = $isSystemActor
+            || (($actor['scope'] ?? null) === 'super_admin')
+            || in_array(($actor['role_code'] ?? null), ['manager', 'owner'], true);
+        if (!$isSystemActor && (int) $request['server_id'] !== (int) ($actor['id'] ?? 0) && !$isResponsible) {
             throw new \RuntimeException('Cette demande ne peut pas etre cloturee par cet utilisateur.');
         }
 
@@ -717,22 +720,30 @@ final class SalesService
             ]);
 
             $pdo->commit();
+            $actionName = (string) ($payload['action_name_override'] ?? '');
+            if ($actionName === '') {
+                $actionName = $automatic ? 'server_request_auto_closed_as_sale' : 'server_request_closed_as_sale';
+            }
+            $justification = (string) ($payload['audit_justification'] ?? '');
+            if ($justification === '') {
+                $justification = $automatic
+                    ? 'Cloture automatique d une remise serveur depassee'
+                    : 'Cloture demande serveur en vente reelle';
+            }
             Container::getInstance()->get('audit')->log([
                 'restaurant_id' => $restaurantId,
                 'user_id' => $actor['id'] ?? null,
                 'actor_name' => $actor['full_name'],
                 'actor_role_code' => $actor['role_code'],
                 'module_name' => 'sales',
-                'action_name' => $automatic ? 'server_request_auto_closed_as_sale' : 'server_request_closed_as_sale',
+                'action_name' => $actionName,
                 'entity_type' => 'server_requests',
                 'entity_id' => (string) $requestId,
                 'new_values' => array_merge($payload, [
                     'automatic' => $automatic,
                     'operation' => $operationSnapshot,
                 ]),
-                'justification' => $automatic
-                    ? 'Cloture automatique d une remise serveur depassee'
-                    : 'Cloture demande serveur en vente reelle',
+                'justification' => $justification,
             ]);
         } catch (\Throwable $throwable) {
             if ($pdo->inTransaction()) {
@@ -753,7 +764,9 @@ final class SalesService
             throw new \RuntimeException('Cette demande ne peut pas etre receptionnee.');
         }
 
-        if ((int) $request['server_id'] !== (int) $actor['id'] && ($actor['role_code'] ?? null) !== 'manager') {
+        if ((int) $request['server_id'] !== (int) $actor['id']
+            && !in_array(($actor['role_code'] ?? null), ['manager', 'owner'], true)
+            && (($actor['scope'] ?? null) !== 'super_admin')) {
             throw new \RuntimeException('Cette remise ne peut pas etre confirmee par cet utilisateur.');
         }
 
@@ -1277,6 +1290,220 @@ final class SalesService
         if ($statement->fetch(PDO::FETCH_ASSOC) === false) {
             throw new \RuntimeException('Article menu hors perimetre restaurant.');
         }
+    }
+
+    /**
+     * @param array<string, mixed> $extra
+     */
+    public function managerResolveServerRequest(int $restaurantId, int $requestId, string $mode, string $reason, array $actor, array $extra = []): void
+    {
+        $reason = trim($reason);
+        if (!$this->isManagerResolutionActor($actor)) {
+            throw new \RuntimeException('Action reservee au responsable (gerant, proprietaire ou super administrateur).');
+        }
+        if (!in_array($mode, ['served_sale', 'close_no_sale', 'server_shortage', 'reject_cancel'], true)) {
+            throw new \RuntimeException('Decision responsable inconnue.');
+        }
+        if ($mode !== 'served_sale' && $reason === '') {
+            throw new \RuntimeException('Motif obligatoire pour cette decision.');
+        }
+        $request = $this->findServerRequest($requestId, $restaurantId);
+        if ($request === null) {
+            throw new \RuntimeException('Demande serveur introuvable.');
+        }
+        $serverUid = (int) ($request['server_id'] ?? 0);
+        $st = (string) ($request['status'] ?? '');
+        if (in_array($st, ['ANNULE', 'REFUSE_CUISINE', 'CLOTURE', 'VENDU_TOTAL', 'VENDU_PARTIEL'], true)) {
+            throw new \RuntimeException('Demande deja terminee ou annulee.');
+        }
+        if ($mode === 'reject_cancel') {
+            $this->managerAnnulServerRequest($restaurantId, $requestId, $reason, $actor);
+            $opSnap = $this->buildServerRequestOperationSnapshot($request, $this->serverRequestLineRowsForAudit($restaurantId, $requestId));
+            $this->applyManagerRequestDisciplineExtras($restaurantId, $serverUid, $actor, $extra, $opSnap);
+
+            return;
+        }
+        if ((float) ($request['total_supplied_amount'] ?? 0) <= 0.0001) {
+            throw new \RuntimeException('Aucune fourniture validee sur cette demande.');
+        }
+        if (in_array($st, ['PRET_A_SERVIR', 'FOURNI_PARTIEL', 'FOURNI_TOTAL'], true)) {
+            $this->confirmServerRequestReceipt($restaurantId, $requestId, $actor);
+        }
+        $requestAfter = $this->findServerRequest($requestId, $restaurantId) ?? [];
+        $operationSnapshot = $this->buildServerRequestOperationSnapshot(
+            $requestAfter,
+            $this->serverRequestLineRowsForAudit($restaurantId, $requestId)
+        );
+        if ($mode === 'served_sale') {
+            $this->closeServerRequestAsSale($restaurantId, $requestId, [
+                'sale_type' => isset($extra['sale_type']) ? (string) $extra['sale_type'] : 'SUR_PLACE',
+                'note' => $reason !== '' ? $reason : 'Regularisation responsable — validee comme servie',
+                'sold_quantities' => is_array($extra['sold_quantities'] ?? null) ? $extra['sold_quantities'] : [],
+                'returned_quantities' => is_array($extra['returned_quantities'] ?? null) ? $extra['returned_quantities'] : [],
+            ], $actor);
+            $this->applyManagerRequestDisciplineExtras($restaurantId, $serverUid, $actor, $extra, $operationSnapshot);
+
+            return;
+        }
+        $items = $this->listServerRequestItemsByRequest($requestId, $restaurantId);
+        $soldQ = [];
+        $retQ = [];
+        foreach ($items as $item) {
+            $id = (string) $item['id'];
+            $sup = (float) $item['supplied_quantity'];
+            if ($mode === 'close_no_sale') {
+                $soldQ[$id] = 0;
+                $retQ[$id] = $sup;
+            } else {
+                $soldQ[$id] = 0;
+                $retQ[$id] = 0;
+            }
+        }
+        $actionName = $mode === 'server_shortage' ? 'server_request_closed_manager_shortage' : 'server_request_closed_manager_no_sale';
+        $auditJust = $mode === 'server_shortage'
+            ? 'Cloture responsable avec manquant serveur (perte sur fourni)'
+            : 'Cloture responsable sans vente (retour logique du fourni)';
+        $this->closeServerRequest($restaurantId, $requestId, [
+            'sale_type' => 'SUR_PLACE',
+            'note' => $reason,
+            'sold_quantities' => $soldQ,
+            'returned_quantities' => $retQ,
+            'action_name_override' => $actionName,
+            'audit_justification' => $auditJust,
+        ], $actor, false);
+        if ($mode === 'server_shortage' && $serverUid > 0) {
+            $lossAmt = 0.0;
+            $arts = [];
+            foreach ($items as $item) {
+                $sup = (float) $item['supplied_quantity'];
+                $unit = (float) $item['unit_price'];
+                $lossAmt += $sup * $unit;
+                $arts[] = [
+                    'menu_item_id' => (int) ($item['menu_item_id'] ?? 0),
+                    'qty' => $sup,
+                    'line_total' => $sup * $unit,
+                ];
+            }
+            Container::getInstance()->get('managerResolution')->recordServerPayrollShortage(
+                $restaurantId,
+                $serverUid,
+                'server_request',
+                $requestId,
+                $lossAmt,
+                Container::getInstance()->get('reportService')->todayForRestaurant($restaurantId),
+                'server_shortage',
+                $reason,
+                isset($extra['imputation_basis']) && is_string($extra['imputation_basis']) ? $extra['imputation_basis'] : null,
+                $arts,
+                $actor,
+            );
+        }
+        $this->applyManagerRequestDisciplineExtras($restaurantId, $serverUid, $actor, $extra, $operationSnapshot);
+    }
+
+    private function isManagerResolutionActor(array $actor): bool
+    {
+        return (($actor['scope'] ?? null) === 'super_admin')
+            || in_array(($actor['role_code'] ?? null), ['manager', 'owner'], true);
+    }
+
+    /**
+     * @param array<string, mixed> $extra
+     * @param array<string, mixed> $operationSnapshot
+     */
+    private function applyManagerRequestDisciplineExtras(int $restaurantId, int $serverUserId, array $actor, array $extra, array $operationSnapshot): void
+    {
+        $grant = ($extra['grant_clemency'] ?? '') === '1' || ($extra['grant_clemency'] ?? '') === 'on';
+        if ($grant) {
+            $cr = trim((string) ($extra['clemency_reason'] ?? ''));
+            Container::getInstance()->get('staffDiscipline')->grantDisciplinaryClemency(
+                $restaurantId,
+                $serverUserId,
+                $cr,
+                $actor,
+                ['server_resolution' => $operationSnapshot],
+            );
+
+            return;
+        }
+        if ($serverUserId > 0) {
+            Container::getInstance()->get('staffDiscipline')->recordManagerRegularizationPreservesPenalty(
+                $restaurantId,
+                $serverUserId,
+                $operationSnapshot,
+                'server_request_manager',
+            );
+        }
+    }
+
+    public function managerAnnulServerRequest(int $restaurantId, int $requestId, string $reason, array $actor): void
+    {
+        if (!$this->isManagerResolutionActor($actor)) {
+            throw new \RuntimeException('Action reservee au responsable.');
+        }
+        $reason = trim($reason);
+        if ($reason === '') {
+            throw new \RuntimeException('Motif obligatoire.');
+        }
+        $request = $this->findServerRequest($requestId, $restaurantId);
+        if ($request === null) {
+            throw new \RuntimeException('Demande serveur introuvable.');
+        }
+        $st = (string) ($request['status'] ?? '');
+        if (in_array($st, ['ANNULE', 'CLOTURE', 'VENDU_TOTAL', 'VENDU_PARTIEL'], true)) {
+            throw new \RuntimeException('Annulation responsable impossible sur ce statut.');
+        }
+        $pdo = $this->database->pdo();
+        $pdo->beginTransaction();
+        try {
+            $pdo->prepare(
+                'UPDATE server_request_items
+                 SET status = "ANNULE",
+                     supply_status = "NON_FOURNI",
+                     supplied_quantity = 0,
+                     supplied_total = 0,
+                     total_supplied_amount = 0,
+                     unavailable_quantity = requested_quantity,
+                     updated_at = NOW()
+                 WHERE request_id = :request_id'
+            )->execute(['request_id' => $requestId]);
+            $pdo->prepare(
+                'UPDATE server_requests
+                 SET status = "ANNULE",
+                     total_supplied_amount = 0,
+                     resolution_note = :resolution_note,
+                     resolution_by = :resolution_by,
+                     resolution_at = NOW(),
+                     updated_at = NOW()
+                 WHERE id = :id AND restaurant_id = :restaurant_id'
+            )->execute([
+                'resolution_note' => '[Responsable] ' . $reason,
+                'resolution_by' => $actor['id'],
+                'id' => $requestId,
+                'restaurant_id' => $restaurantId,
+            ]);
+            $pdo->commit();
+        } catch (\Throwable $e) {
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+            throw $e;
+        }
+        Container::getInstance()->get('audit')->log([
+            'restaurant_id' => $restaurantId,
+            'user_id' => $actor['id'] ?? null,
+            'actor_name' => $actor['full_name'] ?? '',
+            'actor_role_code' => $actor['role_code'] ?? '',
+            'module_name' => 'sales',
+            'action_name' => 'server_request_manager_annulled',
+            'entity_type' => 'server_requests',
+            'entity_id' => (string) $requestId,
+            'new_values' => [
+                'status' => 'ANNULE',
+                'resolution_note' => $reason,
+            ],
+            'justification' => 'Annulation / rejet commande par responsable',
+        ]);
     }
 
     private function findServerRequest(int $requestId, int $restaurantId): ?array

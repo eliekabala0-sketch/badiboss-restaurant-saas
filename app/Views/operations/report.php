@@ -256,6 +256,9 @@ $reportCanDecideLateRemittance = in_array((string) (current_user()['role_code'] 
             <form method="post" action="/owner/caisse/remises-tardives/<?= e((string) ($lat['id'] ?? '0')) ?>/rattachement" style="display:inline; margin-left:8px;" onsubmit="return confirm('Confirmer ?');">
                 <input type="hidden" name="basis" value="REMITTANCE_DAY"><button type="submit" class="button-muted">Jour de remise</button>
             </form>
+            <form method="post" action="/owner/caisse/remises-tardives/<?= e((string) ($lat['id'] ?? '0')) ?>/rattachement" style="display:inline; margin-left:8px;" onsubmit="return confirm('Confirmer ?');">
+                <input type="hidden" name="basis" value="RESOLUTION_DAY"><button type="submit" class="button-muted">Jour de résolution</button>
+            </form>
         </article>
     <?php endforeach; ?>
 </section>

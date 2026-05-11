@@ -172,6 +172,87 @@ final class StaffDisciplineService
         ]);
     }
 
+    /**
+     * Trace visible en jauge : régularisation sans effacer les pénalités déjà inscrites.
+     *
+     * @param array<string, mixed> $operationSnapshot
+     */
+    public function recordManagerRegularizationPreservesPenalty(
+        int $restaurantId,
+        int $userId,
+        array $operationSnapshot,
+        string $decisionCode,
+    ): void {
+        if ($userId <= 0) {
+            return;
+        }
+        $this->ensureSchema();
+        $tz = Container::getInstance()->get('reportService')->timezoneForRestaurantReports($restaurantId);
+        $dayYmd = (new DateTimeImmutable('now', $tz))->format('Y-m-d');
+        $ins = $this->database->pdo()->prepare(
+            'INSERT INTO staff_score_ledger
+            (restaurant_id, user_id, day_ymd, reason_code, delta_points, label, ref_json)
+             VALUES (:rid, :uid, :d, :code, 0, :label, :ref)'
+        );
+        $ins->execute([
+            'rid' => $restaurantId,
+            'uid' => $userId,
+            'd' => $dayYmd,
+            'code' => 'manager_regularized_kept_penalty',
+            'label' => 'Régularisé par responsable — pénalité conservée',
+            'ref' => json_encode(['decision' => $decisionCode, 'operation' => $operationSnapshot], JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR),
+        ]);
+    }
+
+    /**
+     * Clémence : compensation positive traçable (audit via journal score + module audit appelant).
+     *
+     * @param array<string, mixed> $ref
+     */
+    public function grantDisciplinaryClemency(
+        int $restaurantId,
+        int $userId,
+        string $reason,
+        array $actor,
+        array $ref,
+    ): void {
+        $reason = trim($reason);
+        if ($reason === '') {
+            throw new \RuntimeException('Motif de clémence obligatoire.');
+        }
+        if ($userId <= 0) {
+            throw new \RuntimeException('Utilisateur cible invalide pour clémence.');
+        }
+        $this->ensureSchema();
+        $tz = Container::getInstance()->get('reportService')->timezoneForRestaurantReports($restaurantId);
+        $dayYmd = (new DateTimeImmutable('now', $tz))->format('Y-m-d');
+        $ins = $this->database->pdo()->prepare(
+            'INSERT INTO staff_score_ledger
+            (restaurant_id, user_id, day_ymd, reason_code, delta_points, label, ref_json)
+             VALUES (:rid, :uid, :d, "discipline_clemency_manager", :delta, :label, :ref)'
+        );
+        $ins->execute([
+            'rid' => $restaurantId,
+            'uid' => $userId,
+            'd' => $dayYmd,
+            'delta' => 20,
+            'label' => 'Indulgence responsable (voir motif en référence) — propriétaire informé via audit.',
+            'ref' => json_encode(array_merge($ref, ['clemency_reason' => $reason, 'granted_by' => $actor['id'] ?? null]), JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR),
+        ]);
+        Container::getInstance()->get('audit')->log([
+            'restaurant_id' => $restaurantId,
+            'user_id' => $actor['id'] ?? null,
+            'actor_name' => $actor['full_name'] ?? null,
+            'actor_role_code' => $actor['role_code'] ?? null,
+            'module_name' => 'staff_discipline',
+            'action_name' => 'discipline_clemency_granted',
+            'entity_type' => 'users',
+            'entity_id' => (string) $userId,
+            'new_values' => ['reason' => $reason, 'ref' => $ref],
+            'justification' => 'Clémence discipline avec motif obligatoire (visibilité propriétaire)',
+        ]);
+    }
+
     /** @return list<array<string, mixed>> */
     public function listLedgerForUserMonth(int $restaurantId, int $userId, string $monthYmdFirst): array
     {

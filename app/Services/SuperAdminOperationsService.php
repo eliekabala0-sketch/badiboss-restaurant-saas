@@ -27,6 +27,7 @@ final class SuperAdminOperationsService
             'cash_remittance' => [
                 'REMIS_A_CAISSE',
                 'SOUMIS_GERANT',
+                'EN_ATTENTE_PROPRIETAIRE',
                 'RECU_CAISSE',
                 'ECART_SIGNALE',
                 'REMISE_REJETEE_CAISSE',

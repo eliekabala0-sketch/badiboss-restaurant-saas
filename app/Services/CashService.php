@@ -265,34 +265,14 @@ final class CashService
     {
         $this->ensureSchema();
         $basis = strtoupper(trim($basis));
-        if (!in_array($basis, ['SALE_DAY', 'REMITTANCE_DAY'], true)) {
+        if (!in_array($basis, ['SALE_DAY', 'REMITTANCE_DAY', 'RESOLUTION_DAY'], true)) {
             throw new \RuntimeException('Choix de rattachement invalide.');
         }
         $transfer = $this->findTransferInRestaurant($transferId, $restaurantId);
         if ((string) ($transfer['source_type'] ?? '') !== 'sale' || (string) ($transfer['late_remittance_basis'] ?? '') !== 'PENDING') {
             throw new \RuntimeException('Aucune remise tardive en attente sur ce transfert.');
         }
-        $statement = $this->database->pdo()->prepare(
-            'UPDATE cash_transfers
-             SET late_remittance_basis = :basis,
-                 note = TRIM(CONCAT(IFNULL(note, ""), " [Rattachement remise tardive: ", :basis_label, " par ", :decider, "]")),
-                 updated_at = NOW()
-             WHERE id = :id AND restaurant_id = :restaurant_id AND late_remittance_basis = "PENDING"'
-        );
-        $statement->execute([
-            'basis' => $basis,
-            'basis_label' => $basis === 'SALE_DAY' ? 'jour de vente' : 'jour de remise',
-            'decider' => (string) ($actor['full_name'] ?? 'superviseur'),
-            'id' => $transferId,
-            'restaurant_id' => $restaurantId,
-        ]);
-        if ($statement->rowCount() < 1) {
-            throw new \RuntimeException('Decision impossible (statut change ou transfert introuvable).');
-        }
-        $this->audit($restaurantId, $actor, 'cash_late_remittance_attribution', 'cash_transfers', $transferId, [
-            'basis' => $basis,
-            'sale_id' => (int) ($transfer['source_id'] ?? 0),
-        ], 'Rattachement remise tardive (vente vs jour de remise)');
+        $this->managerAssignRemittanceImputation($restaurantId, $transferId, $basis, $actor);
     }
 
     /**
@@ -364,6 +344,315 @@ final class CashService
         $statement->execute(['restaurant_id' => $restaurantId]);
 
         return $statement->fetchAll(PDO::FETCH_ASSOC);
+    }
+
+    /**
+     * Transfert avec libellés pour le bloc résolution responsable.
+     *
+     * @return array<string, mixed>|null
+     */
+    public function findTransferForManagerResolution(int $restaurantId, int $transferId): ?array
+    {
+        $this->ensureSchema();
+        $statement = $this->database->pdo()->prepare(
+            'SELECT ct.*,
+                    fu.full_name AS from_user_name,
+                    tu.full_name AS to_user_name,
+                    s.id AS sale_id,
+                    s.total_amount AS sale_total_amount,
+                    s.status AS sale_status,
+                    sr.id AS server_request_id,
+                    sr.service_reference,
+                    su.full_name AS sale_server_name
+             FROM cash_transfers ct
+             LEFT JOIN users fu ON fu.id = ct.from_user_id
+             LEFT JOIN users tu ON tu.id = ct.to_user_id
+             LEFT JOIN sales s ON ct.source_type = "sale" AND s.id = ct.source_id
+             LEFT JOIN server_requests sr ON s.origin_type = "server_request" AND sr.id = s.origin_id
+             LEFT JOIN users su ON su.id = s.server_id
+             WHERE ct.id = :id AND ct.restaurant_id = :restaurant_id
+             LIMIT 1'
+        );
+        $statement->execute(['id' => $transferId, 'restaurant_id' => $restaurantId]);
+        $row = $statement->fetch(PDO::FETCH_ASSOC);
+
+        return $row === false ? null : $row;
+    }
+
+    /**
+     * Rattachement comptable (vente / remise / résolution) pour remises vente.
+     */
+    public function managerAssignRemittanceImputation(int $restaurantId, int $transferId, string $basis, array $actor): void
+    {
+        $this->ensureSchema();
+        $basis = strtoupper(trim($basis));
+        if (!in_array($basis, ['SALE_DAY', 'REMITTANCE_DAY', 'RESOLUTION_DAY'], true)) {
+            throw new \RuntimeException('Choix d imputation invalide.');
+        }
+        $transfer = $this->findTransferInRestaurant($transferId, $restaurantId);
+        if ((string) ($transfer['source_type'] ?? '') !== 'sale') {
+            throw new \RuntimeException('Imputation reservee aux remises liees a une vente.');
+        }
+        $saleId = (int) ($transfer['source_id'] ?? 0);
+        $sale = $this->findSaleInRestaurant($saleId, $restaurantId);
+        $saleTs = (string) ($sale['validated_at'] ?? $sale['created_at'] ?? '');
+        $saleDay = $this->mysqlDateTimeToYmd($restaurantId, $saleTs) ?? '';
+        $remitTs = (string) ($transfer['requested_at'] ?? $transfer['created_at'] ?? '');
+        $remitDay = $this->mysqlDateTimeToYmd($restaurantId, $remitTs) ?? '';
+        $today = (new DateTimeImmutable('now', $this->reportTimezone($restaurantId)))->format('Y-m-d');
+        $saleDayYmd = $basis === 'SALE_DAY' ? ($saleDay !== '' ? $saleDay : null) : ((string) ($transfer['sale_day_ymd'] ?? '') ?: ($saleDay !== '' ? $saleDay : null));
+        $remittanceDayYmd = $basis === 'REMITTANCE_DAY'
+            ? ($remitDay !== '' ? $remitDay : $today)
+            : ($basis === 'RESOLUTION_DAY' ? $today : ((string) ($transfer['remittance_day_ymd'] ?? '') ?: ($remitDay !== '' ? $remitDay : $today)));
+        if ($basis === 'SALE_DAY') {
+            $late = ($saleDay !== '' && $remitDay !== '' && $saleDay !== $remitDay) ? $basis : $basis;
+        } elseif ($basis === 'REMITTANCE_DAY') {
+            $late = $basis;
+        } else {
+            $late = 'RESOLUTION_DAY';
+        }
+        $stmt = $this->database->pdo()->prepare(
+            'UPDATE cash_transfers
+             SET sale_day_ymd = COALESCE(:sday, sale_day_ymd),
+                 remittance_day_ymd = COALESCE(:rday, remittance_day_ymd),
+                 late_remittance_basis = IF(late_remittance_basis = "PENDING", :basis_if_pending, :basis_norm),
+                 note = TRIM(CONCAT(IFNULL(note, ""), " [Imputation responsable ", :basis_lbl, "]")),
+                 updated_at = NOW()
+             WHERE id = :id AND restaurant_id = :rid'
+        );
+        $stmt->execute([
+            'sday' => $saleDayYmd,
+            'rday' => $remittanceDayYmd,
+            'basis_if_pending' => $late,
+            'basis_norm' => $late,
+            'basis_lbl' => $basis === 'SALE_DAY' ? 'jour vente' : ($basis === 'REMITTANCE_DAY' ? 'jour remise' : 'jour resolution'),
+            'id' => $transferId,
+            'rid' => $restaurantId,
+        ]);
+        $this->audit($restaurantId, $actor, 'cash_manager_imputation', 'cash_transfers', $transferId, [
+            'basis' => $basis,
+            'sale_day_ymd' => $saleDayYmd,
+            'remittance_day_ymd' => $remittanceDayYmd,
+        ], 'Imputation comptable (responsable)');
+    }
+
+    /**
+     * Décisions gérant / propriétaire / super admin sur remise vente.
+     *
+     * @param array{
+     *   decision?: string,
+     *   reason?: string,
+     *   amount_accepted?: float|int|string,
+     *   imputation_basis?: string,
+     *   grant_clemency?: string,
+     *   clemency_reason?: string
+     * } $payload
+     */
+    public function managerResolveSaleRemittance(int $restaurantId, int $transferId, array $payload, array $actor): void
+    {
+        $this->ensureSchema();
+        $decision = strtoupper(trim((string) ($payload['decision'] ?? '')));
+        $reason = trim((string) ($payload['reason'] ?? ''));
+        $transfer = $this->findTransferInRestaurant($transferId, $restaurantId);
+        if ((string) ($transfer['source_type'] ?? '') !== 'sale' || (int) ($transfer['source_id'] ?? 0) <= 0) {
+            throw new \RuntimeException('Resolution reservee aux remises liees a une vente.');
+        }
+        $status = (string) ($transfer['status'] ?? '');
+        $role = (string) ($actor['role_code'] ?? '');
+        $scope = (string) ($actor['scope'] ?? '');
+        if ($status === 'EN_ATTENTE_PROPRIETAIRE') {
+            if ($scope !== 'super_admin' && $role !== 'owner') {
+                throw new \RuntimeException('Cette remise est en attente de decision proprietaire.');
+            }
+        } elseif ($status === 'SOUMIS_GERANT') {
+            if ($decision !== 'SUBMIT_OWNER' && $scope !== 'super_admin' && $role !== 'manager' && $role !== 'owner') {
+                throw new \RuntimeException('Decision caisse soumise : le gerant ou le proprietaire doit trancher.');
+            }
+        }
+
+        $saleId = (int) ($transfer['source_id'] ?? 0);
+        $sale = $this->findSaleInRestaurant($saleId, $restaurantId);
+        $serverUserId = (int) ($sale['server_id'] ?? $transfer['from_user_id'] ?? 0);
+        $amount = (float) ($transfer['amount'] ?? 0);
+        $snapshot = $this->buildCashTransferOperationSnapshot($restaurantId, $transfer);
+
+        if ($decision === 'SUBMIT_OWNER') {
+            if (!in_array($status, ['REMIS_A_CAISSE', 'SOUMIS_GERANT', 'REMISE_REJETEE_CAISSE', 'REMISE_REJETEE_GERANT', 'ECART_SIGNALE'], true)) {
+                throw new \RuntimeException('Soumission proprietaire impossible sur ce statut.');
+            }
+            if ($reason === '') {
+                throw new \RuntimeException('Motif obligatoire pour escalade proprietaire.');
+            }
+            $stmt = $this->database->pdo()->prepare(
+                'UPDATE cash_transfers
+                 SET status = "EN_ATTENTE_PROPRIETAIRE",
+                     note = TRIM(CONCAT(IFNULL(note, ""), " [Escalade proprietaire] ", :reason)),
+                     validated_by = :vid,
+                     validated_at = NOW(),
+                     updated_at = NOW()
+                 WHERE id = :id AND restaurant_id = :rid'
+            );
+            $stmt->execute([
+                'reason' => $reason,
+                'vid' => $actor['id'] ?? null,
+                'id' => $transferId,
+                'rid' => $restaurantId,
+            ]);
+            $this->audit($restaurantId, $actor, 'cash_remise_escalade_proprietaire', 'cash_transfers', $transferId, [
+                'operation' => $snapshot,
+                'reason' => $reason,
+            ], 'Remise vente soumise au proprietaire');
+        } elseif ($decision === 'REJECT_FINAL') {
+            if (!in_array($status, ['REMIS_A_CAISSE', 'SOUMIS_GERANT', 'REMISE_REJETEE_CAISSE', 'REMISE_REJETEE_GERANT', 'ECART_SIGNALE', 'EN_ATTENTE_PROPRIETAIRE'], true)) {
+                throw new \RuntimeException('Rejet definitif impossible sur ce statut.');
+            }
+            if ($reason === '') {
+                throw new \RuntimeException('Motif obligatoire pour rejet definitif.');
+            }
+            $stmt = $this->database->pdo()->prepare(
+                'UPDATE cash_transfers
+                 SET status = "REMISE_REJETEE_GERANT",
+                     discrepancy_note = :reason,
+                     validated_by = :vid,
+                     validated_at = NOW(),
+                     updated_at = NOW()
+                 WHERE id = :id AND restaurant_id = :rid'
+            );
+            $stmt->execute([
+                'reason' => $reason,
+                'vid' => $actor['id'] ?? null,
+                'id' => $transferId,
+                'rid' => $restaurantId,
+            ]);
+            $this->audit($restaurantId, $actor, 'cash_remise_rejet_definitif_gerant', 'cash_transfers', $transferId, [
+                'operation' => $snapshot,
+                'reason' => $reason,
+            ], 'Rejet definitif remise (responsable)');
+            Container::getInstance()->get('managerResolution')->recordServerPayrollShortage(
+                $restaurantId,
+                $serverUserId,
+                'cash_transfer',
+                $transferId,
+                $amount,
+                $this->mysqlDateTimeToYmd($restaurantId, (string) ($sale['validated_at'] ?? $sale['created_at'] ?? '')),
+                'reject_final',
+                $reason,
+                $payload['imputation_basis'] ?? null,
+                [
+                    ['label' => 'Remise vente rejetée (définitif)', 'sale_id' => $saleId],
+                ],
+                $actor,
+            );
+        } elseif ($decision === 'PARTIAL_ACCEPT' || $decision === 'PARTIAL') {
+            if (!in_array($status, ['REMIS_A_CAISSE', 'SOUMIS_GERANT', 'REMISE_REJETEE_CAISSE', 'REMISE_REJETEE_GERANT', 'ECART_SIGNALE', 'EN_ATTENTE_PROPRIETAIRE'], true)) {
+                throw new \RuntimeException('Acceptation partielle impossible sur ce statut.');
+            }
+            if ($reason === '') {
+                throw new \RuntimeException('Motif obligatoire pour acceptation partielle.');
+            }
+            $accepted = $this->normalizeAmount($payload['amount_accepted'] ?? 0);
+            if ($accepted <= 0 || $accepted > $amount + 0.0001) {
+                throw new \RuntimeException('Montant accepte incoherent.');
+            }
+            $diff = round($amount - $accepted, 2);
+            $stmt = $this->database->pdo()->prepare(
+                'UPDATE cash_transfers
+                 SET status = "RECU_CAISSE",
+                     amount_received = :ar,
+                     received_by = :rid_by,
+                     received_at = NOW(),
+                     discrepancy_amount = :disc,
+                     discrepancy_note = :n,
+                     updated_at = NOW()
+                 WHERE id = :id AND restaurant_id = :rid'
+            );
+            $stmt->execute([
+                'ar' => $accepted,
+                'rid_by' => $actor['id'] ?? null,
+                'disc' => $diff > 0.0001 ? $diff : 0,
+                'n' => $reason,
+                'id' => $transferId,
+                'rid' => $restaurantId,
+            ]);
+            $this->audit($restaurantId, $actor, 'cash_remise_partielle_responsable', 'cash_transfers', $transferId, [
+                'amount_received' => $accepted,
+                'difference' => $diff,
+                'operation' => $snapshot,
+            ], 'Acceptation partielle (responsable)');
+            if ($diff > 0.0001 && $serverUserId > 0) {
+                Container::getInstance()->get('managerResolution')->recordServerPayrollShortage(
+                    $restaurantId,
+                    $serverUserId,
+                    'cash_transfer',
+                    $transferId,
+                    $diff,
+                    $this->mysqlDateTimeToYmd($restaurantId, (string) ($sale['validated_at'] ?? $sale['created_at'] ?? '')),
+                    'partial_accept',
+                    $reason,
+                    $payload['imputation_basis'] ?? null,
+                    [
+                        ['label' => 'Ecart remise / reception partielle', 'sale_id' => $saleId, 'declared' => $amount, 'received' => $accepted],
+                    ],
+                    $actor,
+                );
+            }
+        } elseif ($decision === 'RECEIVE_FULL' || $decision === 'VALIDER') {
+            if (!in_array($status, ['REMIS_A_CAISSE', 'SOUMIS_GERANT', 'REMISE_REJETEE_CAISSE', 'REMISE_REJETEE_GERANT', 'ECART_SIGNALE', 'EN_ATTENTE_PROPRIETAIRE'], true)) {
+                throw new \RuntimeException('Validation reception impossible sur ce statut.');
+            }
+            $stmt = $this->database->pdo()->prepare(
+                'UPDATE cash_transfers
+                 SET status = "RECU_CAISSE",
+                     amount_received = :amt,
+                     received_by = :rid_by,
+                     received_at = NOW(),
+                     discrepancy_amount = 0,
+                     updated_at = NOW()
+                 WHERE id = :id AND restaurant_id = :rid'
+            );
+            $stmt->execute([
+                'amt' => $amount,
+                'rid_by' => $actor['id'] ?? null,
+                'id' => $transferId,
+                'rid' => $restaurantId,
+            ]);
+            $this->audit($restaurantId, $actor, 'cash_remise_recue_responsable', 'cash_transfers', $transferId, [
+                'amount_received' => $amount,
+                'operation' => $snapshot,
+            ], 'Reception caisse validee par responsable');
+        } else {
+            throw new \RuntimeException('Decision invalide.');
+        }
+
+        $imb = trim((string) ($payload['imputation_basis'] ?? ''));
+        if ($imb !== '') {
+            $this->managerAssignRemittanceImputation($restaurantId, $transferId, $imb, $actor);
+        }
+
+        if ($decision === 'SUBMIT_OWNER') {
+            return;
+        }
+
+        $grant = ($payload['grant_clemency'] ?? '') === '1' || ($payload['grant_clemency'] ?? '') === 'on';
+        if ($grant) {
+            $cr = trim((string) ($payload['clemency_reason'] ?? ''));
+            Container::getInstance()->get('staffDiscipline')->grantDisciplinaryClemency(
+                $restaurantId,
+                $serverUserId,
+                $cr,
+                $actor,
+                ['cash_transfer_id' => $transferId, 'decision' => $decision],
+            );
+        } else {
+            if ($serverUserId > 0) {
+                Container::getInstance()->get('staffDiscipline')->recordManagerRegularizationPreservesPenalty(
+                    $restaurantId,
+                    $serverUserId,
+                    $snapshot,
+                    $decision,
+                );
+            }
+        }
     }
 
     public function rejectSaleRemittanceByCashier(int $restaurantId, int $transferId, string $reason, array $actor): void
@@ -954,6 +1243,7 @@ final class CashService
         return in_array($status, [
             'REMIS_A_CAISSE',
             'SOUMIS_GERANT',
+            'EN_ATTENTE_PROPRIETAIRE',
             'RECU_CAISSE',
             'ECART_SIGNALE',
         ], true);
@@ -1187,6 +1477,7 @@ final class CashService
             . ' AND ('
             . '(' . $alias . '.late_remittance_basis = "SALE_DAY" AND ' . $alias . '.sale_day_ymd IS NOT NULL AND ' . $alias . '.sale_day_ymd >= :dfrom AND ' . $alias . '.sale_day_ymd <= :dto)'
             . ' OR (' . $alias . '.late_remittance_basis = "REMITTANCE_DAY" AND ' . $alias . '.remittance_day_ymd IS NOT NULL AND ' . $alias . '.remittance_day_ymd >= :dfrom AND ' . $alias . '.remittance_day_ymd <= :dto)'
+            . ' OR (' . $alias . '.late_remittance_basis = "RESOLUTION_DAY" AND ' . $alias . '.remittance_day_ymd IS NOT NULL AND ' . $alias . '.remittance_day_ymd >= :dfrom AND ' . $alias . '.remittance_day_ymd <= :dto)'
             . ' OR ('
             . '(' . $alias . '.late_remittance_basis IS NULL OR ' . $alias . '.late_remittance_basis = "")'
             . ' AND ' . $alias . '.sale_day_ymd IS NOT NULL AND ' . $alias . '.remittance_day_ymd IS NOT NULL AND ' . $alias . '.sale_day_ymd = ' . $alias . '.remittance_day_ymd'
@@ -1194,7 +1485,7 @@ final class CashService
             . ' OR ('
             . 'COALESCE(' . $alias . '.received_at, ' . $alias . '.requested_at, ' . $alias . '.created_at) >= :start_at'
             . ' AND COALESCE(' . $alias . '.received_at, ' . $alias . '.requested_at, ' . $alias . '.created_at) <= :end_at'
-            . ' AND NOT (' . $alias . '.late_remittance_basis IN ("SALE_DAY", "REMITTANCE_DAY")'
+            . ' AND NOT (' . $alias . '.late_remittance_basis IN ("SALE_DAY", "REMITTANCE_DAY", "RESOLUTION_DAY")'
             . ' OR ('
             . '(' . $alias . '.late_remittance_basis IS NULL OR ' . $alias . '.late_remittance_basis = "")'
             . ' AND ' . $alias . '.sale_day_ymd IS NOT NULL AND ' . $alias . '.remittance_day_ymd IS NOT NULL AND ' . $alias . '.sale_day_ymd = ' . $alias . '.remittance_day_ymd'

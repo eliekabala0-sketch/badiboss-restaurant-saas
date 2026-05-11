@@ -586,6 +586,10 @@ $saleRemittanceHist = $sale_remittance_history ?? [];
                 <input type="hidden" name="basis" value="REMITTANCE_DAY">
                 <button type="submit" class="button-muted">Rattacher au jour de remise</button>
             </form>
+            <form method="post" action="/owner/caisse/remises-tardives/<?= e((string) ($lat['id'] ?? '0')) ?>/rattachement" style="margin-top:8px;" onsubmit="return confirm('Rattacher au jour de résolution ?');">
+                <input type="hidden" name="basis" value="RESOLUTION_DAY">
+                <button type="submit" class="button-muted">Rattacher au jour de résolution</button>
+            </form>
         </article>
     <?php endforeach; ?>
 </section>

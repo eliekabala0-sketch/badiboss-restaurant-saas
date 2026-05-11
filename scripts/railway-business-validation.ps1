@@ -44,6 +44,13 @@ E. Jauges
    Sur /cuisine, /stock, /caisse, /ventes : ouvrir le bloc repliable « Discipline · … »,
    changer les onglets période et vérifier score + liste d’activité tracée.
 
+F. Résolution responsable (bloc sous ?focus=, gérant/propriétaire/super admin uniquement)
+   1) /ventes?focus=server_request:ID — bloc visible gérant, décisions servie / sans vente / manquant / annuler.
+   2) POST /ventes/resolution-responsable — pas de 500 ; agent débloqué si cas réglé ; message pénalité conservée / clémence auditée.
+   3) /caisse?focus=cash_transfer:ID — réception totale, partielle, rejet définitif, escalade propriétaire ; manquant serveur si écart.
+   4) Imputation SALE_DAY / REMITTANCE_DAY / RESOLUTION_DAY (formulaire bloc + rapport remises tardives).
+   5) Serveur simple : pas de bloc décision ; owner : voit clémences dans audit / file caisse escaladée.
+
 "@
 
 Write-Host "`nFin (aucune requête métier automatique lancée)." -ForegroundColor Green

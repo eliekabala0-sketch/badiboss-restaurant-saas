@@ -12,6 +12,7 @@ use App\Services\CorrectionRequestService;
 use App\Services\AuthService;
 use App\Services\IncidentService;
 use App\Services\KitchenService;
+use App\Services\ManagerResolutionService;
 use App\Services\MenuAdminService;
 use App\Services\OperationalResetService;
 use App\Services\StockResetService;
@@ -119,6 +120,7 @@ final class App
         $container->set('cashService', new CashService($database));
         $container->set('reportService', new ReportService($database));
         $container->set('staffDiscipline', new StaffDisciplineService($database));
+        $container->set('managerResolution', new ManagerResolutionService($database));
         $container->set('regularizationGate', new RegularizationGateService($database));
         $container->set('operationalResetService', new OperationalResetService($database));
         $container->set('stockResetService', new StockResetService($database));

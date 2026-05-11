@@ -104,6 +104,7 @@ $router->post('/ventes/demandes', [OperationsController::class, 'createServerReq
 $router->post('/ventes/demandes/{id}/reception', [OperationsController::class, 'confirmServerRequestReceipt'], [AuthMiddleware::class, SalesAccessMiddleware::class]);
 $router->post('/ventes/demandes/{id}/annuler', [OperationsController::class, 'cancelServerRequest'], [AuthMiddleware::class, SalesAccessMiddleware::class]);
 $router->post('/ventes/demandes/{id}/cloture', [OperationsController::class, 'closeServerRequest'], [AuthMiddleware::class, SalesAccessMiddleware::class]);
+$router->post('/ventes/resolution-responsable', [OperationsController::class, 'postManagerResolutionSales'], [AuthMiddleware::class, SalesAccessMiddleware::class]);
 $router->post('/ventes/incidents', [OperationsController::class, 'signalSaleIncident'], [AuthMiddleware::class, SalesAccessMiddleware::class]);
 $router->post('/operations/cases/{id}/decision', [OperationsController::class, 'decideCase'], [AuthMiddleware::class]);
 $router->post('/ventes/pertes-argent', [OperationsController::class, 'createCashLoss'], [AuthMiddleware::class, SalesAccessMiddleware::class]);
@@ -118,6 +119,7 @@ $router->post('/caisse/remises-gerant', [OperationsController::class, 'transferC
 $router->post('/caisse/transferts/{id}/reception-gerant', [OperationsController::class, 'receiveCashAtManager'], [AuthMiddleware::class]);
 $router->post('/caisse/remises-proprietaire', [OperationsController::class, 'transferCashToOwner'], [AuthMiddleware::class]);
 $router->post('/caisse/transferts/{id}/reception-proprietaire', [OperationsController::class, 'receiveCashAtOwner'], [AuthMiddleware::class]);
+$router->post('/caisse/resolution-responsable', [OperationsController::class, 'postManagerResolutionCash'], [AuthMiddleware::class]);
 $router->post('/owner/correction-requests/{id}/decision', [OperationsController::class, 'decideCorrectionRequest'], [AuthMiddleware::class, OwnerOrManagerMiddleware::class]);
 $router->post('/owner/caisse/remises-vente/{id}/decision', [OperationsController::class, 'decideManagerSaleRemittance'], [AuthMiddleware::class, OwnerOrManagerMiddleware::class]);
 $router->post('/owner/caisse/remises-tardives/{id}/rattachement', [OperationsController::class, 'decideLateSaleRemittanceAttribution'], [AuthMiddleware::class, OwnerOrManagerMiddleware::class]);
