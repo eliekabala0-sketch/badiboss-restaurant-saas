@@ -608,6 +608,9 @@ final class SalesService
         if (in_array((string) $request['status'], ['ANNULE', 'REFUSE_CUISINE'], true)) {
             throw new \RuntimeException('Cette demande a ete annulee ou refusee par la cuisine.');
         }
+        if (in_array((string) $request['status'], ['CLOTURE', 'VENDU_TOTAL', 'VENDU_PARTIEL'], true)) {
+            throw new \RuntimeException('Demande deja cloturee.');
+        }
 
         $reqStatus = (string) $request['status'];
         $suppliedHeader = (float) ($request['total_supplied_amount'] ?? 0);
@@ -688,6 +691,13 @@ final class SalesService
                         'quantity' => $soldQuantity,
                         'unit_price' => $unitPrice,
                     ];
+                }
+            }
+
+            if ($salePayloadItems !== []) {
+                $dupSaleId = $this->findLatestSaleIdByServerRequestOrigin($restaurantId, $requestId);
+                if ($dupSaleId !== null) {
+                    $salePayloadItems = [];
                 }
             }
 
@@ -1315,8 +1325,17 @@ final class SalesService
         if ($request === null) {
             throw new \RuntimeException('Demande serveur introuvable.');
         }
+        $mr = Container::getInstance()->get('managerResolution');
+        $mr->ensureResponsibleOutcomeColumns();
+        if ($mr->serverRequestHasResponsibleOutcome($restaurantId, $requestId)) {
+            throw new \RuntimeException('Cette demande a deja ete tranchee par un responsable.');
+        }
         $serverUid = (int) ($request['server_id'] ?? 0);
         $st = (string) ($request['status'] ?? '');
+        $beforeSnap = [
+            'request_status_before' => $st,
+            'total_supplied_before' => (float) ($request['total_supplied_amount'] ?? 0),
+        ];
         if (in_array($st, ['ANNULE', 'REFUSE_CUISINE', 'CLOTURE', 'VENDU_TOTAL', 'VENDU_PARTIEL'], true)) {
             throw new \RuntimeException('Demande deja terminee ou annulee.');
         }
@@ -1345,6 +1364,34 @@ final class SalesService
                 'sold_quantities' => is_array($extra['sold_quantities'] ?? null) ? $extra['sold_quantities'] : [],
                 'returned_quantities' => is_array($extra['returned_quantities'] ?? null) ? $extra['returned_quantities'] : [],
             ], $actor);
+            $saleIdFound = $this->findLatestSaleIdByServerRequestOrigin($restaurantId, $requestId);
+            $mr->markServerRequestResponsibleOutcome(
+                $restaurantId,
+                $requestId,
+                ManagerResolutionService::OUTCOME_VALIDE_GERANT,
+                $actor,
+                array_merge($beforeSnap, [
+                    'request_status_after' => 'CLOTURE',
+                    'sale_id' => $saleIdFound,
+                    'clemency_requested' => ($extra['grant_clemency'] ?? '') === '1' || ($extra['grant_clemency'] ?? '') === 'on',
+                ]),
+            );
+            Container::getInstance()->get('audit')->log([
+                'restaurant_id' => $restaurantId,
+                'user_id' => $actor['id'] ?? null,
+                'actor_name' => $actor['full_name'] ?? '',
+                'actor_role_code' => $actor['role_code'] ?? '',
+                'module_name' => 'manager_resolution',
+                'action_name' => 'server_request_responsible_terminal',
+                'entity_type' => 'server_requests',
+                'entity_id' => (string) $requestId,
+                'old_values' => $beforeSnap,
+                'new_values' => [
+                    'outcome' => ManagerResolutionService::OUTCOME_VALIDE_GERANT,
+                    'sale_id' => $saleIdFound,
+                ],
+                'justification' => $reason !== '' ? $reason : 'Validee comme servie',
+            ]);
             $this->applyManagerRequestDisciplineExtras($restaurantId, $serverUid, $actor, $extra, $operationSnapshot);
 
             return;
@@ -1375,6 +1422,31 @@ final class SalesService
             'action_name_override' => $actionName,
             'audit_justification' => $auditJust,
         ], $actor, false);
+        $afterReq = $this->findServerRequest($requestId, $restaurantId) ?? [];
+        $outcome = $mode === 'server_shortage' ? ManagerResolutionService::OUTCOME_MANQUANT_GERANT : ManagerResolutionService::OUTCOME_CLOTURE_GERANT;
+        $mr->markServerRequestResponsibleOutcome(
+            $restaurantId,
+            $requestId,
+            $outcome,
+            $actor,
+            array_merge($beforeSnap, [
+                'request_status_after' => (string) ($afterReq['status'] ?? 'CLOTURE'),
+                'shortage_mode' => $mode === 'server_shortage',
+            ]),
+        );
+        Container::getInstance()->get('audit')->log([
+            'restaurant_id' => $restaurantId,
+            'user_id' => $actor['id'] ?? null,
+            'actor_name' => $actor['full_name'] ?? '',
+            'actor_role_code' => $actor['role_code'] ?? '',
+            'module_name' => 'manager_resolution',
+            'action_name' => 'server_request_responsible_terminal',
+            'entity_type' => 'server_requests',
+            'entity_id' => (string) $requestId,
+            'old_values' => $beforeSnap,
+            'new_values' => ['outcome' => $outcome],
+            'justification' => $auditJust,
+        ]);
         if ($mode === 'server_shortage' && $serverUid > 0) {
             $lossAmt = 0.0;
             $arts = [];
@@ -1453,6 +1525,11 @@ final class SalesService
         if ($request === null) {
             throw new \RuntimeException('Demande serveur introuvable.');
         }
+        $mr = Container::getInstance()->get('managerResolution');
+        $mr->ensureResponsibleOutcomeColumns();
+        if ($mr->serverRequestHasResponsibleOutcome($restaurantId, $requestId)) {
+            throw new \RuntimeException('Cette demande a deja ete tranchee par un responsable.');
+        }
         $st = (string) ($request['status'] ?? '');
         if (in_array($st, ['ANNULE', 'CLOTURE', 'VENDU_TOTAL', 'VENDU_PARTIEL'], true)) {
             throw new \RuntimeException('Annulation responsable impossible sur ce statut.');
@@ -1508,6 +1585,30 @@ final class SalesService
             ],
             'justification' => 'Annulation / rejet commande par responsable',
         ]);
+        $mr->markServerRequestResponsibleOutcome(
+            $restaurantId,
+            $requestId,
+            ManagerResolutionService::OUTCOME_REJET_GERANT,
+            $actor,
+            [
+                'request_status_before' => $st,
+                'request_status_after' => 'ANNULE',
+                'motif' => $reason,
+            ],
+        );
+    }
+
+    private function findLatestSaleIdByServerRequestOrigin(int $restaurantId, int $requestId): ?int
+    {
+        $statement = $this->database->pdo()->prepare(
+            'SELECT id FROM sales
+             WHERE restaurant_id = :rid AND origin_type = "server_request" AND origin_id = :oid
+             ORDER BY id DESC LIMIT 1'
+        );
+        $statement->execute(['rid' => $restaurantId, 'oid' => $requestId]);
+        $v = $statement->fetchColumn();
+
+        return is_numeric($v) ? (int) $v : null;
     }
 
     private function findServerRequest(int $requestId, int $restaurantId): ?array

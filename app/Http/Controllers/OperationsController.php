@@ -643,6 +643,9 @@ final class OperationsController
             'flash_success' => flash('success'),
             'flash_error' => flash('error'),
             'manager_resolution_panel' => $this->buildManagerResolutionPanelFromRequest($request, $restaurantId),
+            'manager_recent_decisions' => \App\Services\ManagerResolutionService::actorCanResolve(is_array($actor) ? $actor : null)
+                ? Container::getInstance()->get('managerResolution')->listRecentResponsibleDecisions($restaurantId, 14)
+                : [],
         ]));
 
         audit_access('sales', $restaurantId, 'screens', 'sales', 'Consultation module ventes');
@@ -690,6 +693,9 @@ final class OperationsController
             'flash_success' => flash('success'),
             'flash_error' => flash('error'),
             'manager_resolution_panel' => $this->buildManagerResolutionPanelFromRequest($request, $restaurantId),
+            'manager_recent_decisions' => \App\Services\ManagerResolutionService::actorCanResolve(current_user() ?? [])
+                ? Container::getInstance()->get('managerResolution')->listRecentResponsibleDecisions($restaurantId, 14)
+                : [],
         ]));
 
         audit_access('cash', $restaurantId, 'screens', 'cash', 'Consultation module caisse');
@@ -845,7 +851,13 @@ final class OperationsController
             );
             flash('success', 'Decision responsable enregistree sur la commande.');
         } catch (\Throwable $e) {
-            flash('error', ui_safe_message($e->getMessage()));
+            $msg = ui_safe_message($e->getMessage());
+            if ((str_contains(strtolower($msg), 'deja') && str_contains(strtolower($msg), 'tranche'))
+                || str_contains(strtolower($msg), 'deja ete envoyee')) {
+                flash('success', 'Deja traite par un responsable — aucun doublon enregistre.');
+            } else {
+                flash('error', $msg);
+            }
         }
         $this->redirectWithQuerySuffix($this->moduleUrl('/ventes', $restaurantId), $redirectExtra);
     }
@@ -876,7 +888,13 @@ final class OperationsController
             );
             flash('success', 'Decision responsable enregistree sur la remise caisse.');
         } catch (\Throwable $e) {
-            flash('error', ui_safe_message($e->getMessage()));
+            $msg = ui_safe_message($e->getMessage());
+            if ((str_contains(strtolower($msg), 'deja') && str_contains(strtolower($msg), 'tranche'))
+                || str_contains(strtolower($msg), 'deja ete envoyee')) {
+                flash('success', 'Deja traite par un responsable — aucun doublon enregistre.');
+            } else {
+                flash('error', $msg);
+            }
         }
         $this->redirectWithQuerySuffix($this->moduleUrl('/caisse', $restaurantId), $redirectExtra);
     }

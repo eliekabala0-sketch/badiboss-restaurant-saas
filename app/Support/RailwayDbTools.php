@@ -27,6 +27,10 @@ final class RailwayDbTools
             ['name' => 'resolution_note', 'sql' => 'ALTER TABLE server_requests ADD COLUMN resolution_note TEXT NULL AFTER note'],
             ['name' => 'resolution_by', 'sql' => 'ALTER TABLE server_requests ADD COLUMN resolution_by BIGINT UNSIGNED NULL AFTER resolution_note'],
             ['name' => 'resolution_at', 'sql' => 'ALTER TABLE server_requests ADD COLUMN resolution_at DATETIME NULL AFTER resolution_by'],
+            ['name' => 'responsible_outcome_code', 'sql' => 'ALTER TABLE server_requests ADD COLUMN responsible_outcome_code VARCHAR(40) NULL'],
+            ['name' => 'responsible_outcome_at', 'sql' => 'ALTER TABLE server_requests ADD COLUMN responsible_outcome_at DATETIME NULL'],
+            ['name' => 'responsible_outcome_by', 'sql' => 'ALTER TABLE server_requests ADD COLUMN responsible_outcome_by BIGINT UNSIGNED NULL'],
+            ['name' => 'responsible_outcome_detail', 'sql' => 'ALTER TABLE server_requests ADD COLUMN responsible_outcome_detail TEXT NULL'],
         ],
         'server_request_items' => [
             ['name' => 'unavailable_quantity', 'sql' => 'ALTER TABLE server_request_items ADD COLUMN unavailable_quantity DECIMAL(12,2) NOT NULL DEFAULT 0.00 AFTER supplied_quantity'],

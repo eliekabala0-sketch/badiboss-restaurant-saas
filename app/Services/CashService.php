@@ -475,6 +475,14 @@ final class CashService
         $serverUserId = (int) ($sale['server_id'] ?? $transfer['from_user_id'] ?? 0);
         $amount = (float) ($transfer['amount'] ?? 0);
         $snapshot = $this->buildCashTransferOperationSnapshot($restaurantId, $transfer);
+        $mr = Container::getInstance()->get('managerResolution');
+        $mr->ensureResponsibleOutcomeColumns();
+        $mr->assertCashTransferResolutionIdempotent($transfer, $decision, $actor);
+        $oldState = [
+            'transfer_status' => $status,
+            'transfer_amount' => $amount,
+            'responsible_outcome_code_before' => (string) ($transfer['responsible_outcome_code'] ?? ''),
+        ];
 
         if ($decision === 'SUBMIT_OWNER') {
             if (!in_array($status, ['REMIS_A_CAISSE', 'SOUMIS_GERANT', 'REMISE_REJETEE_CAISSE', 'REMISE_REJETEE_GERANT', 'ECART_SIGNALE'], true)) {
@@ -501,7 +509,20 @@ final class CashService
             $this->audit($restaurantId, $actor, 'cash_remise_escalade_proprietaire', 'cash_transfers', $transferId, [
                 'operation' => $snapshot,
                 'reason' => $reason,
-            ], 'Remise vente soumise au proprietaire');
+                'new_status' => 'EN_ATTENTE_PROPRIETAIRE',
+            ], 'Remise vente soumise au proprietaire', $oldState);
+            $mr->markCashTransferResponsibleOutcome(
+                $restaurantId,
+                $transferId,
+                ManagerResolutionService::OUTCOME_ESCALADE_PROPRIETAIRE,
+                $actor,
+                array_merge($oldState, [
+                    'new_status' => 'EN_ATTENTE_PROPRIETAIRE',
+                    'motif' => $reason,
+                ]),
+            );
+
+            return;
         } elseif ($decision === 'REJECT_FINAL') {
             if (!in_array($status, ['REMIS_A_CAISSE', 'SOUMIS_GERANT', 'REMISE_REJETEE_CAISSE', 'REMISE_REJETEE_GERANT', 'ECART_SIGNALE', 'EN_ATTENTE_PROPRIETAIRE'], true)) {
                 throw new \RuntimeException('Rejet definitif impossible sur ce statut.');
@@ -527,7 +548,8 @@ final class CashService
             $this->audit($restaurantId, $actor, 'cash_remise_rejet_definitif_gerant', 'cash_transfers', $transferId, [
                 'operation' => $snapshot,
                 'reason' => $reason,
-            ], 'Rejet definitif remise (responsable)');
+                'new_status' => 'REMISE_REJETEE_GERANT',
+            ], 'Rejet definitif remise (responsable)', $oldState);
             Container::getInstance()->get('managerResolution')->recordServerPayrollShortage(
                 $restaurantId,
                 $serverUserId,
@@ -578,7 +600,8 @@ final class CashService
                 'amount_received' => $accepted,
                 'difference' => $diff,
                 'operation' => $snapshot,
-            ], 'Acceptation partielle (responsable)');
+                'new_status' => 'RECU_CAISSE',
+            ], 'Acceptation partielle (responsable)', $oldState);
             if ($diff > 0.0001 && $serverUserId > 0) {
                 Container::getInstance()->get('managerResolution')->recordServerPayrollShortage(
                     $restaurantId,
@@ -619,7 +642,8 @@ final class CashService
             $this->audit($restaurantId, $actor, 'cash_remise_recue_responsable', 'cash_transfers', $transferId, [
                 'amount_received' => $amount,
                 'operation' => $snapshot,
-            ], 'Reception caisse validee par responsable');
+                'new_status' => 'RECU_CAISSE',
+            ], 'Reception caisse validee par responsable', $oldState);
         } else {
             throw new \RuntimeException('Decision invalide.');
         }
@@ -632,6 +656,45 @@ final class CashService
         if ($decision === 'SUBMIT_OWNER') {
             return;
         }
+
+        $transferFresh = $this->findTransferInRestaurant($transferId, $restaurantId);
+        $stNew = (string) ($transferFresh['status'] ?? '');
+        $outcome = match ($decision) {
+            'REJECT_FINAL' => ManagerResolutionService::OUTCOME_REJET_GERANT,
+            'PARTIAL_ACCEPT', 'PARTIAL' => ManagerResolutionService::OUTCOME_PARTIEL_GERANT,
+            default => ManagerResolutionService::OUTCOME_VALIDE_GERANT,
+        };
+        $mr->markCashTransferResponsibleOutcome(
+            $restaurantId,
+            $transferId,
+            $outcome,
+            $actor,
+            [
+                'old_status' => $status,
+                'new_status' => $stNew,
+                'declared_amount' => $amount,
+                'amount_received' => (float) ($transferFresh['amount_received'] ?? 0),
+                'discrepancy_amount' => (float) ($transferFresh['discrepancy_amount'] ?? 0),
+                'sale_id' => $saleId,
+                'imputation_basis' => $imb,
+            ],
+        );
+        Container::getInstance()->get('audit')->log([
+            'restaurant_id' => $restaurantId,
+            'user_id' => $actor['id'] ?? null,
+            'actor_name' => $actor['full_name'] ?? null,
+            'actor_role_code' => $actor['role_code'] ?? null,
+            'module_name' => 'manager_resolution',
+            'action_name' => 'cash_transfer_responsible_terminal',
+            'entity_type' => 'cash_transfers',
+            'entity_id' => (string) $transferId,
+            'old_values' => $oldState,
+            'new_values' => [
+                'outcome' => $outcome,
+                'transfer_status_after' => $stNew,
+            ],
+            'justification' => $reason !== '' ? $reason : 'Decision responsable remise vente',
+        ]);
 
         $grant = ($payload['grant_clemency'] ?? '') === '1' || ($payload['grant_clemency'] ?? '') === 'on';
         if ($grant) {
@@ -1393,9 +1456,9 @@ final class CashService
         return 0;
     }
 
-    private function audit(int $restaurantId, array $actor, string $action, string $entityType, int $entityId, array $newValues, string $justification): void
+    private function audit(int $restaurantId, array $actor, string $action, string $entityType, int $entityId, array $newValues, string $justification, ?array $oldValues = null): void
     {
-        Container::getInstance()->get('audit')->log([
+        $log = [
             'restaurant_id' => $restaurantId,
             'user_id' => $actor['id'] ?? null,
             'actor_name' => $actor['full_name'] ?? null,
@@ -1406,7 +1469,11 @@ final class CashService
             'entity_id' => (string) $entityId,
             'new_values' => $newValues,
             'justification' => $justification,
-        ]);
+        ];
+        if ($oldValues !== null && $oldValues !== []) {
+            $log['old_values'] = $oldValues;
+        }
+        Container::getInstance()->get('audit')->log($log);
     }
 
     private function ensureSchema(): void

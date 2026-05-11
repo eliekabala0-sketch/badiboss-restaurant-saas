@@ -244,6 +244,7 @@ foreach ($historyEntries as $entry) {
 
 <?php require base_path('app/Views/partials/regularization_hold_banner.php'); ?>
 <?php require base_path('app/Views/partials/manager_resolution_block.php'); ?>
+<?php require base_path('app/Views/partials/manager_recent_decisions.php'); ?>
 <?php require base_path('app/Views/partials/operational_period_tabs.php'); ?>
 
 <?php if ($modulePulse !== []): ?>

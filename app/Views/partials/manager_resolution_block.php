@@ -7,13 +7,43 @@ $can = \App\Services\ManagerResolutionService::actorCanResolve(is_array($user) ?
 if (!is_array($mr) || ($mr['entity_kind'] ?? '') === '' || !$can) {
     return;
 }
+$restaurantCurrency = restaurant_currency((isset($restaurant) && is_array($restaurant)) ? $restaurant : null);
+if (!empty($mr['already_resolved'])) {
+    $det = $mr['outcome_detail'] ?? [];
+    if (!is_array($det)) {
+        $det = [];
+    }
+    ?>
+<section class="card no-print manager-resolution-block" style="padding:18px 22px; margin-bottom:22px; border-left:4px solid #15803d;">
+    <h3 style="margin:0 0 6px;">Déjà traité par un responsable</h3>
+    <p class="muted" style="margin:0 0 12px;">Aucune action supplémentaire requise sur ce dossier. Les rapports utilisent l’état figé ci-dessous.</p>
+    <p style="margin:0 0 8px;"><strong><?= e((string) ($mr['outcome_label'] ?? responsible_outcome_label((string) ($mr['outcome_code'] ?? '')))) ?></strong>
+        <?php if (($mr['decided_by_label'] ?? '') !== ''): ?> · par <?= e((string) $mr['decided_by_label']) ?><?php endif; ?>
+        <?php if (($mr['outcome_at'] ?? '') !== ''): ?> · <?= e(format_date_fr($mr['outcome_at'] ?? null)) ?><?php endif; ?></p>
+    <dl style="margin:0 0 10px; display:grid; gap:4px; font-size:0.92rem;">
+        <div><span class="muted">Dossier</span> <?= e((string) ($mr['operation_label'] ?? '')) ?></div>
+        <div><span class="muted">Agent</span> <?= e((string) ($mr['agent_label'] ?? '—')) ?></div>
+        <div><span class="muted">Montant concerné</span> <?= e(format_money((float) ($mr['amount_hint'] ?? 0), $restaurantCurrency)) ?></div>
+        <?php if ($det !== []): ?>
+            <div><span class="muted">Détail enregistré</span></div>
+            <ul style="margin:4px 0 0 18px; padding:0; line-height:1.45;">
+                <?php foreach (array_slice($det, 0, 12, true) as $k => $v): ?>
+                    <li><?= e((string) $k) ?> : <?= e(is_scalar($v) ? (string) $v : json_encode($v, JSON_UNESCAPED_UNICODE)) ?></li>
+                <?php endforeach; ?>
+            </ul>
+        <?php endif; ?>
+    </dl>
+    <p style="margin:0; font-size:0.9rem; color:var(--muted);"><em>Historique complet : module audit (qui, quand, avant / après).</em></p>
+</section>
+    <?php
+    return;
+}
 $decisions = $mr['decisions'] ?? [];
 if (!is_array($decisions) || $decisions === []) {
     return;
 }
 $kind = (string) $mr['entity_kind'];
 $eid = (int) ($mr['entity_id'] ?? 0);
-$restaurantCurrency = restaurant_currency((isset($restaurant) && is_array($restaurant)) ? $restaurant : null);
 ?>
 <section class="card no-print manager-resolution-block" style="padding:18px 22px; margin-bottom:22px; border-left:4px solid var(--brand, #d4af37);">
     <h3 style="margin:0 0 6px;">Décision du responsable</h3>

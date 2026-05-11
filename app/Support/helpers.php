@@ -902,6 +902,23 @@ function service_flow_status_label(?string $status): string
     };
 }
 
+/**
+ * Libellé lisible pour le code d’état terminal enregistré par un responsable.
+ */
+function responsible_outcome_label(?string $code): string
+{
+    return match (trim((string) $code)) {
+        'VALIDE_GERANT' => 'Validée par le responsable (vente / service conclus)',
+        'CLOTURE_GERANT' => 'Clôturée par le responsable sans vente',
+        'MANQUANT_GERANT' => 'Manquant à charge agent (responsable)',
+        'REJET_GERANT' => 'Rejetée / annulée par le responsable',
+        'PARTIEL_GERANT' => 'Réception partielle caisse (responsable)',
+        'FORCE_CAISSE_GERANT' => 'Forçage caisse (responsable)',
+        'ESCALADE_PROPRIETAIRE' => 'Transmis au propriétaire',
+        default => $code !== null && trim($code) !== '' ? $code : '—',
+    };
+}
+
 function cash_transfer_public_label(?string $status): string
 {
     return match ((string) $status) {

@@ -14,6 +14,21 @@ use PDO;
  */
 final class ManagerResolutionService
 {
+    /** @see responsible_outcome_label() */
+    public const OUTCOME_VALIDE_GERANT = 'VALIDE_GERANT';
+
+    public const OUTCOME_CLOTURE_GERANT = 'CLOTURE_GERANT';
+
+    public const OUTCOME_MANQUANT_GERANT = 'MANQUANT_GERANT';
+
+    public const OUTCOME_REJET_GERANT = 'REJET_GERANT';
+
+    public const OUTCOME_PARTIEL_GERANT = 'PARTIEL_GERANT';
+
+    public const OUTCOME_FORCE_CAISSE_GERANT = 'FORCE_CAISSE_GERANT';
+
+    public const OUTCOME_ESCALADE_PROPRIETAIRE = 'ESCALADE_PROPRIETAIRE';
+
     public function __construct(private readonly Database $database)
     {
     }
@@ -72,7 +87,18 @@ final class ManagerResolutionService
         array $actor,
     ): int {
         $this->ensureShortageSchema();
-        $stmt = $this->database->pdo()->prepare(
+        $pdo = $this->database->pdo();
+        $dupCk = $pdo->prepare(
+            'SELECT id FROM server_payroll_shortages
+             WHERE restaurant_id = :rid AND source_kind = :sk AND source_id = :sid
+             LIMIT 1'
+        );
+        $dupCk->execute(['rid' => $restaurantId, 'sk' => $sourceKind, 'sid' => $sourceId]);
+        $existingId = $dupCk->fetchColumn();
+        if ($existingId !== false && is_numeric($existingId)) {
+            return (int) $existingId;
+        }
+        $stmt = $pdo->prepare(
             'INSERT INTO server_payroll_shortages
             (restaurant_id, server_user_id, source_kind, source_id, articles_json, amount, origin_day_ymd, decision_code, decision_note, state, imputation_basis, created_by, created_at, updated_at)
              VALUES
@@ -115,6 +141,178 @@ final class ManagerResolutionService
     }
 
     /**
+     * Colonnes optionnelles d’état terminal (migration douce, sans DROP).
+     */
+    public function ensureResponsibleOutcomeColumns(): void
+    {
+        $pdo = $this->database->pdo();
+        foreach ($this->outcomeColumnStatements() as $sql) {
+            try {
+                $pdo->exec($sql);
+            } catch (\Throwable) {
+            }
+        }
+    }
+
+    /** @return list<string> */
+    private function outcomeColumnStatements(): array
+    {
+        return [
+            'ALTER TABLE server_requests ADD COLUMN responsible_outcome_code VARCHAR(40) NULL',
+            'ALTER TABLE server_requests ADD COLUMN responsible_outcome_at DATETIME NULL',
+            'ALTER TABLE server_requests ADD COLUMN responsible_outcome_by BIGINT UNSIGNED NULL',
+            'ALTER TABLE server_requests ADD COLUMN responsible_outcome_detail TEXT NULL',
+            'ALTER TABLE cash_transfers ADD COLUMN responsible_outcome_code VARCHAR(40) NULL',
+            'ALTER TABLE cash_transfers ADD COLUMN responsible_outcome_at DATETIME NULL',
+            'ALTER TABLE cash_transfers ADD COLUMN responsible_outcome_by BIGINT UNSIGNED NULL',
+            'ALTER TABLE cash_transfers ADD COLUMN responsible_outcome_detail TEXT NULL',
+        ];
+    }
+
+    public function serverRequestHasResponsibleOutcome(int $restaurantId, int $requestId): bool
+    {
+        $this->ensureResponsibleOutcomeColumns();
+        $st = $this->database->pdo()->prepare(
+            'SELECT responsible_outcome_code FROM server_requests WHERE id = :id AND restaurant_id = :rid LIMIT 1'
+        );
+        $st->execute(['id' => $requestId, 'rid' => $restaurantId]);
+        $v = $st->fetchColumn();
+
+        return is_string($v) && trim($v) !== '';
+    }
+
+    /**
+     * @param array<string, mixed> $detail
+     */
+    public function markServerRequestResponsibleOutcome(
+        int $restaurantId,
+        int $requestId,
+        string $outcomeCode,
+        array $actor,
+        array $detail,
+    ): void {
+        $this->ensureResponsibleOutcomeColumns();
+        $stmt = $this->database->pdo()->prepare(
+            'UPDATE server_requests
+             SET responsible_outcome_code = :code,
+                 responsible_outcome_at = NOW(),
+                 responsible_outcome_by = :uid,
+                 responsible_outcome_detail = :det
+             WHERE id = :id AND restaurant_id = :rid'
+        );
+        $stmt->execute([
+            'code' => $outcomeCode,
+            'uid' => $actor['id'] ?? null,
+            'det' => json_encode($detail, JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR),
+            'id' => $requestId,
+            'rid' => $restaurantId,
+        ]);
+    }
+
+    /**
+     * @param array<string, mixed> $detail
+     */
+    public function markCashTransferResponsibleOutcome(
+        int $restaurantId,
+        int $transferId,
+        string $outcomeCode,
+        array $actor,
+        array $detail,
+    ): void {
+        $this->ensureResponsibleOutcomeColumns();
+        $stmt = $this->database->pdo()->prepare(
+            'UPDATE cash_transfers
+             SET responsible_outcome_code = :code,
+                 responsible_outcome_at = NOW(),
+                 responsible_outcome_by = :uid,
+                 responsible_outcome_detail = :det
+             WHERE id = :id AND restaurant_id = :rid'
+        );
+        $stmt->execute([
+            'code' => $outcomeCode,
+            'uid' => $actor['id'] ?? null,
+            'det' => json_encode($detail, JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR),
+            'id' => $transferId,
+            'rid' => $restaurantId,
+        ]);
+    }
+
+    /**
+     * @param array<string, mixed> $transfer ligne cash_transfers
+     */
+    public function assertCashTransferResolutionIdempotent(array $transfer, string $decisionUpper, array $actor): void
+    {
+        $outcome = trim((string) ($transfer['responsible_outcome_code'] ?? ''));
+        $status = (string) ($transfer['status'] ?? '');
+        $role = (string) ($actor['role_code'] ?? '');
+        $scope = (string) ($actor['scope'] ?? '');
+        $ownerActor = $role === 'owner' || $scope === 'super_admin';
+
+        if ($decisionUpper === 'SUBMIT_OWNER' && $outcome === self::OUTCOME_ESCALADE_PROPRIETAIRE) {
+            throw new \RuntimeException('Cette remise a deja ete envoyee au proprietaire.');
+        }
+
+        $financialTerminal = in_array(
+            $outcome,
+            [self::OUTCOME_VALIDE_GERANT, self::OUTCOME_PARTIEL_GERANT, self::OUTCOME_REJET_GERANT, self::OUTCOME_FORCE_CAISSE_GERANT],
+            true,
+        );
+        if ($financialTerminal) {
+            throw new \RuntimeException('Cette remise a deja ete tranchee par un responsable.');
+        }
+
+        if ($outcome === self::OUTCOME_ESCALADE_PROPRIETAIRE
+            && $status === 'EN_ATTENTE_PROPRIETAIRE'
+            && !$ownerActor
+            && in_array($decisionUpper, ['RECEIVE_FULL', 'VALIDER', 'PARTIAL_ACCEPT', 'PARTIAL', 'REJECT_FINAL'], true)) {
+            throw new \RuntimeException('Decision reservee au proprietaire sur cette remise.');
+        }
+    }
+
+    /**
+     * @return list<array<string, mixed>>
+     */
+    public function listRecentResponsibleDecisions(int $restaurantId, int $limit = 12): array
+    {
+        $this->ensureResponsibleOutcomeColumns();
+        $lim = max(1, min(40, $limit));
+        $pdo = $this->database->pdo();
+        $st1 = $pdo->prepare(
+            'SELECT "commande" AS row_kind, sr.id AS ref_id, sr.server_id AS agent_uid,
+                sr.responsible_outcome_code AS outcome_code, sr.responsible_outcome_at AS decided_at,
+                u.full_name AS agent_label, COALESCE(sr.total_supplied_amount, sr.total_requested_amount, 0) AS amount_hint,
+                NULL AS sale_id, sr.status AS raw_status, NULL AS transfer_status
+            FROM server_requests sr
+            INNER JOIN users u ON u.id = sr.server_id
+            WHERE sr.restaurant_id = :rid AND sr.responsible_outcome_at IS NOT NULL
+            ORDER BY sr.responsible_outcome_at DESC
+            LIMIT ' . (int) $lim
+        );
+        $st1->execute(['rid' => $restaurantId]);
+        $a = $st1->fetchAll(PDO::FETCH_ASSOC) ?: [];
+        $st2 = $pdo->prepare(
+            'SELECT "caisse" AS row_kind, ct.id AS ref_id, COALESCE(s.server_id, ct.from_user_id, 0) AS agent_uid,
+                ct.responsible_outcome_code AS outcome_code, ct.responsible_outcome_at AS decided_at,
+                COALESCE(us.full_name, "—") AS agent_label, ct.amount AS amount_hint,
+                ct.source_id AS sale_id, NULL AS raw_status, ct.status AS transfer_status
+            FROM cash_transfers ct
+            LEFT JOIN sales s ON s.id = ct.source_id AND s.restaurant_id = ct.restaurant_id
+            LEFT JOIN users us ON us.id = COALESCE(s.server_id, ct.from_user_id)
+            WHERE ct.restaurant_id = :rid AND ct.source_type = "sale" AND ct.responsible_outcome_at IS NOT NULL
+            ORDER BY ct.responsible_outcome_at DESC
+            LIMIT ' . (int) $lim
+        );
+        $st2->execute(['rid' => $restaurantId]);
+        $b = $st2->fetchAll(PDO::FETCH_ASSOC) ?: [];
+        $merged = array_merge($a, $b);
+        usort($merged, static function (array $x, array $y): int {
+            return strcmp((string) ($y['decided_at'] ?? ''), (string) ($x['decided_at'] ?? ''));
+        });
+
+        return array_slice($merged, 0, $lim);
+    }
+
+    /**
      * Contexte affiché dans le bloc « Résolution responsable » (GET avec ?focus=).
      *
      * @return array<string, mixed>|null
@@ -127,6 +325,7 @@ final class ManagerResolutionService
         if ($focusId <= 0 || $focusKind === '') {
             return null;
         }
+        $this->ensureResponsibleOutcomeColumns();
 
         $cash = Container::getInstance()->get('cashService');
         $disc = Container::getInstance()->get('staffDiscipline');
@@ -177,6 +376,10 @@ final class ManagerResolutionService
         );
         $itemsSt->execute(['rid' => $requestId]);
         $lines = $itemsSt->fetchAll(PDO::FETCH_ASSOC);
+        $outcomeCode = trim((string) ($row['responsible_outcome_code'] ?? ''));
+        if ($outcomeCode !== '') {
+            return $this->resolvedServerRequestPanel($requestId, $row, $lines, $disc, $restaurantId, $todayYmd);
+        }
         $status = (string) ($row['status'] ?? '');
         $serverId = (int) ($row['server_id'] ?? 0);
         $blockReason = $this->inferBlockReasonServerRequest($status, $row);
@@ -202,10 +405,71 @@ final class ManagerResolutionService
     /**
      * @param list<array<string, mixed>> $lines
      *
+     * @return array<string, mixed>
+     */
+    private function resolvedServerRequestPanel(
+        int $requestId,
+        array $row,
+        array $lines,
+        StaffDisciplineService $disc,
+        int $restaurantId,
+        string $todayYmd,
+    ): array {
+        $serverId = (int) ($row['server_id'] ?? 0);
+        $amt = (float) ($row['total_supplied_amount'] ?? $row['total_requested_amount'] ?? 0);
+        $code = trim((string) ($row['responsible_outcome_code'] ?? ''));
+        $decider = '';
+        $bid = (int) ($row['responsible_outcome_by'] ?? 0);
+        if ($bid > 0) {
+            $u = $this->database->pdo()->prepare('SELECT full_name FROM users WHERE id = :id LIMIT 1');
+            $u->execute(['id' => $bid]);
+            $d = $u->fetchColumn();
+            $decider = is_string($d) ? $d : '';
+        }
+        $detailRaw = trim((string) ($row['responsible_outcome_detail'] ?? ''));
+        $detail = [];
+        if ($detailRaw !== '') {
+            try {
+                $decoded = json_decode($detailRaw, true, 512, JSON_THROW_ON_ERROR);
+                $detail = is_array($decoded) ? $decoded : [];
+            } catch (\Throwable) {
+                $detail = ['detail_brut' => $detailRaw];
+            }
+        }
+
+        return [
+            'entity_kind' => 'server_request',
+            'entity_id' => $requestId,
+            'already_resolved' => true,
+            'operation_label' => 'Commande service n° ' . $requestId . ' · ' . trim((string) ($row['service_reference'] ?? '')),
+            'agent_label' => (string) ($row['server_name'] ?? ''),
+            'server_user_id' => $serverId,
+            'origin_at' => (string) ($row['created_at'] ?? ''),
+            'amount_hint' => $amt,
+            'status_label' => service_flow_status_label((string) ($row['status'] ?? '')),
+            'block_reason' => '',
+            'lines' => $lines,
+            'sanction_preview' => $serverId > 0 ? $disc->gaugesForUser($restaurantId, $serverId, $todayYmd) : [],
+            'decisions' => [],
+            'outcome_code' => $code,
+            'outcome_label' => responsible_outcome_label($code),
+            'outcome_at' => (string) ($row['responsible_outcome_at'] ?? ''),
+            'outcome_detail' => $detail,
+            'decided_by_label' => $decider,
+            'penalty_message_default' => 'Décision responsable enregistrée — consulter l’historique (audit) pour le détail financier et discipline.',
+        ];
+    }
+
+    /**
+     * @param list<array<string, mixed>> $lines
+     *
      * @return list<array{code:string,label:string}>
      */
     private function serverRequestDecisionButtons(string $status, array $row, array $lines): array
     {
+        if (trim((string) ($row['responsible_outcome_code'] ?? '')) !== '') {
+            return [];
+        }
         if (in_array($status, ['ANNULE', 'REFUSE_CUISINE', 'CLOTURE', 'VENDU_TOTAL', 'VENDU_PARTIEL'], true)) {
             return [];
         }
@@ -291,6 +555,20 @@ final class ManagerResolutionService
         $it->execute(['sid' => $saleId]);
         $saleLines = $it->fetchAll(PDO::FETCH_ASSOC);
 
+        if (is_array($transfer) && trim((string) ($transfer['responsible_outcome_code'] ?? '')) !== '') {
+            return $this->resolvedCashRemittancePanel(
+                $sale,
+                $transfer,
+                $saleLines,
+                $disc,
+                $restaurantId,
+                $todayYmd,
+                'sale',
+                $saleId,
+                $tid,
+            );
+        }
+
         return [
             'entity_kind' => 'sale',
             'entity_id' => $saleId,
@@ -315,6 +593,9 @@ final class ManagerResolutionService
      */
     private function cashRemittanceDecisions(array $transfer): array
     {
+        if (trim((string) ($transfer['responsible_outcome_code'] ?? '')) !== '') {
+            return [];
+        }
         $status = (string) ($transfer['status'] ?? '');
         if ((string) ($transfer['source_type'] ?? '') !== 'sale') {
             return [];
@@ -331,10 +612,77 @@ final class ManagerResolutionService
         }
 
         return [
-            ['code' => 'receive_full', 'label' => 'Valider comme reçue à la caisse'],
-            ['code' => 'partial_accept', 'label' => 'Accepter partiellement (manquant serveur sur la différence)'],
-            ['code' => 'reject_final', 'label' => 'Rejeter définitivement (reste à charge serveur)'],
-            ['code' => 'submit_owner', 'label' => 'Soumettre au propriétaire'],
+            ['code' => 'receive_full', 'label' => 'Valider comme reçue (argent en caisse)'],
+            ['code' => 'partial_accept', 'label' => 'Accepter partiellement (écart à charge agent)'],
+            ['code' => 'reject_final', 'label' => 'Rejeter définitivement'],
+            ['code' => 'submit_owner', 'label' => 'Demander l’avis du propriétaire'],
+        ];
+    }
+
+    /**
+     * @param list<array<string, mixed>> $saleLines
+     *
+     * @return array<string, mixed>
+     */
+    private function resolvedCashRemittancePanel(
+        array $sale,
+        array $transfer,
+        array $saleLines,
+        StaffDisciplineService $disc,
+        int $restaurantId,
+        string $todayYmd,
+        string $entityKind,
+        int $entityId,
+        int $transferId,
+    ): array {
+        $saleId = (int) ($sale['id'] ?? 0);
+        $serverId = (int) ($sale['server_id'] ?? $transfer['from_user_id'] ?? 0);
+        $code = trim((string) ($transfer['responsible_outcome_code'] ?? ''));
+        $decider = '';
+        $bid = (int) ($transfer['responsible_outcome_by'] ?? 0);
+        if ($bid > 0) {
+            $u = $this->database->pdo()->prepare('SELECT full_name FROM users WHERE id = :id LIMIT 1');
+            $u->execute(['id' => $bid]);
+            $d = $u->fetchColumn();
+            $decider = is_string($d) ? $d : '';
+        }
+        $detailRaw = trim((string) ($transfer['responsible_outcome_detail'] ?? ''));
+        $detail = [];
+        if ($detailRaw !== '') {
+            try {
+                $decoded = json_decode($detailRaw, true, 512, JSON_THROW_ON_ERROR);
+                $detail = is_array($decoded) ? $decoded : [];
+            } catch (\Throwable) {
+                $detail = ['detail_brut' => $detailRaw];
+            }
+        }
+
+        return [
+            'entity_kind' => $entityKind,
+            'entity_id' => $entityId,
+            'cash_transfer_id' => $transferId,
+            'sale_id' => $saleId,
+            'already_resolved' => true,
+            'operation_label' => $entityKind === 'sale'
+                ? ('Vente n° ' . $saleId . ' · remise traitée')
+                : ('Remise caisse · transfert n° ' . $transferId),
+            'agent_label' => (string) ($sale['server_name'] ?? $transfer['from_user_name'] ?? ''),
+            'server_user_id' => $serverId,
+            'origin_at' => (string) ($transfer['requested_at'] ?? $transfer['created_at'] ?? $sale['created_at'] ?? ''),
+            'amount_hint' => (float) ($transfer['amount'] ?? $sale['total_amount'] ?? 0),
+            'status_label' => cash_transfer_public_label((string) ($transfer['status'] ?? '')),
+            'block_reason' => '',
+            'transfer_status' => (string) ($transfer['status'] ?? ''),
+            'lines' => $saleLines,
+            'sanction_preview' => $serverId > 0 ? $disc->gaugesForUser($restaurantId, $serverId, $todayYmd) : [],
+            'decisions' => [],
+            'transfer' => $transfer,
+            'outcome_code' => $code,
+            'outcome_label' => responsible_outcome_label($code),
+            'outcome_at' => (string) ($transfer['responsible_outcome_at'] ?? ''),
+            'outcome_detail' => $detail,
+            'decided_by_label' => $decider,
+            'penalty_message_default' => 'Décision responsable enregistrée — montants et imputation figés pour les rapports.',
         ];
     }
 
@@ -364,6 +712,40 @@ final class ManagerResolutionService
         }
         $disc = Container::getInstance()->get('staffDiscipline');
         $status = (string) ($transfer['status'] ?? '');
+        $sale = ['id' => $saleId, 'server_id' => $serverId, 'server_name' => '', 'total_amount' => 0, 'created_at' => ''];
+        $saleLines = [];
+        if ($saleId > 0) {
+            $sst = $this->database->pdo()->prepare(
+                'SELECT s.*, u.full_name AS server_name FROM sales s
+                 LEFT JOIN users u ON u.id = s.server_id
+                 WHERE s.id = :id AND s.restaurant_id = :rid LIMIT 1'
+            );
+            $sst->execute(['id' => $saleId, 'rid' => $restaurantId]);
+            $srow = $sst->fetch(PDO::FETCH_ASSOC);
+            if (is_array($srow)) {
+                $sale = $srow;
+            }
+            $it = $this->database->pdo()->prepare(
+                'SELECT si.*, mi.name AS menu_item_name FROM sale_items si
+                 INNER JOIN menu_items mi ON mi.id = si.menu_item_id
+                 WHERE si.sale_id = :sid ORDER BY si.id ASC'
+            );
+            $it->execute(['sid' => $saleId]);
+            $saleLines = $it->fetchAll(PDO::FETCH_ASSOC);
+        }
+        if (trim((string) ($transfer['responsible_outcome_code'] ?? '')) !== '') {
+            return $this->resolvedCashRemittancePanel(
+                $sale,
+                $transfer,
+                $saleLines,
+                $disc,
+                $restaurantId,
+                $todayYmd,
+                'cash_transfer',
+                $transferId,
+                $transferId,
+            );
+        }
 
         return [
             'entity_kind' => 'cash_transfer',
@@ -371,7 +753,7 @@ final class ManagerResolutionService
             'sale_id' => $saleId,
             'operation_label' => 'Remise caisse · transfert n° ' . $transferId . ($saleId > 0 ? (' · vente n° ' . $saleId) : ''),
             'agent_label' => (string) ($transfer['from_user_name'] ?? ''),
-            'server_user_id' => $serverId,
+            'server_user_id' => (int) ($sale['server_id'] ?? $serverId),
             'origin_at' => (string) ($transfer['requested_at'] ?? $transfer['created_at'] ?? ''),
             'amount_hint' => (float) ($transfer['amount'] ?? 0),
             'status_label' => cash_transfer_public_label($status),
