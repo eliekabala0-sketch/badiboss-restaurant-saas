@@ -898,5 +898,6 @@ document.querySelectorAll('[data-autoclose-details]').forEach(function (details)
     });
 });
 </script>
+        <?php require base_path('app/Views/partials/operation_focus_handler.php'); ?>
 </body>
 </html>

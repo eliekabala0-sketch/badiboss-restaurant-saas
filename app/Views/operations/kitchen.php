@@ -737,7 +737,7 @@ foreach (array_merge($waitingServerItems, $preparingServerItems) as $item) {
                                     $supQ = (float) ($item['supplied_quantity'] ?? 0);
                                     $defaultSuppliedInput = $supQ > 0 ? $supQ : $reqQ;
                                     ?>
-                                    <tr class="<?= $index >= $activePreviewLimit ? 'history-extra' : '' ?>" data-history-group="<?= e($serverGroupId) ?>" <?= $index >= $activePreviewLimit ? 'style="display:none;"' : '' ?>>
+                                    <tr class="<?= $index >= $activePreviewLimit ? 'history-extra' : '' ?>" data-history-group="<?= e($serverGroupId) ?>" <?= $index >= $activePreviewLimit ? 'style="display:none;"' : '' ?> id="op-focus-server_request_item-<?= e((string) ($item['id'] ?? '0')) ?>" data-operation-focus="server_request_item:<?= e((string) ($item['id'] ?? '0')) ?>" data-server-request-id="<?= e((string) ($item['request_id'] ?? '0')) ?>">
                                         <td data-label="Heure"><?= e(format_date_fr($item['request_created_at'] ?? $item['created_at'], $historyTimezone)) ?></td>
                                         <td data-label="Table / service"><?= e((string) ($item['service_reference'] ?: '-')) ?></td>
                                         <td data-label="Produit"><strong><?= e($item['menu_item_name'] ?? '-') ?></strong></td>

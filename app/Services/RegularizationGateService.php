@@ -178,9 +178,10 @@ final class RegularizationGateService
         );
         $stReq->execute(['rid' => $restaurantId, 'cutoff' => $cutoff]);
         foreach ($stReq->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $srid = (int) ($r['id'] ?? 0);
             $ref = trim((string) ($r['service_reference'] ?? ''));
             if ($ref === '') {
-                $ref = 'SR-' . (int) ($r['id'] ?? 0);
+                $ref = 'SR-' . $srid;
             }
             $tasks[] = [
                 'audience' => ['server', 'manager', 'owner'],
@@ -194,7 +195,8 @@ final class RegularizationGateService
                 'detail_label' => 'Commande non clôturée',
                 'status_label' => service_flow_status_label((string) ($r['status'] ?? '')),
                 'action_label' => 'Clôturer, annuler ou régulariser sur Ventes',
-                'href' => '/ventes',
+                'href' => '/ventes?focus=server_request:' . $srid,
+                'focus' => 'server_request:' . $srid,
                 'manquant_a_charge' => false,
             ];
         }
@@ -215,11 +217,12 @@ final class RegularizationGateService
         $stCash->execute(['rid' => $restaurantId, 'cutoff' => $cutoff]);
         foreach ($stCash->fetchAll(PDO::FETCH_ASSOC) as $r) {
             $saleId = (int) ($r['sale_id'] ?? 0);
+            $tid = (int) ($r['id'] ?? 0);
             $tasks[] = [
                 'audience' => ['cashier', 'manager', 'owner'],
                 'server_user_id' => 0,
                 'type_label' => 'Remise caisse',
-                'reference' => 'RC-' . (int) ($r['id'] ?? 0),
+                'reference' => 'RC-' . $tid,
                 'at_raw' => (string) ($r['ts'] ?? ''),
                 'happened_at' => $this->formatTs((string) ($r['ts'] ?? ''), $restaurantId),
                 'agent_label' => (string) ($r['from_name'] ?? ''),
@@ -227,7 +230,8 @@ final class RegularizationGateService
                 'detail_label' => $saleId > 0 ? ('Vente n° ' . $saleId) : 'Vente liée',
                 'status_label' => cash_transfer_public_label((string) ($r['status'] ?? '')),
                 'action_label' => 'Recevoir, rejeter ou soumettre au gérant sur Caisse',
-                'href' => '/caisse',
+                'href' => '/caisse?focus=cash_transfer:' . $tid,
+                'focus' => 'cash_transfer:' . $tid,
                 'manquant_a_charge' => false,
             ];
         }
@@ -247,15 +251,17 @@ final class RegularizationGateService
         );
         $stKi->execute(['rid' => $restaurantId, 'cutoff' => $cutoff]);
         foreach ($stKi->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $reqId = (int) ($r['request_id'] ?? 0);
+            $sriId = (int) ($r['id'] ?? 0);
             $ref = trim((string) ($r['service_reference'] ?? ''));
             if ($ref === '') {
-                $ref = 'SR-' . (int) ($r['request_id'] ?? 0);
+                $ref = 'SR-' . $reqId;
             }
             $tasks[] = [
                 'audience' => ['kitchen', 'manager', 'owner'],
                 'server_user_id' => (int) ($r['server_id'] ?? 0),
                 'type_label' => 'Préparation cuisine',
-                'reference' => $ref . ' · ligne ' . (int) ($r['id'] ?? 0),
+                'reference' => $ref . ' · ligne ' . $sriId,
                 'at_raw' => (string) ($r['created_at'] ?? ''),
                 'happened_at' => $this->formatTs((string) ($r['created_at'] ?? ''), $restaurantId),
                 'agent_label' => (string) ($r['server_name'] ?? ''),
@@ -263,7 +269,8 @@ final class RegularizationGateService
                 'detail_label' => (string) ($r['dish_name'] ?? 'Plat'),
                 'status_label' => validation_status_label((string) ($r['status'] ?? '')),
                 'action_label' => 'Valider ou rejeter la ligne sur Cuisine',
-                'href' => '/cuisine',
+                'href' => '/cuisine?focus=server_request_item:' . $sriId,
+                'focus' => 'server_request_item:' . $sriId,
                 'manquant_a_charge' => false,
             ];
         }
@@ -279,11 +286,12 @@ final class RegularizationGateService
         );
         $stKsr->execute(['rid' => $restaurantId, 'cutoff' => $cutoff]);
         foreach ($stKsr->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $ksrId = (int) ($r['id'] ?? 0);
             $tasks[] = [
                 'audience' => ['stock', 'manager', 'owner'],
                 'server_user_id' => 0,
                 'type_label' => 'Demande stock',
-                'reference' => 'STK-' . (int) ($r['id'] ?? 0),
+                'reference' => 'STK-' . $ksrId,
                 'at_raw' => (string) ($r['created_at'] ?? ''),
                 'happened_at' => $this->formatTs((string) ($r['created_at'] ?? ''), $restaurantId),
                 'agent_label' => '—',
@@ -291,7 +299,8 @@ final class RegularizationGateService
                 'detail_label' => trim((string) ($r['note'] ?? '')) !== '' ? trim((string) $r['note']) : 'Demande magasin ouverte',
                 'status_label' => stock_request_status_label((string) ($r['status'] ?? '')),
                 'action_label' => 'Traiter ou clôturer sur Stock',
-                'href' => '/stock',
+                'href' => '/stock?focus=kitchen_stock_request:' . $ksrId,
+                'focus' => 'kitchen_stock_request:' . $ksrId,
                 'manquant_a_charge' => false,
             ];
         }
@@ -311,11 +320,12 @@ final class RegularizationGateService
         $stCh->execute(['rid' => $restaurantId, 'cutoff' => $cutoff]);
         foreach ($stCh->fetchAll(PDO::FETCH_ASSOC) as $r) {
             $stype = (string) ($r['source_type'] ?? '');
+            $tid = (int) ($r['id'] ?? 0);
             $tasks[] = [
                 'audience' => ['manager', 'owner'],
                 'server_user_id' => 0,
                 'type_label' => $stype === 'REMISE_PROPRIETAIRE' ? 'Transfert vers propriétaire' : 'Transfert vers gérant',
-                'reference' => 'TRF-' . (int) ($r['id'] ?? 0),
+                'reference' => 'TRF-' . $tid,
                 'at_raw' => (string) ($r['ts'] ?? ''),
                 'happened_at' => $this->formatTs((string) ($r['ts'] ?? ''), $restaurantId),
                 'agent_label' => (string) ($r['from_name'] ?? ''),
@@ -323,7 +333,8 @@ final class RegularizationGateService
                 'detail_label' => 'Chaîne caisse',
                 'status_label' => cash_transfer_public_label((string) ($r['status'] ?? '')),
                 'action_label' => 'Valider la réception sur Caisse ou contacter le super administrateur',
-                'href' => '/caisse',
+                'href' => '/caisse?focus=cash_transfer:' . $tid,
+                'focus' => 'cash_transfer:' . $tid,
                 'manquant_a_charge' => false,
             ];
         }
@@ -372,7 +383,8 @@ final class RegularizationGateService
                         'detail_label' => 'Remise rejetée',
                         'status_label' => 'Rejeté · montant à votre charge',
                         'action_label' => 'Refaire une remise ou demander aide au gérant sur Ventes',
-                        'href' => '/ventes',
+                        'href' => '/ventes?focus=sale:' . $saleId,
+                        'focus' => 'sale:' . $saleId,
                         'manquant_a_charge' => true,
                     ];
                 }
@@ -396,11 +408,12 @@ final class RegularizationGateService
                 }
                 foreach (($ag['missing_sales'] ?? []) as $ms) {
                     $rawMs = (string) ($ms['validated_at'] ?? '');
+                    $saleIdMs = (int) ($ms['sale_id'] ?? 0);
                     $tasks[] = [
                         'audience' => ['server', 'manager', 'owner'],
                         'server_user_id' => $sid,
                         'type_label' => 'Manquant caisse',
-                        'reference' => 'VTE-' . (int) ($ms['sale_id'] ?? 0),
+                        'reference' => 'VTE-' . $saleIdMs,
                         'at_raw' => $rawMs,
                         'happened_at' => $this->formatTs($rawMs, $restaurantId),
                         'agent_label' => (string) ($ag['server_name'] ?? ''),
@@ -408,7 +421,8 @@ final class RegularizationGateService
                         'detail_label' => 'Vente clôturée sans remise caisse complète',
                         'status_label' => 'À régulariser',
                         'action_label' => 'Remettre le montant sur Ventes',
-                        'href' => '/ventes',
+                        'href' => '/ventes?focus=sale:' . $saleIdMs,
+                        'focus' => 'sale:' . $saleIdMs,
                         'manquant_a_charge' => true,
                     ];
                 }

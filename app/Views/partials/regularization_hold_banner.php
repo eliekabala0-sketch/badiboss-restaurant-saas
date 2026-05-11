@@ -41,6 +41,9 @@ if (!$blocked && $items !== []) {
                             <div>
                                 <strong><?= e((string) ($it['type_label'] ?? 'Opération')) ?></strong>
                                 <span class="muted"> · <?= e((string) ($it['reference'] ?? '')) ?></span>
+                                <?php if (!empty($it['focus'])): ?>
+                                    <span class="muted" style="display:block; margin-top:6px; font-size:0.85rem;">Cible : <?= e((string) $it['focus']) ?></span>
+                                <?php endif; ?>
                                 <?php if (!empty($it['manquant_a_charge'])): ?>
                                     <span class="pill badge-bad" style="margin-left:6px;">Manquant à votre charge</span>
                                 <?php endif; ?>
@@ -59,7 +62,7 @@ if (!$blocked && $items !== []) {
                                 <p class="muted" style="margin:6px 0 0;">Statut : <?= e((string) ($it['status_label'] ?? '—')) ?></p>
                                 <p style="margin:8px 0 0;"><?= e((string) ($it['action_label'] ?? '')) ?></p>
                             </div>
-                            <a class="button-muted" style="min-width:120px; text-align:center;" href="<?= e((string) ($it['href'] ?? '#')) ?>">Ouvrir la page</a>
+                            <a class="button-muted" style="min-width:140px; text-align:center;" href="<?= e((string) ($it['href'] ?? '#')) ?>">Traiter maintenant</a>
                         </div>
                     </article>
                 <?php endforeach; ?>

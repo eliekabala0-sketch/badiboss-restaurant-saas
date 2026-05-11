@@ -289,7 +289,7 @@ foreach (($saleRemittanceTracking ?? []) as $tr) {
 <details class="compact-card no-print" style="margin-bottom:20px;" data-autoclose-details>
     <summary><strong>Remises rejetées</strong> · montant toujours à votre charge</summary>
     <?php foreach ($rejServ as $rj): ?>
-        <article class="remittance-card" style="margin-top:12px;">
+        <article class="remittance-card" style="margin-top:12px;" data-operation-focus="sale:<?= e((string) ($rj['sale_id'] ?? '0')) ?>">
             <strong>Vente #<?= e((string) ($rj['sale_id'] ?? '')) ?></strong> · <?= e(format_money((float) ($rj['transfer_amount'] ?? $rj['sale_total_amount'] ?? 0), $restaurantCurrency)) ?>
             <p class="muted" style="margin:6px 0 0;">Statut remise : <?= e(cash_transfer_public_label((string) ($rj['transfer_status'] ?? ''))) ?><?php if (!empty($rj['discrepancy_note'])): ?> — <?= e((string) $rj['discrepancy_note']) ?><?php endif; ?></p>
         </article>
@@ -317,7 +317,7 @@ $todayShort = (float) ($todayAgentCash['shortfall'] ?? 0);
     <details class="compact-card" style="margin-top:14px;" data-autoclose-details>
         <summary><strong>Détail manquant du jour</strong> · ventes &amp; articles</summary>
         <?php foreach (($todayAgentCash['missing_sales'] ?? []) as $ms): ?>
-            <div class="remittance-card" style="margin-top:12px;">
+            <div class="remittance-card" style="margin-top:12px;" data-operation-focus="sale:<?= e((string) ($ms['sale_id'] ?? '0')) ?>">
                 <strong>Vente #<?= e((string) ($ms['sale_id'] ?? '')) ?></strong>
                 <span class="muted"> · <?= e(format_money((float) ($ms['total_amount'] ?? 0), $restaurantCurrency)) ?></span>
                 <ul style="margin:8px 0 0; padding-left:18px; line-height:1.65;">
@@ -333,7 +333,7 @@ $todayShort = (float) ($todayAgentCash['shortfall'] ?? 0);
     <details class="compact-card" style="margin-top:12px;" data-autoclose-details>
         <summary><strong>Anciennes dettes</strong> · détail</summary>
         <?php foreach ($legacyDetail as $ms): ?>
-            <div class="remittance-card" style="margin-top:12px;">
+            <div class="remittance-card" style="margin-top:12px;" data-operation-focus="sale:<?= e((string) ($ms['sale_id'] ?? '0')) ?>">
                 <strong>Vente #<?= e((string) ($ms['sale_id'] ?? '')) ?></strong>
                 <span class="muted"> · <?= e(format_money((float) ($ms['total_amount'] ?? 0), $restaurantCurrency)) ?></span>
                 <ul style="margin:8px 0 0; padding-left:18px; line-height:1.65;">
@@ -494,7 +494,7 @@ $todayShort = (float) ($todayAgentCash['shortfall'] ?? 0);
         <div class="remittance-grid">
             <?php foreach ($remittedRequests as $request): ?>
                 <?php $items = $requestItemsByRequest[(int) $request['id']] ?? []; ?>
-                <article class="remittance-card">
+                <article class="remittance-card" id="op-focus-server_request-<?= e((string) $request['id']) ?>" data-operation-focus="server_request:<?= e((string) $request['id']) ?>">
                     <div class="topbar" style="margin-bottom:12px;">
                         <div>
                             <strong>Demande #<?= e((string) $request['id']) ?></strong>
@@ -543,7 +543,7 @@ $todayShort = (float) ($todayAgentCash['shortfall'] ?? 0);
             <?php endforeach; ?>
 
             <?php foreach ($pendingCashRemittances as $sale): ?>
-                <article class="remittance-card">
+                <article class="remittance-card" id="op-focus-sale-<?= e((string) $sale['sale_id']) ?>" data-operation-focus="sale:<?= e((string) $sale['sale_id']) ?>">
                     <div class="topbar" style="margin-bottom:12px;">
                         <div>
                             <strong>Vente #<?= e((string) $sale['sale_id']) ?></strong>
@@ -946,7 +946,7 @@ $todayShort = (float) ($todayAgentCash['shortfall'] ?? 0);
                 <tbody>
                 <?php foreach (array_slice($sales, 0, 12) as $sale): ?>
                     <?php $tracking = $saleTrackingBySaleId[(int) $sale['id']] ?? null; ?>
-                    <tr>
+                    <tr id="op-focus-sale-<?= e((string) $sale['id']) ?>" data-operation-focus="sale:<?= e((string) $sale['id']) ?>">
                         <td>#<?= e((string) $sale['id']) ?></td>
                         <td><?= e(named_actor_label($sale['server_name'] ?? null, 'cashier_server')) ?></td>
                         <td><?= e(format_money($sale['total_amount'] ?? 0, $restaurantCurrency)) ?></td>
@@ -970,7 +970,7 @@ $todayShort = (float) ($todayAgentCash['shortfall'] ?? 0);
         <div class="grid">
             <?php foreach ($activeRequests as $index => $request): ?>
                 <?php $items = $requestItemsByRequest[(int) $request['id']] ?? []; ?>
-                <article class="card <?= $index >= $activePreviewLimit ? 'history-extra' : '' ?>" data-history-group="sales_active_requests" <?= $index >= $activePreviewLimit ? 'style="padding:18px; border-radius:16px; display:none;"' : 'style="padding:18px; border-radius:16px;"' ?>>
+                <article class="card <?= $index >= $activePreviewLimit ? 'history-extra' : '' ?>" data-history-group="sales_active_requests" <?= $index >= $activePreviewLimit ? 'style="padding:18px; border-radius:16px; display:none;"' : 'style="padding:18px; border-radius:16px;"' ?> id="op-focus-server_request-<?= e((string) $request['id']) ?>" data-operation-focus="server_request:<?= e((string) $request['id']) ?>">
                     <div class="topbar" style="margin-bottom:12px;">
                         <div>
                             <strong>Demande #<?= e((string) $request['id']) ?></strong>

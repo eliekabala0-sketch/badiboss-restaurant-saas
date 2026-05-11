@@ -559,7 +559,7 @@ $priorityBadgeClass = static function (?string $priority): string {
             <div style="padding:0 22px 22px;" class="section-stack">
                 <?php foreach ($section['requests'] as $index => $request): ?>
                     <?php $requestItems = $kitchenStockRequestItemsByRequest[(int) $request['id']] ?? []; ?>
-                    <details class="<?= $index >= $activePreviewLimit ? 'history-extra' : '' ?>" data-history-group="<?= e($section['dom_id']) ?>" <?= $index === 0 ? 'open' : '' ?> <?= $index >= $activePreviewLimit ? 'style="display:none;"' : '' ?> style="border-top:1px solid var(--line); padding-top:16px;">
+                    <details class="<?= $index >= $activePreviewLimit ? 'history-extra' : '' ?>" data-history-group="<?= e($section['dom_id']) ?>" <?= $index === 0 ? 'open' : '' ?> style="<?= $index >= $activePreviewLimit ? 'display:none;' : '' ?>border-top:1px solid var(--line); padding-top:16px;" id="op-focus-kitchen_stock_request-<?= e((string) $request['id']) ?>" data-operation-focus="kitchen_stock_request:<?= e((string) $request['id']) ?>">
                         <summary style="cursor:pointer; list-style:none; display:flex; justify-content:space-between; gap:12px; align-items:flex-start;">
                             <div>
                                 <strong>Demande #<?= e((string) $request['id']) ?></strong>

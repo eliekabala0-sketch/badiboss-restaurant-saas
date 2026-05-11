@@ -244,7 +244,7 @@ $rbCash = (int) (($cashRegBack['overdue_remis_a_caisse'] ?? 0) + ($cashRegBack['
             </thead>
             <tbody>
             <?php foreach ($transfers as $transfer): ?>
-                <tr>
+                <tr id="op-focus-cash_transfer-<?= e((string) ($transfer['id'] ?? '0')) ?>" data-operation-focus="cash_transfer:<?= e((string) ($transfer['id'] ?? '0')) ?>">
                     <td><?= e(named_actor_label($transfer['from_user_name'] ?? null)) ?> -> <?= e(named_actor_label($transfer['to_user_name'] ?? null)) ?></td>
                     <td>
                         <?php if (!empty($transfer['sale_id'])): ?>
