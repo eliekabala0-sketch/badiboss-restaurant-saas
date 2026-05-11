@@ -380,6 +380,7 @@ final class ReportService
             "sales\0server_request_received" => 'Commandes réceptionnées (cuisine)',
             "sales\0server_request_closed_as_sale" => 'Commandes clôturées en vente',
             "sales\0server_request_auto_closed_as_sale" => 'Commandes clôturées automatiquement (vente)',
+            "sales\0automatic_sale_after_24h" => 'Ventes système (clôture 24 h)',
             "sales\0sale_created" => 'Ventes enregistrées',
             "sales\0request_cancelled" => 'Commandes annulées',
             "cash\0cash_server_remitted" => 'Remises caisse enregistrées',
@@ -421,6 +422,8 @@ final class ReportService
             "cash\0cash_movement_created" => 'Mouvements caisse saisis',
             "cash\0cash_transfer_created" => 'Transferts caisse créés',
             "cash\0cash_late_remittance_attribution" => 'Attributions de retard (remises)',
+            "cash\0cash_manager_received" => 'Réceptions chaîne gérant',
+            "cash\0cash_owner_received" => 'Réceptions chaîne propriétaire',
         ];
 
         if ($isServer && isset($serverRows[$row])) {

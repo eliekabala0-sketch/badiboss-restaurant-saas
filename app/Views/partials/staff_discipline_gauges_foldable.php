@@ -63,7 +63,8 @@ if ($periodHint === '') {
                     <?php if (!is_array($al)) {
                         continue;
                     } ?>
-                    <li><?= e((string) ($al['label'] ?? '')) ?> · <?= e((string) (int) ($al['count'] ?? 0)) ?> action(s)</li>
+                    <?php $ac = (int) ($al['count'] ?? 0); ?>
+                    <li><?= e((string) ($al['label'] ?? '')) ?> · <?= e((string) $ac) ?> <?= $ac > 1 ? 'actions' : 'action' ?></li>
                 <?php endforeach; ?>
             </ul>
         <?php else: ?>
