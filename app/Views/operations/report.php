@@ -50,6 +50,8 @@ $rptUserQ = $rptUid > 0 ? '&user_id=' . rawurlencode((string) $rptUid) : '';
 $ridQsa = ((current_user()['scope'] ?? null) === 'super_admin' && !empty($restaurant['id']))
     ? '&restaurant_id=' . rawurlencode((string) (int) $restaurant['id'])
     : '';
+$regularizationBacklog = $regularization_backlog ?? [];
+$module_today_pulse = $module_today_pulse ?? [];
 ?>
 <style>
 @media print {
@@ -151,6 +153,8 @@ window.addEventListener('beforeprint', function () {
         <article class="card stat"><span>Remis à caisse</span><strong><?= e(format_money((float) ($cashTodaySnap['remitted_to_cash_physical'] ?? 0), $restaurantCurrency)) ?></strong></article>
         <article class="card stat"><span>Reçu caisse</span><strong><?= e(format_money((float) ($cashTodaySnap['cashier_received_today'] ?? 0), $restaurantCurrency)) ?></strong></article>
         <article class="card stat"><span>Manquant</span><strong><?= e(format_money((float) ($cashTodaySnap['shortfall_today_total'] ?? 0), $restaurantCurrency)) ?></strong></article>
+        <article class="card stat"><span>Remises rejetées</span><strong><?= e(format_money((float) ($cashTodaySnap['rejected_remittances_today'] ?? 0), $restaurantCurrency)) ?></strong></article>
+        <article class="card stat"><span>Écart vendu − reçu</span><strong><?= e(format_money((float) ($cashTodaySnap['real_gap_sold_closed_minus_received'] ?? 0), $restaurantCurrency)) ?></strong></article>
         <article class="card stat"><span>Dépenses</span><strong><?= e(format_money((float) ($cashTodaySnap['expenses_today'] ?? 0), $restaurantCurrency)) ?></strong></article>
         <article class="card stat"><span>Solde caisse</span><strong><?= e(format_money((float) ($cashTodaySnap['cash_balance_current'] ?? 0), $restaurantCurrency)) ?></strong></article>
         <article class="card stat"><span>Écarts</span><strong><?= e(format_money((float) ($cashTodaySnap['discrepancies_today'] ?? 0), $restaurantCurrency)) ?></strong></article>
@@ -176,6 +180,34 @@ window.addEventListener('beforeprint', function () {
         <?php endforeach; ?>
     </details>
     <?php endif; ?>
+</section>
+<?php endif; ?>
+
+<?php
+$rbSum = (int) (($regularizationBacklog['overdue_server_remis_serveur'] ?? 0) + ($regularizationBacklog['overdue_remis_a_caisse'] ?? 0) + ($regularizationBacklog['overdue_kitchen_production_returns'] ?? 0));
+$mPulse = $module_today_pulse ?? [];
+?>
+<?php if ($rbSum > 0): ?>
+<section class="card no-print" style="padding:18px; margin-top:16px; border-left:4px solid #f59e0b;">
+    <h3 style="margin:0 0 8px;">File « à régulariser »</h3>
+    <p class="muted" style="margin:0 0 10px;">Pas de conversion automatique en vente ou réception caisse. Traiter manuellement les cas listés dans les modules concernés.</p>
+    <ul style="margin:0; padding-left:20px;">
+        <li>Clôtures service en retard : <?= e((string) (int) ($regularizationBacklog['overdue_server_remis_serveur'] ?? 0)) ?></li>
+        <li>Remises en attente caisse (veille+) : <?= e((string) (int) ($regularizationBacklog['overdue_remis_a_caisse'] ?? 0)) ?></li>
+        <li>Retours cuisine provisoires &gt; 24h : <?= e((string) (int) ($regularizationBacklog['overdue_kitchen_production_returns'] ?? 0)) ?></li>
+    </ul>
+</section>
+<?php endif; ?>
+
+<?php if ($mPulse !== []): ?>
+<section class="card" style="padding:18px; margin-top:16px;">
+    <h3 style="margin:0 0 10px;">Activité du jour (restaurant)</h3>
+    <div class="grid stats">
+        <article class="card stat"><span>Ventes clôturées</span><strong><?= e((string) (int) ($mPulse['sales_closed_count_today'] ?? 0)) ?></strong></article>
+        <article class="card stat"><span>Stock (mouv.)</span><strong><?= e((string) (int) ($mPulse['stock_movements_count_today'] ?? 0)) ?></strong></article>
+        <article class="card stat"><span>Cuisine (prod.)</span><strong><?= e((string) (int) ($mPulse['kitchen_production_count_today'] ?? 0)) ?></strong></article>
+        <article class="card stat"><span>Service ouvert</span><strong><?= e((string) (int) ($mPulse['open_service_requests'] ?? 0)) ?></strong></article>
+    </div>
 </section>
 <?php endif; ?>
 

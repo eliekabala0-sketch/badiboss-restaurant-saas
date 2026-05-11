@@ -7,6 +7,10 @@ $transfers = $cash['transfers'] ?? [];
 $movements = $cash['movements'] ?? [];
 $pendingServerSales = $cash['pending_server_sales'] ?? [];
 $cashiers = $cash['cashiers'] ?? [];
+$cashTodaySnapC = $cash_today_snapshot ?? null;
+$dayHoldCash = $day_start_hold ?? ['blocked' => false, 'reasons' => []];
+$cashPulse = $module_today_pulse ?? [];
+$cashRegBack = $regularization_backlog ?? [];
 ?>
 
 <section class="topbar">
@@ -19,6 +23,54 @@ $cashiers = $cash['cashiers'] ?? [];
 <?php if (!empty($flash_success)): ?><div class="flash-ok"><?= e($flash_success) ?></div><?php endif; ?>
 <?php if (!empty($flash_error)): ?><div class="flash-bad"><?= e($flash_error) ?></div><?php endif; ?>
 
+<?php if (!empty($dayHoldCash['blocked'])): ?>
+<section class="status-banner status-danger no-print" style="margin-bottom:20px;">
+    <div>
+        <strong>Situation à régulariser</strong>
+        <?php foreach (($dayHoldCash['reasons'] ?? []) as $r): ?><p style="margin:6px 0 0;"><?= e($r) ?></p><?php endforeach; ?>
+    </div>
+    <span class="pill badge-bad">Opérations limitées</span>
+</section>
+<?php endif; ?>
+
+<?php if (is_array($cashTodaySnapC) && $cashTodaySnapC !== []): ?>
+<section class="card" style="padding:22px; margin-bottom:20px;">
+    <h2 style="margin:0 0 12px;">Situation actuelle / Aujourd’hui</h2>
+    <div class="grid stats">
+        <article class="card stat"><span>Vendu clôturé</span><strong><?= e(format_money((float) ($cashTodaySnapC['total_sold_closed'] ?? 0), $restaurantCurrency)) ?></strong></article>
+        <article class="card stat"><span>Remis caisse</span><strong><?= e(format_money((float) ($cashTodaySnapC['remitted_to_cash_physical'] ?? 0), $restaurantCurrency)) ?></strong></article>
+        <article class="card stat"><span>Reçu caisse</span><strong><?= e(format_money((float) ($cashTodaySnapC['cashier_received_today'] ?? 0), $restaurantCurrency)) ?></strong></article>
+        <article class="card stat"><span>Rejets (jour)</span><strong><?= e(format_money((float) ($cashTodaySnapC['rejected_remittances_today'] ?? 0), $restaurantCurrency)) ?></strong></article>
+        <article class="card stat"><span>Écart vendu − reçu</span><strong><?= e(format_money((float) ($cashTodaySnapC['real_gap_sold_closed_minus_received'] ?? 0), $restaurantCurrency)) ?></strong></article>
+        <article class="card stat"><span>Manquant</span><strong><?= e(format_money((float) ($cashTodaySnapC['shortfall_today_total'] ?? 0), $restaurantCurrency)) ?></strong></article>
+    </div>
+</section>
+<?php endif; ?>
+
+<?php if ($cashPulse !== []): ?>
+<section class="card" style="padding:18px; margin-bottom:20px;">
+    <h3 style="margin:0 0 10px;">Activité jour · restaurant</h3>
+    <div class="grid stats">
+        <article class="card stat"><span>Ventes clôturées</span><strong><?= e((string) (int) ($cashPulse['sales_closed_count_today'] ?? 0)) ?></strong></article>
+        <article class="card stat"><span>Mouv. stock</span><strong><?= e((string) (int) ($cashPulse['stock_movements_count_today'] ?? 0)) ?></strong></article>
+        <article class="card stat"><span>Audit (traces)</span><strong><?= e((string) (int) ($cashPulse['audit_actions_today'] ?? 0)) ?></strong></article>
+    </div>
+</section>
+<?php endif; ?>
+
+<?php
+$rbCash = (int) (($cashRegBack['overdue_remis_a_caisse'] ?? 0) + ($cashRegBack['overdue_server_remis_serveur'] ?? 0) + ($cashRegBack['overdue_kitchen_production_returns'] ?? 0));
+?>
+<?php if ($rbCash > 0): ?>
+<section class="card no-print" style="padding:16px; margin-bottom:20px; border-left:4px solid #f59e0b;">
+    <strong>À régulariser</strong>
+    <p class="muted" style="margin:8px 0 0;">Remises veille+ : <?= e((string) (int) ($cashRegBack['overdue_remis_a_caisse'] ?? 0)) ?> · Clôtures service retard : <?= e((string) (int) ($cashRegBack['overdue_server_remis_serveur'] ?? 0)) ?></p>
+</section>
+<?php endif; ?>
+
+<details class="card no-print" style="padding:18px 22px; margin-bottom:24px;">
+<summary><strong>Historique / Vue globale</strong> — totaux filtres &amp; mouvements</summary>
+<div style="padding-top:14px;">
 <section class="grid stats">
     <article class="card stat"><span>Total vendu</span><strong><?= e(format_money($summary['total_sold'] ?? 0, $restaurantCurrency)) ?></strong></article>
     <article class="card stat"><span>Remis a caisse</span><strong><?= e(format_money($summary['total_remitted_to_cash'] ?? 0, $restaurantCurrency)) ?></strong></article>
@@ -34,6 +86,7 @@ $cashiers = $cash['cashiers'] ?? [];
     <?php if ($ccp !== []): ?>
         <p class="muted" style="margin-top:0;">Résumé du <?= e((string) ($ccp['period_from'] ?? '')) ?> au <?= e((string) ($ccp['period_to'] ?? '')) ?> · entrées +, sorties −.</p>
         <ul style="margin:0; padding-left:20px; line-height:1.7;">
+            <li><strong>Remises vente rejetées</strong> (caisse / gérant, période) : <?= e(format_money((float) ($ccp['cashier_rejected_sales'] ?? 0), $restaurantCurrency)) ?></li>
             <li><strong>Argent versé par les serveurs</strong> : + <?= e(format_money((float) ($ccp['server_remittance_total'] ?? 0), $restaurantCurrency)) ?></li>
             <li><strong>Total reçu par la caisse</strong> (ventes) : + <?= e(format_money((float) ($ccp['cashier_received_sales'] ?? 0), $restaurantCurrency)) ?></li>
             <li><strong>Total remis au gérant</strong> : − <?= e(format_money((float) ($ccp['declared_to_manager'] ?? 0), $restaurantCurrency)) ?></li>
@@ -275,3 +328,5 @@ $cashiers = $cash['cashiers'] ?? [];
     </div>
     </details>
 </section>
+</div>
+</details>

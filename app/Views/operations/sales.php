@@ -18,6 +18,11 @@ $salesOverview = $sales_overview ?? [
     'remitted_requests_count' => 0,
 ];
 $agentServerCash = $agent_server_cash ?? null;
+$dayHold = $day_start_hold ?? ['blocked' => false, 'reasons' => []];
+$modulePulse = $module_today_pulse ?? [];
+$cashSnapAll = $cash_today_snapshot ?? null;
+$regBacklogV = $regularization_backlog ?? [];
+$selfGauges = $self_staff_gauges ?? null;
 $serverCashiers = $server_cashiers ?? [];
 $pendingCashRemittances = $pending_cash_remittances ?? [];
 $saleRemittanceTracking = $sale_remittance_tracking ?? [];
@@ -237,6 +242,79 @@ foreach ($historyEntries as $entry) {
 <?php if (!empty($flash_success)): ?><div class="flash-ok"><?= e($flash_success) ?></div><?php endif; ?>
 <?php if (!empty($flash_error)): ?><div class="flash-bad"><?= e($flash_error) ?></div><?php endif; ?>
 
+<?php if (!empty($dayHold['blocked'])): ?>
+<section class="status-banner status-danger no-print" style="margin-bottom:20px;">
+    <div>
+        <strong>Situation à régulariser</strong>
+        <div><?php foreach (($dayHold['reasons'] ?? []) as $hr): ?><p style="margin:6px 0 0;"><?= e($hr) ?></p><?php endforeach; ?></div>
+    </div>
+    <span class="pill badge-bad">Nouvelle commande bloquée</span>
+</section>
+<?php endif; ?>
+
+<?php if ($modulePulse !== []): ?>
+<section class="card" style="padding:18px; margin-bottom:24px;">
+    <h2 style="margin:0 0 10px;">Aujourd’hui · restaurant</h2>
+    <div class="grid stats">
+        <article class="card stat"><span>Ventes clôturées</span><strong><?= e((string) (int) ($modulePulse['sales_closed_count_today'] ?? 0)) ?></strong></article>
+        <article class="card stat"><span>Montant clôturé</span><strong><?= e(format_money((float) ($modulePulse['sales_closed_total_today'] ?? 0), $restaurantCurrency)) ?></strong></article>
+        <article class="card stat"><span>Service (file)</span><strong><?= e((string) (int) ($modulePulse['open_service_requests'] ?? 0)) ?></strong></article>
+        <article class="card stat"><span>Mouv. stock</span><strong><?= e((string) (int) ($modulePulse['stock_movements_count_today'] ?? 0)) ?></strong></article>
+    </div>
+</section>
+<?php endif; ?>
+
+<?php if (is_array($cashSnapAll) && $cashSnapAll !== []): ?>
+<section class="card" style="padding:18px; margin-bottom:24px;">
+    <h2 style="margin:0 0 10px;">Caisse · vérité du jour (tous rôles)</h2>
+    <div class="grid stats">
+        <article class="card stat"><span>Vendu clôturé</span><strong><?= e(format_money((float) ($cashSnapAll['total_sold_closed'] ?? 0), $restaurantCurrency)) ?></strong></article>
+        <article class="card stat"><span>Reçu caisse</span><strong><?= e(format_money((float) ($cashSnapAll['cashier_received_today'] ?? 0), $restaurantCurrency)) ?></strong></article>
+        <article class="card stat"><span>Écart vendu − reçu</span><strong><?= e(format_money((float) ($cashSnapAll['real_gap_sold_closed_minus_received'] ?? 0), $restaurantCurrency)) ?></strong></article>
+        <article class="card stat"><span>Rejet caisse/jour</span><strong><?= e(format_money((float) ($cashSnapAll['rejected_remittances_today'] ?? 0), $restaurantCurrency)) ?></strong></article>
+    </div>
+</section>
+<?php endif; ?>
+
+<?php if (is_array($selfGauges)): ?>
+<details class="compact-card no-print" style="margin-bottom:20px;" data-autoclose-details>
+    <summary><strong>Vos jauges discipline</strong> · jour / 7 jours / mois</summary>
+    <div class="grid stats" style="margin-top:14px;">
+        <article class="card stat"><span>Jour (J)</span><strong><?= e((string) (int) ($selfGauges['daily'] ?? 100)) ?></strong></article>
+        <article class="card stat"><span>Moy. 7j (H)</span><strong><?= e((string) ($selfGauges['weekly_avg'] ?? 100)) ?></strong></article>
+        <article class="card stat"><span>Mois (M)</span><strong><?= e((string) ($selfGauges['monthly_avg'] ?? 100)) ?></strong></article>
+        <article class="card stat"><span>Zone</span><strong><?= e((string) ($selfGauges['zone'] ?? 'vert')) ?></strong></article>
+    </div>
+    <?php if (!empty($selfGauges['ledger_preview'])): ?>
+    <ul class="muted" style="margin:14px 0 0; padding-left:18px;">
+        <?php foreach ($selfGauges['ledger_preview'] as $le): ?>
+            <li><?= e((string) ($le['day_ymd'] ?? '')) ?> · <?= e((string) ($le['delta_points'] ?? '')) ?> pts — <?= e((string) ($le['label'] ?? '')) ?></li>
+        <?php endforeach; ?>
+    </ul>
+    <?php endif; ?>
+</details>
+<?php endif; ?>
+
+<?php
+$rejServ = [];
+foreach (($saleRemittanceTracking ?? []) as $tr) {
+    if (in_array((string) ($tr['transfer_status'] ?? ''), ['REMISE_REJETEE_CAISSE', 'REMISE_REJETEE_GERANT'], true)) {
+        $rejServ[] = $tr;
+    }
+}
+?>
+<?php if ($rejServ !== []): ?>
+<details class="compact-card no-print" style="margin-bottom:20px;" data-autoclose-details>
+    <summary><strong>Remises rejetées</strong> · montant toujours à votre charge</summary>
+    <?php foreach ($rejServ as $rj): ?>
+        <article class="remittance-card" style="margin-top:12px;">
+            <strong>Vente #<?= e((string) ($rj['sale_id'] ?? '')) ?></strong> · <?= e(format_money((float) ($rj['transfer_amount'] ?? $rj['sale_total_amount'] ?? 0), $restaurantCurrency)) ?>
+            <p class="muted" style="margin:6px 0 0;">Statut transfert : <?= e((string) ($rj['transfer_status'] ?? '')) ?><?php if (!empty($rj['discrepancy_note'])): ?> — <?= e((string) $rj['discrepancy_note']) ?><?php endif; ?></p>
+        </article>
+    <?php endforeach; ?>
+</details>
+<?php endif; ?>
+
 <?php if (is_array($agentServerCash) && is_array($agentServerCash['today'] ?? null)): ?>
 <?php
 $todayAgentCash = $agentServerCash['today'];
@@ -330,7 +408,7 @@ $todayShort = (float) ($todayAgentCash['shortfall'] ?? 0);
             <summary><strong>Passer commande / Demander a la cuisine</strong></summary>
             <h2 style="margin-top:14px;">Nouvelle demande de service</h2>
             <p class="muted" style="margin-top:0;">Une commande reste un seul formulaire, meme avec plusieurs articles.</p>
-            <?php if (can_access('sales.request.create')): ?>
+            <?php if (can_access('sales.request.create') && empty($dayHold['blocked'])): ?>
                 <form method="post" action="/ventes/demandes">
                     <label>Table ou reference de service</label>
                     <input name="service_reference" placeholder="Table 12, Terrasse B, Ticket 48">
@@ -388,6 +466,8 @@ $todayShort = (float) ($todayAgentCash['shortfall'] ?? 0);
                     </div>
                     <button type="submit">Envoyer a la cuisine</button>
                 </form>
+            <?php elseif (can_access('sales.request.create') && !empty($dayHold['blocked'])): ?>
+                <div class="flash-bad" style="margin-top:14px;">Régularisez les points ci-dessus avant d’ouvrir une nouvelle commande.</div>
             <?php else: ?>
                 <p class="muted">Creation reservee au service.</p>
             <?php endif; ?>

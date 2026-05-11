@@ -82,6 +82,8 @@ $decisionBadgeClass = static function (?string $status): string {
         <article class="card stat"><span>Remis à caisse</span><strong><?= e(format_money((float) ($cashTodaySnapshot['remitted_to_cash_physical'] ?? 0), $restaurantCurrency)) ?></strong></article>
         <article class="card stat"><span>Reçu caisse</span><strong><?= e(format_money((float) ($cashTodaySnapshot['cashier_received_today'] ?? 0), $restaurantCurrency)) ?></strong></article>
         <article class="card stat"><span>Non versé / manquant</span><strong><?= e(format_money((float) ($cashTodaySnapshot['shortfall_today_total'] ?? 0), $restaurantCurrency)) ?></strong></article>
+        <article class="card stat"><span>Remises rejetées (jour)</span><strong><?= e(format_money((float) ($cashTodaySnapshot['rejected_remittances_today'] ?? 0), $restaurantCurrency)) ?></strong></article>
+        <article class="card stat"><span>Écart vendu − reçu caisse</span><strong><?= e(format_money((float) ($cashTodaySnapshot['real_gap_sold_closed_minus_received'] ?? 0), $restaurantCurrency)) ?></strong></article>
         <article class="card stat"><span>Dépenses</span><strong><?= e(format_money((float) ($cashTodaySnapshot['expenses_today'] ?? 0), $restaurantCurrency)) ?></strong></article>
         <article class="card stat"><span>Solde caisse (cumul)</span><strong><?= e(format_money((float) ($cashTodaySnapshot['cash_balance_current'] ?? 0), $restaurantCurrency)) ?></strong></article>
         <article class="card stat"><span>Écarts (jour)</span><strong><?= e(format_money((float) ($cashTodaySnapshot['discrepancies_today'] ?? 0), $restaurantCurrency)) ?></strong></article>
@@ -108,6 +110,69 @@ $decisionBadgeClass = static function (?string $status): string {
     </details>
     <?php endif; ?>
 </section>
+<?php endif; ?>
+
+<?php
+$regBacklog = $regularization_backlog ?? [];
+$opPulse = $module_today_pulse ?? [];
+$staffGauges = $staff_gauges_overview ?? [];
+$regSum = (int) (($regBacklog['overdue_server_remis_serveur'] ?? 0) + ($regBacklog['overdue_remis_a_caisse'] ?? 0) + ($regBacklog['overdue_kitchen_production_returns'] ?? 0));
+?>
+<?php if ($regSum > 0): ?>
+<section class="card no-print" style="padding:20px; margin-bottom:24px; border-left:4px solid #f59e0b;">
+    <h2 style="margin:0 0 10px;">À régulariser (aucune action automatique)</h2>
+    <p class="muted" style="margin:0 0 10px;">Le système ne crée plus de vente ni de réception caisse implicite. Les responsables doivent clôturer, remettre ou décider en caisse.</p>
+    <ul style="margin:0; padding-left:20px; line-height:1.7;">
+        <li>Commandes servies non clôturées (veille+) : <strong><?= e((string) (int) ($regBacklog['overdue_server_remis_serveur'] ?? 0)) ?></strong></li>
+        <li>Remises <code>REMIS_A_CAISSE</code> en attente décision caisse (veille+) : <strong><?= e((string) (int) ($regBacklog['overdue_remis_a_caisse'] ?? 0)) ?></strong></li>
+        <li>Productions cuisine avec retour stock provisoire &gt; 24h : <strong><?= e((string) (int) ($regBacklog['overdue_kitchen_production_returns'] ?? 0)) ?></strong></li>
+    </ul>
+</section>
+<?php endif; ?>
+
+<?php if ($opPulse !== []): ?>
+<section class="card" style="padding:20px; margin-bottom:24px;">
+    <h2 style="margin:0 0 8px;">Pulse opérationnel · <?= e((string) ($opPulse['period_label'] ?? 'aujourd’hui')) ?></h2>
+    <div class="grid stats">
+        <article class="card stat"><span>Ventes clôturées (jour)</span><strong><?= e((string) (int) ($opPulse['sales_closed_count_today'] ?? 0)) ?></strong></article>
+        <article class="card stat"><span>Montant ventes clôturées</span><strong><?= e(format_money((float) ($opPulse['sales_closed_total_today'] ?? 0), $restaurantCurrency)) ?></strong></article>
+        <article class="card stat"><span>Mouvements stock (jour)</span><strong><?= e((string) (int) ($opPulse['stock_movements_count_today'] ?? 0)) ?></strong></article>
+        <article class="card stat"><span>Productions cuisine (jour)</span><strong><?= e((string) (int) ($opPulse['kitchen_production_count_today'] ?? 0)) ?></strong></article>
+        <article class="card stat"><span>Demandes service ouvertes</span><strong><?= e((string) (int) ($opPulse['open_service_requests'] ?? 0)) ?></strong></article>
+        <article class="card stat"><span>Demandes magasin cuisine</span><strong><?= e((string) (int) ($opPulse['open_kitchen_stock_requests'] ?? 0)) ?></strong></article>
+        <article class="card stat"><span>Traçabilité (actions jour)</span><strong><?= e((string) (int) ($opPulse['audit_actions_today'] ?? 0)) ?></strong></article>
+    </div>
+</section>
+<?php endif; ?>
+
+<?php if ($staffGauges !== []): ?>
+<details class="card no-print" style="padding:18px 22px; margin-bottom:24px;">
+    <summary style="cursor:pointer;"><strong>Discipline &amp; jauges (J / S / M)</strong> · aperçu paie</summary>
+    <p class="muted" style="margin:10px 0 14px;">Score du jour = 100 + somme des points du journal (plancher 0, plafond 100). Moyenne hebdo sur 7 jours, mensuelle depuis le 1er du mois. Retenue indicative sur salaire de base : 0 % (≥90), 5 % (70–89), 15 % (50–69), 25 % (&lt;50) — les manquants caisse restent en dette séparée.</p>
+    <div class="table-wrap">
+        <table>
+            <thead><tr><th>Agent</th><th>Rôle</th><th>Jour</th><th>Moy. 7j</th><th>Mois</th><th>Zone</th><th>Retenue indicative</th></tr></thead>
+            <tbody>
+            <?php foreach ($staffGauges as $sg): ?>
+                <?php
+                $g = $sg['gauges'] ?? [];
+                $mavg = (float) ($g['monthly_avg'] ?? 100);
+                $ret = $mavg >= 90 ? 0.0 : ($mavg >= 70 ? 5.0 : ($mavg >= 50 ? 15.0 : 25.0));
+                ?>
+                <tr>
+                    <td><?= e((string) ($sg['full_name'] ?? '')) ?></td>
+                    <td><?= e((string) ($sg['role_code'] ?? '')) ?></td>
+                    <td><?= e((string) (int) ($g['daily'] ?? 100)) ?></td>
+                    <td><?= e((string) ($g['weekly_avg'] ?? 100)) ?></td>
+                    <td><?= e((string) ($g['monthly_avg'] ?? 100)) ?></td>
+                    <td><?= e((string) ($g['zone'] ?? 'vert')) ?></td>
+                    <td><?= e((string) $ret) ?> %</td>
+                </tr>
+            <?php endforeach; ?>
+            </tbody>
+        </table>
+    </div>
+</details>
 <?php endif; ?>
 
 <details class="card" style="padding:18px 22px; margin-bottom:24px;" id="owner-global-history">

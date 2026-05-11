@@ -214,7 +214,6 @@ final class DashboardController
     {
         authorize_access('tenant.dashboard.view');
         $restaurantId = current_restaurant_id();
-        Container::getInstance()->get('salesService')->reconcileOverdueReturnsToAutomaticSales($restaurantId);
         $restaurant = Container::getInstance()->get('restaurantAdmin')->findRestaurant($restaurantId);
         $subscription = Container::getInstance()->get('subscriptionService')->summaryForRestaurant($restaurantId);
         $settings = Container::getInstance()->get('platformSettings')->listSystemSettings();
@@ -223,6 +222,9 @@ final class DashboardController
         $canAccessReports = can_access('reports.view');
 
         $cashSvc = Container::getInstance()->get('cashService');
+        $todayY = Container::getInstance()->get('reportService')->todayForRestaurant($restaurantId);
+        $staffDisc = Container::getInstance()->get('staffDiscipline');
+        $staffDisc->ensureSchema();
 
         view('owner/dashboard', [
             'title' => 'Tableau de bord restaurant',
@@ -249,6 +251,11 @@ final class DashboardController
             'report_detail_summary' => $canAccessReports
                 ? Container::getInstance()->get('reportService')->reportDetailSummaryForDashboard($restaurantId)
                 : null,
+            'regularization_backlog' => Container::getInstance()->get('salesService')->regularizationBacklogCounts($restaurantId),
+            'module_today_pulse' => Container::getInstance()->get('reportService')->moduleTodayPulse($restaurantId),
+            'staff_gauges_overview' => in_array((string) ($_SESSION['user']['role_code'] ?? ''), ['owner', 'manager'], true)
+                ? $staffDisc->gaugesSnapshotRestaurant($restaurantId, $todayY)
+                : [],
             'flash_success' => flash('success'),
             'flash_error' => flash('error'),
         ]);

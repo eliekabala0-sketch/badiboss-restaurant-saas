@@ -930,36 +930,62 @@ final class SalesService
         throw new \RuntimeException('Le flux direct manager est desactive. Utilisez le workflow des cas metier.');
     }
 
+    /**
+     * Plus aucune régularisation silencieuse : pas de vente automatique, pas de clôture serveur
+     * ni réception caisse implicites. Utiliser {@see regularizationBacklogCounts} pour l’affichage « à régulariser ».
+     */
     public function reconcileOverdueReturnsToAutomaticSales(int $restaurantId): int
     {
-        $count = $this->reconcileOverdueServerClosures($restaurantId);
-        $count += Container::getInstance()->get('cashService')->reconcileOverdueCashierReceipts($restaurantId);
-        $stockService = Container::getInstance()->get('stockService');
-        $count += $stockService->reconcileExpiredKitchenStockRequests($restaurantId);
-        $count += $stockService->reconcileAutoKitchenStockReceipts($restaurantId);
-        $overdue = $stockService->reconcileOverdueKitchenIssues($restaurantId);
+        return 0;
+    }
 
-        foreach ($overdue as $row) {
-            if ((float) $row['quantity_remaining'] <= 0 || (int) $row['menu_item_id'] <= 0) {
-                continue;
-            }
+    /**
+     * Comptages lecture seule pour signaler les arriérés (sans mutation).
+     *
+     * @return array<string, int>
+     */
+    public function regularizationBacklogCounts(int $restaurantId): array
+    {
+        $timezone = $this->restaurantTimezone($restaurantId);
+        $todayStart = (new \DateTimeImmutable('now', $timezone))->setTime(0, 0, 0)->format('Y-m-d H:i:s');
+        $pdo = $this->database->pdo();
 
-            $menuItem = $this->findMenuItem((int) $row['menu_item_id']);
-            if ($menuItem === null) {
-                continue;
-            }
+        $st = $pdo->prepare(
+            'SELECT COUNT(*) FROM server_requests
+             WHERE restaurant_id = :rid
+               AND status = "REMIS_SERVEUR"
+               AND total_supplied_amount > 0
+               AND COALESCE(received_at, supplied_at, updated_at, created_at) < :today_start'
+        );
+        $st->execute(['rid' => $restaurantId, 'today_start' => $todayStart]);
+        $overdueServerRemis = (int) $st->fetchColumn();
 
-            $this->createAutomaticSale($restaurantId, [
-                'menu_item_id' => (int) $row['menu_item_id'],
-                'kitchen_production_id' => (int) $row['production_id'],
-                'quantity' => (float) $row['quantity_remaining'],
-                'unit_price' => (float) $menuItem['price'],
-            ]);
+        $st = $pdo->prepare(
+            'SELECT COUNT(*) FROM cash_transfers
+             WHERE restaurant_id = :rid
+               AND source_type = "sale"
+               AND status = "REMIS_A_CAISSE"
+               AND COALESCE(requested_at, created_at) < :today_start'
+        );
+        $st->execute(['rid' => $restaurantId, 'today_start' => $todayStart]);
+        $overdueRemisCaisse = (int) $st->fetchColumn();
 
-            $count++;
-        }
+        $st = $pdo->prepare(
+            'SELECT COUNT(*) FROM kitchen_production kp
+             INNER JOIN stock_movements sm ON sm.id = kp.stock_movement_id
+             WHERE kp.restaurant_id = :rid
+               AND kp.quantity_remaining > 0
+               AND sm.status = "PROVISOIRE"
+               AND sm.created_at <= DATE_SUB(NOW(), INTERVAL 24 HOUR)'
+        );
+        $st->execute(['rid' => $restaurantId]);
+        $overdueKitchenReturn = (int) $st->fetchColumn();
 
-        return $count;
+        return [
+            'overdue_server_remis_serveur' => $overdueServerRemis,
+            'overdue_remis_a_caisse' => $overdueRemisCaisse,
+            'overdue_kitchen_production_returns' => $overdueKitchenReturn,
+        ];
     }
 
     private function createAutomaticSale(int $restaurantId, array $payload): void

@@ -15,6 +15,9 @@ $stockItemIdsForFilter = $stock_item_ids_for_filter ?? null;
 $stock_movement_display_limit = 150;
 $movements_display = $movements_display ?? $movements;
 $stock_movement_history = array_slice($movements_display, 0, $stock_movement_display_limit);
+$module_today_pulse = $module_today_pulse ?? [];
+$day_start_hold = $day_start_hold ?? ['blocked' => false, 'reasons' => []];
+$regularization_backlog = $regularization_backlog ?? [];
 ?>
 <style>
 @media (max-width: 900px) {
@@ -335,6 +338,30 @@ $priorityBadgeClass = static function (?string $priority): string {
 <?php if (!empty($flash_success)): ?><div class="flash-ok"><?= e($flash_success) ?></div><?php endif; ?>
 <?php if (!empty($flash_error)): ?><div class="flash-bad"><?= e($flash_error) ?></div><?php endif; ?>
 
+<?php if (!empty($day_start_hold['blocked'])): ?>
+<section class="status-banner status-danger no-print" style="margin-bottom:18px;">
+    <div>
+        <strong>Régularisation requise</strong>
+        <?php foreach (($day_start_hold['reasons'] ?? []) as $rr): ?><p style="margin:6px 0 0;"><?= e($rr) ?></p><?php endforeach; ?>
+    </div>
+</section>
+<?php endif; ?>
+
+<?php if ($module_today_pulse !== []): ?>
+<section class="card" style="padding:18px; margin-bottom:20px;">
+    <h2 style="margin:0 0 10px;">Stock · situation du jour</h2>
+    <div class="grid stats">
+        <article class="card stat"><span>Mouvements magasin</span><strong><?= e((string) (int) ($module_today_pulse['stock_movements_count_today'] ?? 0)) ?></strong></article>
+        <article class="card stat"><span>Productions cuisine</span><strong><?= e((string) (int) ($module_today_pulse['kitchen_production_count_today'] ?? 0)) ?></strong></article>
+        <article class="card stat"><span>Demandes magasin ouvertes</span><strong><?= e((string) (int) ($module_today_pulse['open_kitchen_stock_requests'] ?? 0)) ?></strong></article>
+        <article class="card stat"><span>Ventes clôturées (jour)</span><strong><?= e((string) (int) ($module_today_pulse['sales_closed_count_today'] ?? 0)) ?></strong></article>
+    </div>
+</section>
+<?php endif; ?>
+
+<details class="card no-print" style="padding:18px 22px; margin-bottom:20px;">
+<summary><strong>Historique / Vue globale</strong> — filtres &amp; niveaux</summary>
+<div style="padding-top:12px;">
 <details class="compact-card no-print" style="margin-bottom:20px;">
     <summary><strong>Filtrer par catégorie</strong><?php if ($stockCategoryFilter !== 'all' && $stockCategoryFilter !== ''): ?> <span class="muted">(actif)</span><?php endif; ?></summary>
     <div style="padding:14px 0 4px;">
@@ -1043,3 +1070,5 @@ $priorityBadgeClass = static function (?string $priority): string {
         </div>
     <?php endif; ?>
 </section>
+</div>
+</details>

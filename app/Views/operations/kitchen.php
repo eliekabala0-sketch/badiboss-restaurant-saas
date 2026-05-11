@@ -12,6 +12,8 @@ $restaurantLogo = restaurant_media_url_or_default($restaurant['logo_url'] ?? nul
 $serverRequestHistoryItems = $server_request_history_items ?? [];
 $kitchenStockRequestItemsByRequest = $kitchen_stock_request_items_by_request ?? [];
 $kitchen_evolution = $kitchen_evolution ?? [];
+$module_today_pulse = $module_today_pulse ?? [];
+$day_start_hold = $day_start_hold ?? ['blocked' => false, 'reasons' => []];
 
 ?>
 <style>
@@ -468,6 +470,28 @@ $stockBadgeClass = static function (?string $status): string {
 
 <?php if (!empty($flash_success)): ?><div class="flash-ok"><?= e($flash_success) ?></div><?php endif; ?>
 <?php if (!empty($flash_error)): ?><div class="flash-bad"><?= e($flash_error) ?></div><?php endif; ?>
+
+<?php if (!empty($day_start_hold['blocked'])): ?>
+<section class="status-banner status-danger no-print" style="margin-bottom:18px;">
+    <div>
+        <strong>Régularisation cuisine / service</strong>
+        <?php foreach (($day_start_hold['reasons'] ?? []) as $kr): ?><p style="margin:6px 0 0;"><?= e($kr) ?></p><?php endforeach; ?>
+    </div>
+</section>
+<?php endif; ?>
+
+<?php if ($module_today_pulse !== []): ?>
+<section class="card" style="padding:18px; margin-bottom:20px;">
+    <h2 style="margin:0 0 10px;">Cuisine · journée en cours</h2>
+    <div class="grid stats">
+        <article class="card stat"><span>Productions (jour)</span><strong><?= e((string) (int) ($module_today_pulse['kitchen_production_count_today'] ?? 0)) ?></strong></article>
+        <article class="card stat"><span>Service ouvert</span><strong><?= e((string) (int) ($module_today_pulse['open_service_requests'] ?? 0)) ?></strong></article>
+        <article class="card stat"><span>Mouv. stock</span><strong><?= e((string) (int) ($module_today_pulse['stock_movements_count_today'] ?? 0)) ?></strong></article>
+        <article class="card stat"><span>Ventes clôturées</span><strong><?= e((string) (int) ($module_today_pulse['sales_closed_count_today'] ?? 0)) ?></strong></article>
+    </div>
+</section>
+<?php endif; ?>
+
 <section class="card" style="padding:18px; margin-bottom:24px;">
     <div class="menu-thumb">
         <img src="<?= e($restaurantLogo) ?>" alt="Logo restaurant">

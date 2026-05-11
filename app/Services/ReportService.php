@@ -133,6 +133,19 @@ final class ReportService
         $ecartStmt->execute(['rid' => $restaurantId, 's' => $s, 'e' => $e]);
         $ecarts = (float) ($ecartStmt->fetch(PDO::FETCH_ASSOC)['t'] ?? 0);
 
+        $rejStmt = $this->database->pdo()->prepare(
+            'SELECT COALESCE(SUM(ct.amount), 0) AS t
+             FROM cash_transfers ct
+             WHERE ct.restaurant_id = :rid AND ct.source_type = "sale"
+               AND ct.status IN ("REMISE_REJETEE_CAISSE", "REMISE_REJETEE_GERANT")
+               AND COALESCE(ct.requested_at, ct.updated_at, ct.created_at) >= :s
+               AND COALESCE(ct.requested_at, ct.updated_at, ct.created_at) < :e'
+        );
+        $rejStmt->execute(['rid' => $restaurantId, 's' => $s, 'e' => $e]);
+        $rejetes = (float) ($rejStmt->fetch(PDO::FETCH_ASSOC)['t'] ?? 0);
+
+        $realGap = round($totalSoldClosed - $recuCaisse, 2);
+
         $cashSvc = Container::getInstance()->get('cashService');
         $clarity = $cashSvc->periodCashClarity($restaurantId, $todayYmd, $todayYmd);
         $balanceFull = (float) ($cashSvc->dashboard($restaurantId, [])['summary']['cash_balance'] ?? 0);
@@ -143,12 +156,86 @@ final class ReportService
             'total_sold_closed' => round($totalSoldClosed, 2),
             'remitted_to_cash_physical' => round($remisAuCaisse, 2),
             'cashier_received_today' => round($recuCaisse, 2),
+            'rejected_remittances_today' => round($rejetes, 2),
+            'real_gap_sold_closed_minus_received' => $realGap,
             'shortfall_today_total' => round($manquantJour, 2),
             'expenses_today' => round($depenses, 2),
             'cash_balance_current' => round($balanceFull, 2),
             'discrepancies_today' => round($ecarts, 2),
             'cash_clarity_today' => $clarity,
             'server_shortfall' => $shortfall,
+        ];
+    }
+
+    /**
+     * Aperçu « journée en cours » pour modules opérationnels (lecture seule).
+     *
+     * @return array<string, mixed>
+     */
+    public function moduleTodayPulse(int $restaurantId): array
+    {
+        $timezone = $this->reportTimezone($restaurantId);
+        $todayYmd = $this->todayForRestaurant($restaurantId);
+        $selectedDate = $this->normalizeDate($todayYmd, $timezone);
+        [$startAt, $endAt, $label] = $this->periodBounds($selectedDate, 'daily', $timezone);
+        $s = $startAt->format('Y-m-d H:i:s');
+        $e = $endAt->format('Y-m-d H:i:s');
+        $closedIn = '"VALIDE","CLOTURE","VENDU_TOTAL","VENDU_PARTIEL"';
+        $pdo = $this->database->pdo();
+
+        $salesStmt = $pdo->prepare(
+            'SELECT COUNT(*) AS c, COALESCE(SUM(s.total_amount), 0) AS t
+             FROM sales s
+             WHERE s.restaurant_id = :rid
+               AND s.status IN (' . $closedIn . ')
+               AND COALESCE(s.validated_at, s.created_at) >= :s AND COALESCE(s.validated_at, s.created_at) < :e'
+        );
+        $salesStmt->execute(['rid' => $restaurantId, 's' => $s, 'e' => $e]);
+        $salesRow = $salesStmt->fetch(PDO::FETCH_ASSOC) ?: [];
+
+        $movStmt = $pdo->prepare(
+            'SELECT COUNT(*) FROM stock_movements WHERE restaurant_id = :rid AND created_at >= :s AND created_at < :e'
+        );
+        $movStmt->execute(['rid' => $restaurantId, 's' => $s, 'e' => $e]);
+        $stockMovementsToday = (int) $movStmt->fetchColumn();
+
+        $kProdStmt = $pdo->prepare(
+            'SELECT COUNT(*) FROM kitchen_production WHERE restaurant_id = :rid AND created_at >= :s AND created_at < :e'
+        );
+        $kProdStmt->execute(['rid' => $restaurantId, 's' => $s, 'e' => $e]);
+        $kitchenProductionToday = (int) $kProdStmt->fetchColumn();
+
+        $pendSrv = $pdo->prepare(
+            'SELECT COUNT(*) FROM server_requests
+             WHERE restaurant_id = :rid
+               AND status IN ("DEMANDE","EN_PREPARATION","PRET_A_SERVIR","FOURNI_PARTIEL","FOURNI_TOTAL","REMIS_SERVEUR")'
+        );
+        $pendSrv->execute(['rid' => $restaurantId]);
+        $openServiceRequests = (int) $pendSrv->fetchColumn();
+
+        $pendMagasin = $pdo->prepare(
+            'SELECT COUNT(*) FROM kitchen_stock_requests
+             WHERE restaurant_id = :rid AND status NOT IN ("ANNULE","REFUSE_STOCK","CLOTURE")'
+        );
+        $pendMagasin->execute(['rid' => $restaurantId]);
+        $openKitchenStockRequests = (int) $pendMagasin->fetchColumn();
+
+        $auditStmt = $pdo->prepare(
+            'SELECT COUNT(*) FROM audit_logs WHERE restaurant_id = :rid AND created_at >= :s AND created_at < :e'
+        );
+        $auditStmt->execute(['rid' => $restaurantId, 's' => $s, 'e' => $e]);
+        $auditActionsToday = (int) $auditStmt->fetchColumn();
+
+        return [
+            'date_ymd' => $todayYmd,
+            'period_label' => $label,
+            'sales_closed_count_today' => (int) ($salesRow['c'] ?? 0),
+            'sales_closed_total_today' => round((float) ($salesRow['t'] ?? 0), 2),
+            'stock_movements_count_today' => $stockMovementsToday,
+            'kitchen_production_count_today' => $kitchenProductionToday,
+            'open_service_requests' => $openServiceRequests,
+            'open_kitchen_stock_requests' => $openKitchenStockRequests,
+            'audit_actions_today' => $auditActionsToday,
         ];
     }
 
