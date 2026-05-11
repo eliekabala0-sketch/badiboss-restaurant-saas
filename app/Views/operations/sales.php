@@ -22,7 +22,6 @@ $dayHold = $day_start_hold ?? ['blocked' => false, 'reasons' => []];
 $modulePulse = $module_today_pulse ?? [];
 $cashSnapAll = $cash_today_snapshot ?? null;
 $regBacklogV = $regularization_backlog ?? [];
-$selfGauges = $self_staff_gauges ?? null;
 $serverCashiers = $server_cashiers ?? [];
 $pendingCashRemittances = $pending_cash_remittances ?? [];
 $saleRemittanceTracking = $sale_remittance_tracking ?? [];
@@ -273,50 +272,7 @@ foreach ($historyEntries as $entry) {
 </section>
 <?php endif; ?>
 
-<?php if (is_array($selfGauges)): ?>
-<details class="compact-card no-print" style="margin-bottom:20px;" data-autoclose-details>
-    <summary><strong>Vos jauges discipline</strong> · vue selon l’onglet période ci-dessus</summary>
-    <div class="grid stats" style="margin-top:14px;">
-        <article class="card stat"><span>Jour (référence)</span><strong><?= e((string) (int) ($selfGauges['daily'] ?? 100)) ?></strong></article>
-        <article class="card stat"><span>Moy. 7 jours</span><strong><?= e((string) ($selfGauges['weekly_avg'] ?? 100)) ?></strong></article>
-        <article class="card stat"><span>Mois (cumul)</span><strong><?= e((string) ($selfGauges['monthly_avg'] ?? 100)) ?></strong></article>
-        <article class="card stat"><span>Zone mois</span><strong><?= e((string) ($selfGauges['zone'] ?? 'vert')) ?></strong></article>
-    </div>
-    <?php if (!empty($selfGauges['active_period']) && is_array($selfGauges['active_period'])): ?>
-        <?php $ap = $selfGauges['active_period']; ?>
-        <article class="card" style="padding:14px 16px; margin-top:14px;">
-            <h3 style="margin:0 0 6px;"><?= e((string) ($ap['titre'] ?? 'Période')) ?></h3>
-            <?php if (!empty($ap['jour'])): ?>
-                <p class="muted" style="margin:0;">Jour : <?= e((string) $ap['jour']) ?></p>
-            <?php endif; ?>
-            <p style="margin:10px 0 0;"><strong>Score : <?= e((string) ($ap['score'] ?? '')) ?></strong> · zone <?= e((string) ($ap['zone'] ?? '')) ?></p>
-            <?php if (!empty($ap['note'])): ?>
-                <p class="muted" style="margin:8px 0 0;"><?= e((string) $ap['note']) ?></p>
-            <?php endif; ?>
-            <?php if (!empty($ap['jours_moyennes'])): ?>
-                <p class="muted" style="margin:6px 0 0;">Jours pris en compte : <?= e((string) (int) $ap['jours_moyennes']) ?></p>
-            <?php endif; ?>
-            <?php if (!empty($ap['points_detail']) && is_array($ap['points_detail'])): ?>
-                <ul class="muted" style="margin:12px 0 0; padding-left:18px;">
-                    <?php foreach ($ap['points_detail'] as $row): ?>
-                        <?php if (!is_array($row)) {
-                            continue;
-                        } ?>
-                        <li><?= e((string) ($row['delta_points'] ?? '')) ?> pts — <?= e((string) ($row['label'] ?? '')) ?></li>
-                    <?php endforeach; ?>
-                </ul>
-            <?php endif; ?>
-        </article>
-    <?php endif; ?>
-    <?php if (!empty($selfGauges['ledger_preview'])): ?>
-    <ul class="muted" style="margin:14px 0 0; padding-left:18px;">
-        <?php foreach ($selfGauges['ledger_preview'] as $le): ?>
-            <li><?= e((string) ($le['day_ymd'] ?? '')) ?> · <?= e((string) ($le['delta_points'] ?? '')) ?> pts — <?= e((string) ($le['label'] ?? '')) ?></li>
-        <?php endforeach; ?>
-    </ul>
-    <?php endif; ?>
-</details>
-<?php endif; ?>
+<?php require base_path('app/Views/partials/staff_discipline_gauges_foldable.php'); ?>
 
 <?php
 $rejServ = [];

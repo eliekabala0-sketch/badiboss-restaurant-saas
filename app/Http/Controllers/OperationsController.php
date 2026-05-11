@@ -39,8 +39,9 @@ final class OperationsController
 
         $dash = $this->operationalDashboardBundle($request, $restaurantId);
         $hold = Container::getInstance()->get('regularizationGate')->assessForUser($restaurantId, current_user() ?? []);
+        $disc = $this->staffDisciplineOperationalExtras($dash, $restaurantId, current_user(), ['stock_manager']);
 
-        view('operations/stock', array_merge($dash, [
+        view('operations/stock', array_merge($dash, $disc, [
             'title' => 'Stock',
             'restaurant' => Container::getInstance()->get('restaurantAdmin')->findRestaurant($restaurantId),
             'items' => $items,
@@ -62,6 +63,7 @@ final class OperationsController
             'flash_error' => flash('error'),
             'day_start_hold' => $hold,
             'regularization_backlog' => Container::getInstance()->get('salesService')->regularizationBacklogCounts($restaurantId),
+            'staff_gauges_panel_title' => 'Discipline · magasin',
         ]));
 
         audit_access('stock', $restaurantId, 'screens', 'stock', 'Consultation module stock');
@@ -365,8 +367,9 @@ final class OperationsController
 
         $dash = $this->operationalDashboardBundle($request, $restaurantId);
         $hold = Container::getInstance()->get('regularizationGate')->assessForUser($restaurantId, current_user() ?? []);
+        $disc = $this->staffDisciplineOperationalExtras($dash, $restaurantId, current_user(), ['kitchen']);
 
-        view('operations/kitchen', array_merge($dash, [
+        view('operations/kitchen', array_merge($dash, $disc, [
             'title' => 'Cuisine',
             'restaurant' => Container::getInstance()->get('restaurantAdmin')->findRestaurant($restaurantId),
             'productions' => Container::getInstance()->get('kitchenService')->listProductions($restaurantId),
@@ -394,6 +397,7 @@ final class OperationsController
             'flash_error' => flash('error'),
             'day_start_hold' => $hold,
             'regularization_backlog' => Container::getInstance()->get('salesService')->regularizationBacklogCounts($restaurantId),
+            'staff_gauges_panel_title' => 'Discipline · cuisine',
         ]));
 
         audit_access('kitchen', $restaurantId, 'screens', 'kitchen', 'Consultation module cuisine');
@@ -605,20 +609,12 @@ final class OperationsController
 
         $actor = current_user();
         $dash = $this->operationalDashboardBundle($request, $restaurantId);
-        $todayYRestaurant = $dash['today_ymd_restaurant'];
-        $selfGauges = (is_array($actor) && ($actor['role_code'] ?? null) === 'cashier_server')
-            ? Container::getInstance()->get('staffDiscipline')->gaugesForUserOperationalPanel(
-                $restaurantId,
-                (int) ($actor['id'] ?? 0),
-                (string) $dash['dash_preset'],
-                (string) $dash['dash_date'],
-            )
-            : null;
+        $selfDisc = $this->staffDisciplineOperationalExtras($dash, $restaurantId, is_array($actor) ? $actor : null, ['cashier_server']);
         $agentCash = (is_array($actor) && ($actor['role_code'] ?? null) === 'cashier_server')
             ? Container::getInstance()->get('reportService')->agentServerCashAccountReadModel($restaurantId, (int) ($actor['id'] ?? 0))
             : null;
 
-        view('operations/sales', array_merge($dash, [
+        view('operations/sales', array_merge($dash, $selfDisc, [
             'title' => 'Ventes',
             'restaurant' => Container::getInstance()->get('restaurantAdmin')->findRestaurant($restaurantId),
             'sales' => Container::getInstance()->get('salesService')->listSales($restaurantId, $this->salesActorIdFilter()),
@@ -636,7 +632,7 @@ final class OperationsController
             'day_start_hold' => Container::getInstance()->get('regularizationGate')->assessForUser($restaurantId, current_user() ?? []),
             'regularization_backlog' => Container::getInstance()->get('salesService')->regularizationBacklogCounts($restaurantId),
             'cash_today_snapshot' => Container::getInstance()->get('reportService')->cashTodayOperationalSnapshot($restaurantId),
-            'self_staff_gauges' => $selfGauges,
+            'staff_gauges_panel_title' => 'Discipline · service et ventes',
             'flash_success' => flash('success'),
             'flash_error' => flash('error'),
         ]));
@@ -664,8 +660,14 @@ final class OperationsController
 
         $dash = $this->operationalDashboardBundle($request, $restaurantId);
         $hold = Container::getInstance()->get('regularizationGate')->assessForUser($restaurantId, current_user() ?? []);
+        $disc = $this->staffDisciplineOperationalExtras(
+            $dash,
+            $restaurantId,
+            current_user(),
+            ['cashier_accountant', 'manager', 'owner'],
+        );
 
-        view('operations/cash', array_merge($dash, [
+        view('operations/cash', array_merge($dash, $disc, [
             'title' => 'Caisse',
             'restaurant' => Container::getInstance()->get('restaurantAdmin')->findRestaurant($restaurantId),
             'cash' => Container::getInstance()->get('cashService')->dashboard($restaurantId, $filters),
@@ -676,6 +678,7 @@ final class OperationsController
             'cash_today_snapshot' => Container::getInstance()->get('reportService')->cashTodayOperationalSnapshot($restaurantId),
             'day_start_hold' => $hold,
             'regularization_backlog' => Container::getInstance()->get('salesService')->regularizationBacklogCounts($restaurantId),
+            'staff_gauges_panel_title' => 'Discipline · caisse',
             'flash_success' => flash('success'),
             'flash_error' => flash('error'),
         ]));
@@ -1267,6 +1270,36 @@ final class OperationsController
             'today_ymd_restaurant' => $todayY,
             'module_today_pulse' => $pulse,
         ];
+    }
+
+    private function staffDisciplineOperationalExtras(
+        array $dash,
+        int $restaurantId,
+        ?array $actor,
+        array $rolesAllowed,
+    ): array {
+        if (!is_array($actor) || (int) ($actor['id'] ?? 0) <= 0) {
+            return ['self_staff_gauges' => null, 'staff_audit_highlights' => []];
+        }
+        $role = (string) ($actor['role_code'] ?? '');
+        if (!in_array($role, $rolesAllowed, true)) {
+            return ['self_staff_gauges' => null, 'staff_audit_highlights' => []];
+        }
+        $g = Container::getInstance()->get('staffDiscipline')->gaugesForUserOperationalPanel(
+            $restaurantId,
+            (int) $actor['id'],
+            (string) $dash['dash_preset'],
+            (string) $dash['dash_date'],
+        );
+        $highlights = Container::getInstance()->get('reportService')->userAuditHighlightsForOperationalPreset(
+            $restaurantId,
+            (int) $actor['id'],
+            (string) $dash['dash_preset'],
+            (string) $dash['dash_date'],
+            $role,
+        );
+
+        return ['self_staff_gauges' => $g, 'staff_audit_highlights' => $highlights];
     }
 
     private function assertDayStartAllowsNewOperations(int $restaurantId): void

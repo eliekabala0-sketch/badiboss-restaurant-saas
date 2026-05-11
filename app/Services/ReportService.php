@@ -198,12 +198,11 @@ final class ReportService
     }
 
     /**
-     * Tableau de bord opérationnel par période (lecture seule).
-     * Préréglages : today | yesterday | date | week | month | prev_month
+     * Même fenêtre temporelle que le pulse opérationnel des modules (réutilisable jauges / audits).
      *
-     * @return array<string, mixed>
+     * @return array{start: DateTimeImmutable, end: DateTimeImmutable, label: string, preset: string, anchor: DateTimeImmutable}
      */
-    public function moduleOperationalPulse(int $restaurantId, string $preset, string $anchorYmd): array
+    public function operationalPeriodWindow(int $restaurantId, string $preset, string $anchorYmd): array
     {
         $timezone = $this->reportTimezone($restaurantId);
         $todayYmd = $this->todayForRestaurant($restaurantId);
@@ -222,6 +221,32 @@ final class ReportService
             'prev_month' => $this->previousMonthBounds($this->normalizeDate($todayYmd, $timezone), $timezone),
             default => $this->periodBounds($this->normalizeDate($todayYmd, $timezone), 'daily', $timezone),
         };
+
+        return [
+            'start' => $startAt,
+            'end' => $endAt,
+            'label' => $label,
+            'preset' => $preset,
+            'anchor' => $anchor,
+        ];
+    }
+
+    /**
+     * Tableau de bord opérationnel par période (lecture seule).
+     * Préréglages : today | yesterday | date | week | month | prev_month
+     *
+     * @return array<string, mixed>
+     */
+    public function moduleOperationalPulse(int $restaurantId, string $preset, string $anchorYmd): array
+    {
+        $timezone = $this->reportTimezone($restaurantId);
+        $todayYmd = $this->todayForRestaurant($restaurantId);
+        $win = $this->operationalPeriodWindow($restaurantId, $preset, $anchorYmd);
+        $startAt = $win['start'];
+        $endAt = $win['end'];
+        $label = $win['label'];
+        $preset = $win['preset'];
+        $anchor = $win['anchor'];
         $s = $startAt->format('Y-m-d H:i:s');
         $e = $endAt->format('Y-m-d H:i:s');
         $closedIn = '"VALIDE","CLOTURE","VENDU_TOTAL","VENDU_PARTIEL"';
@@ -292,6 +317,126 @@ final class ReportService
             'open_kitchen_stock_requests' => $openKitchenStockRequests,
             'audit_actions_today' => $auditActionsToday,
         ];
+    }
+
+    /**
+     * Traçabilités de l’utilisateur sur la même fenêtre temporelle que le pulse (pour encarts métier).
+     *
+     * @return list<array{label:string,count:int}>
+     */
+    public function userAuditHighlightsForOperationalPreset(
+        int $restaurantId,
+        int $userId,
+        string $preset,
+        string $anchorYmd,
+        string $roleCode,
+    ): array {
+        if ($userId <= 0) {
+            return [];
+        }
+        $win = $this->operationalPeriodWindow($restaurantId, $preset, $anchorYmd);
+        $s = $win['start']->format('Y-m-d H:i:s');
+        $e = $win['end']->format('Y-m-d H:i:s');
+        $st = $this->database->pdo()->prepare(
+            'SELECT module_name, action_name, COUNT(*) AS c
+             FROM audit_logs
+             WHERE restaurant_id = :rid AND user_id = :uid
+               AND created_at >= :s AND created_at < :e
+             GROUP BY module_name, action_name
+             ORDER BY c DESC
+             LIMIT 48'
+        );
+        $st->execute(['rid' => $restaurantId, 'uid' => $userId, 's' => $s, 'e' => $e]);
+        $out = [];
+        while ($r = $st->fetch(PDO::FETCH_ASSOC)) {
+            $label = $this->publicAuditLabelForRole(
+                (string) ($r['module_name'] ?? ''),
+                (string) ($r['action_name'] ?? ''),
+                $roleCode
+            );
+            if ($label === null) {
+                continue;
+            }
+            $out[] = [
+                'label' => $label,
+                'count' => (int) ($r['c'] ?? 0),
+            ];
+        }
+
+        return $out;
+    }
+
+    private function publicAuditLabelForRole(string $module, string $action, string $roleCode): ?string
+    {
+        $isKitchen = $roleCode === 'kitchen';
+        $isStock = $roleCode === 'stock_manager';
+        $isCash = $roleCode === 'cashier_accountant' || $roleCode === 'manager' || $roleCode === 'owner';
+        $isServer = $roleCode === 'cashier_server';
+
+        $row = $module . "\0" . $action;
+
+        $serverRows = [
+            "sales\0server_request_created" => 'Commandes service créées',
+            "sales\0server_request_received" => 'Commandes réceptionnées (cuisine)',
+            "sales\0server_request_closed_as_sale" => 'Commandes clôturées en vente',
+            "sales\0server_request_auto_closed_as_sale" => 'Commandes clôturées automatiquement (vente)',
+            "sales\0sale_created" => 'Ventes enregistrées',
+            "sales\0request_cancelled" => 'Commandes annulées',
+            "cash\0cash_server_remitted" => 'Remises caisse enregistrées',
+        ];
+
+        $kitchenRows = [
+            "kitchen\0server_request_item_fulfilled" => 'Préparation · lignes commande servies',
+            "kitchen\0kitchen_production_created" => 'Productions cuisine enregistrées',
+            "kitchen\0sale_return_validated_by_kitchen" => 'Retours plats validés',
+            "incidents\0kitchen_incident_signaled" => 'Incidents cuisine signalés',
+            "sales\0request_declined" => 'Commandes refusées (cuisine)',
+            "kitchen\0kitchen_stock_request_created" => 'Demandes magasin émises',
+            "stock\0stock_request_cancelled" => 'Demandes magasin annulées (cuisine)',
+        ];
+        $stockRows = [
+            "stock\0stock_entry_validated" => 'Entrées stock validées',
+            "stock\0stock_free_movement_entry" => 'Mouvements libres (entrée)',
+            "stock\0stock_free_movement_out" => 'Mouvements libres (sortie)',
+            "stock\0stock_free_movement_return" => 'Mouvements libres (retour)',
+            "stock\0stock_inventory_correction" => 'Inventaires / corrections',
+            "stock\0stock_item_created" => 'Articles créés',
+            "stock\0stock_sent_to_kitchen" => 'Envois vers cuisine',
+            "stock\0stock_return_validated" => 'Retours validés',
+            "stock\0kitchen_stock_request_received" => 'Réceptions demandes magasin',
+            "stock\0kitchen_stock_request_responded" => 'Réponses demandes magasin',
+            "stock\0kitchen_stock_request_processing_started" => 'Prises en charge demandes magasin',
+            "stock\0stock_request_declined" => 'Demandes magasin refusées',
+            "stock\0stock_request_cancelled" => 'Demandes magasin annulées',
+            "stock\0raw_material_loss_created" => 'Pertes matière enregistrées',
+            "stock\0cash_loss_created" => 'Pertes caisse liées stock enregistrées',
+        ];
+        $cashRows = [
+            "cash\0cash_cashier_received" => 'Remises vente reçues à la caisse',
+            "cash\0cash_remise_rejetee_caisse" => 'Remises rejetées (caisse)',
+            "cash\0cash_remise_soumise_gerant" => 'Remises soumises au gérant',
+            "cash\0cash_remise_rejetee_gerant" => 'Remises rejetées par le gérant',
+            "cash\0cash_remise_validee_gerant" => 'Remises validées par le gérant',
+            "cash\0cash_server_remitted" => 'Remises enregistrées (point de vente)',
+            "cash\0cash_movement_created" => 'Mouvements caisse saisis',
+            "cash\0cash_transfer_created" => 'Transferts caisse créés',
+            "cash\0cash_late_remittance_attribution" => 'Attributions de retard (remises)',
+        ];
+
+        if ($isServer && isset($serverRows[$row])) {
+            return $serverRows[$row];
+        }
+        if ($isKitchen && isset($kitchenRows[$row])) {
+            return $kitchenRows[$row];
+        }
+        if ($isStock && isset($stockRows[$row])) {
+            return $stockRows[$row];
+        }
+        if ($isCash && isset($cashRows[$row])) {
+            return $cashRows[$row];
+        }
+
+        return null;
     }
 
     /**

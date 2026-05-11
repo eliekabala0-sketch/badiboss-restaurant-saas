@@ -491,6 +491,8 @@ $stockBadgeClass = static function (?string $status): string {
 </section>
 <?php endif; ?>
 
+<?php require base_path('app/Views/partials/staff_discipline_gauges_foldable.php'); ?>
+
 <section class="card" style="padding:18px; margin-bottom:24px;">
     <div class="menu-thumb">
         <img src="<?= e($restaurantLogo) ?>" alt="Logo restaurant">

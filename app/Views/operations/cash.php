@@ -55,6 +55,8 @@ $cashRegBack = $regularization_backlog ?? [];
 </section>
 <?php endif; ?>
 
+<?php require base_path('app/Views/partials/staff_discipline_gauges_foldable.php'); ?>
+
 <?php
 $rbCash = (int) (($cashRegBack['overdue_remis_a_caisse'] ?? 0) + ($cashRegBack['overdue_server_remis_serveur'] ?? 0) + ($cashRegBack['overdue_kitchen_production_returns'] ?? 0));
 ?>
@@ -105,8 +107,8 @@ $rbCash = (int) (($cashRegBack['overdue_remis_a_caisse'] ?? 0) + ($cashRegBack['
         <form method="get" action="/caisse" class="split" style="margin-top:14px;">
             <div><label>Date debut</label><input type="date" name="date_from" value="<?= e((string) ($filters['date_from'] ?? '')) ?>"></div>
             <div><label>Date fin</label><input type="date" name="date_to" value="<?= e((string) ($filters['date_to'] ?? '')) ?>"></div>
-            <div><label>Statut transfert</label><input name="status" value="<?= e((string) ($filters['status'] ?? '')) ?>" placeholder="RECU_CAISSE"></div>
-            <div><label>Type mouvement</label><input name="movement_type" value="<?= e((string) ($filters['movement_type'] ?? '')) ?>" placeholder="DEPENSE"></div>
+            <div><label>Statut transfert</label><input name="status" value="<?= e((string) ($filters['status'] ?? '')) ?>" placeholder="Ex. reçu caisse"></div>
+            <div><label>Type mouvement</label><input name="movement_type" value="<?= e((string) ($filters['movement_type'] ?? '')) ?>" placeholder="Ex. dépense"></div>
             <div><label>Utilisateur</label>
                 <select name="user_id">
                     <option value="0">Tous</option>
