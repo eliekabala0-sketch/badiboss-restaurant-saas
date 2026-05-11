@@ -155,19 +155,25 @@ $staffGauges = $staff_gauges_overview ?? [];
                 <?php
                 $g = $sg['gauges'] ?? [];
                 $ap = is_array($g['active_period'] ?? null) ? $g['active_period'] : [];
-                $scoreP = $ap['score'] ?? ($g['daily'] ?? 100);
-                $zoneP = $ap['zone'] ?? ($g['zone'] ?? 'vert');
-                $mavg = (float) ($g['monthly_avg'] ?? 100);
-                $ret = $mavg >= 90 ? 0.0 : ($mavg >= 70 ? 5.0 : ($mavg >= 50 ? 15.0 : 25.0));
+                $periodScore = $ap['score'] ?? ($g['daily'] ?? null);
+                $scoreDisplay = $periodScore === null ? 'Non évalué' : (string) $periodScore;
+                $zoneRaw = (string) ($ap['zone'] ?? ($g['zone'] ?? ''));
+                $zoneP = $zoneRaw === 'non_evalue' ? 'Non évalué' : ucfirst($zoneRaw);
+                $wAvg = $g['weekly_avg'] ?? null;
+                $mAvg = $g['monthly_avg'] ?? null;
+                $wDisplay = $wAvg === null ? 'Non évalué' : (string) $wAvg;
+                $mDisplay = $mAvg === null ? 'Non évalué' : (string) $mAvg;
+                $mavgFloat = $mAvg === null ? null : (float) $mAvg;
+                $ret = $mavgFloat === null ? '—' : (string) ($mavgFloat >= 90 ? 0.0 : ($mavgFloat >= 70 ? 5.0 : ($mavgFloat >= 50 ? 15.0 : 25.0)));
                 ?>
                 <tr>
                     <td><?= e((string) ($sg['full_name'] ?? '')) ?></td>
                     <td><?= e(restaurant_role_label($sg['role_code'] ?? null)) ?></td>
-                    <td><?= e((string) $scoreP) ?></td>
-                    <td><?= e(ucfirst((string) $zoneP)) ?></td>
-                    <td><?= e((string) ($g['weekly_avg'] ?? 100)) ?></td>
-                    <td><?= e((string) ($g['monthly_avg'] ?? 100)) ?></td>
-                    <td><?= e((string) $ret) ?> %</td>
+                    <td><?= e($scoreDisplay) ?></td>
+                    <td><?= e($zoneP) ?></td>
+                    <td><?= e($wDisplay) ?></td>
+                    <td><?= e($mDisplay) ?></td>
+                    <td><?= e($ret) ?><?= $ret === '—' ? '' : ' %' ?></td>
                 </tr>
                 <?php if (!empty($ap['points_detail']) && is_array($ap['points_detail'])): ?>
                 <tr>

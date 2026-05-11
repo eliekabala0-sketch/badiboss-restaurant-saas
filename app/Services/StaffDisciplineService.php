@@ -128,20 +128,20 @@ final class StaffDisciplineService
     }
 
     /**
-     * @return array{daily:int, weekly_avg:float, monthly_avg:float, zone:string, ledger_preview: list<array<string,mixed>>}
+     * @return array{daily:?int, weekly_avg:?float, monthly_avg:?float, zone:string, ledger_preview: list<array<string,mixed>>}
      */
     public function gaugesForUser(int $restaurantId, int $userId, string $todayYmd): array
     {
         $this->ensureSchema();
-        $daily = $this->scoreForDay($restaurantId, $userId, $todayYmd);
-        $weekly = $this->averageLastDays($restaurantId, $userId, $todayYmd, 7);
-        $monthly = $this->averageMonthToDate($restaurantId, $userId, $todayYmd);
+        $daily = $this->scoreForDayOrNull($restaurantId, $userId, $todayYmd);
+        $weekly = $this->averageLastDaysNullable($restaurantId, $userId, $todayYmd, 7);
+        $monthly = $this->averageMonthToDateNullable($restaurantId, $userId, $todayYmd);
 
         return [
             'daily' => $daily,
             'weekly_avg' => $weekly,
             'monthly_avg' => $monthly,
-            'zone' => $this->zoneFromScore($monthly),
+            'zone' => $this->zoneFromScoreNullable($monthly),
             'ledger_preview' => array_slice($this->listLedgerForUserMonth($restaurantId, $userId, $todayYmd), -12),
         ];
     }
@@ -268,8 +268,11 @@ final class StaffDisciplineService
         return $out;
     }
 
-    public function proposedSalaryRetentionPercent(float $monthlyScoreAvg): float
+    public function proposedSalaryRetentionPercent(?float $monthlyScoreAvg): float
     {
+        if ($monthlyScoreAvg === null) {
+            return 0.0;
+        }
         if ($monthlyScoreAvg >= 90) {
             return 0.0;
         }
@@ -283,54 +286,65 @@ final class StaffDisciplineService
         return 25.0;
     }
 
-    private function scoreForDay(int $restaurantId, int $userId, string $dayYmd): int
+    private function scoreForDayOrNull(int $restaurantId, int $userId, string $dayYmd): ?int
     {
         $st = $this->database->pdo()->prepare(
-            'SELECT COALESCE(SUM(delta_points), 0) FROM staff_score_ledger
+            'SELECT COALESCE(SUM(delta_points), 0) AS delta_sum, COUNT(*) AS line_count
+             FROM staff_score_ledger
              WHERE restaurant_id = :rid AND user_id = :uid AND day_ymd = :d'
         );
         $st->execute(['rid' => $restaurantId, 'uid' => $userId, 'd' => $dayYmd]);
-        $delta = (int) $st->fetchColumn();
+        $row = $st->fetch(PDO::FETCH_ASSOC) ?: [];
+        if ((int) ($row['line_count'] ?? 0) <= 0) {
+            return null;
+        }
+        $delta = (int) ($row['delta_sum'] ?? 0);
 
         return max(0, min(100, 100 + $delta));
     }
 
-    private function averageLastDays(int $restaurantId, int $userId, string $todayYmd, int $days): float
+    private function averageLastDaysNullable(int $restaurantId, int $userId, string $todayYmd, int $days): ?float
     {
         $glob = $this->effectiveGlobalStartYmd($restaurantId);
         $tz = new DateTimeImmutable($todayYmd);
         $sum = 0.0;
-        $n = 0;
+        $evalDays = 0;
         for ($i = 0; $i < $days; $i++) {
             $d = $tz->modify('-' . $i . ' days')->format('Y-m-d');
             if ($d < $glob) {
                 continue;
             }
-            $sum += $this->scoreForDay($restaurantId, $userId, $d);
-            $n++;
+            $sc = $this->scoreForDayOrNull($restaurantId, $userId, $d);
+            if ($sc !== null) {
+                $sum += $sc;
+                $evalDays++;
+            }
         }
 
-        return $n > 0 ? round($sum / $n, 1) : 100.0;
+        return $evalDays > 0 ? round($sum / $evalDays, 1) : null;
     }
 
-    private function averageMonthToDate(int $restaurantId, int $userId, string $todayYmd): float
+    private function averageMonthToDateNullable(int $restaurantId, int $userId, string $todayYmd): ?float
     {
         try {
             $monthFirst = new DateTimeImmutable(substr($todayYmd, 0, 7) . '-01');
             $end = new DateTimeImmutable($todayYmd);
         } catch (\Throwable) {
-            return 100.0;
+            return null;
         }
         $glob = $this->effectiveGlobalStartYmd($restaurantId);
         $start = $monthFirst->format('Y-m-d') >= $glob ? $monthFirst : new DateTimeImmutable($glob);
         $sum = 0.0;
-        $n = 0;
+        $evalDays = 0;
         for ($d = $start; $d <= $end; $d = $d->modify('+1 day')) {
-            $sum += $this->scoreForDay($restaurantId, $userId, $d->format('Y-m-d'));
-            $n++;
+            $sc = $this->scoreForDayOrNull($restaurantId, $userId, $d->format('Y-m-d'));
+            if ($sc !== null) {
+                $sum += $sc;
+                $evalDays++;
+            }
         }
 
-        return $n > 0 ? round($sum / $n, 1) : 100.0;
+        return $evalDays > 0 ? round($sum / $evalDays, 1) : null;
     }
 
     private function effectiveGlobalStartYmd(int $restaurantId): string
@@ -349,20 +363,31 @@ final class StaffDisciplineService
     }
 
     /**
-     * @return array{titre: string, jour: string|null, score: int|float, zone: string, points_detail: list<array<string, mixed>>, jours_moyennes?: int}
+     * @return array{titre: string, jour: string|null, score: int|float|null, zone: string, points_detail: list<array<string, mixed>>, jours_moyennes?: int, note?: string}
      */
     private function snapshotDayGauge(int $restaurantId, int $userId, string $dayYmd, string $titre, DateTimeZone $tz): array
     {
-        $score = $this->scoreForDay($restaurantId, $userId, $dayYmd);
         $glob = $this->effectiveGlobalStartYmd($restaurantId);
         if ($dayYmd < $glob) {
             return [
                 'titre' => $titre,
                 'jour' => $dayYmd,
-                'score' => 100,
-                'zone' => 'neutre',
+                'score' => null,
+                'zone' => 'non_evalue',
                 'points_detail' => [],
-                'note' => 'Avant l’activité enregistrée : neutre (non pénalisant).',
+                'note' => 'Avant le début d’activité enregistré : non évalué.',
+            ];
+        }
+
+        $score = $this->scoreForDayOrNull($restaurantId, $userId, $dayYmd);
+        if ($score === null) {
+            return [
+                'titre' => $titre,
+                'jour' => $dayYmd,
+                'score' => null,
+                'zone' => 'non_evalue',
+                'points_detail' => [],
+                'note' => 'Aucune donnée de points pour ce jour : non évalué (pas de 100 % par défaut).',
             ];
         }
 
@@ -376,7 +401,7 @@ final class StaffDisciplineService
     }
 
     /**
-     * @return array{titre: string, jour: null, score: float, zone: string, points_detail: list<array<string, mixed>>, jours_moyennes: int}
+     * @return array{titre: string, jour: null, score: float|null, zone: string, points_detail: list<array<string, mixed>>, jours_moyennes: int, note?: string}
      */
     private function snapshotRollingAverageGauge(int $restaurantId, int $userId, string $anchorYmd, int $days, string $titre, DateTimeZone $tz): array
     {
@@ -384,25 +409,43 @@ final class StaffDisciplineService
         try {
             $end = new DateTimeImmutable($anchorYmd . ' 00:00:00', $tz);
         } catch (\Throwable) {
-            return ['titre' => $titre, 'jour' => null, 'score' => 100.0, 'zone' => 'vert', 'points_detail' => [], 'jours_moyennes' => 0];
+            return ['titre' => $titre, 'jour' => null, 'score' => null, 'zone' => 'non_evalue', 'points_detail' => [], 'jours_moyennes' => 0, 'note' => 'Date invalide : non évalué.'];
         }
         $sum = 0.0;
-        $n = 0;
+        $inWindow = 0;
+        $evalDays = 0;
         $details = [];
         for ($i = 0; $i < $days; $i++) {
             $d = $end->modify('-' . $i . ' days')->format('Y-m-d');
             if ($d < $glob) {
                 continue;
             }
-            $sd = $this->scoreForDay($restaurantId, $userId, $d);
-            $sum += $sd;
-            $n++;
+            $inWindow++;
+            $sd = $this->scoreForDayOrNull($restaurantId, $userId, $d);
+            if ($sd !== null) {
+                $sum += $sd;
+                $evalDays++;
+            }
             foreach ($this->ledgerLinesForDay($restaurantId, $userId, $d) as $line) {
                 $details[] = $line;
             }
         }
 
-        $avg = $n > 0 ? round($sum / $n, 1) : 100.0;
+        if ($evalDays === 0) {
+            return [
+                'titre' => $titre,
+                'jour' => null,
+                'score' => null,
+                'zone' => 'non_evalue',
+                'points_detail' => array_slice($details, -24),
+                'jours_moyennes' => $inWindow,
+                'note' => $inWindow <= 0
+                    ? 'Aucun jour calendaire dans la fenêtre : non évalué.'
+                    : 'Aucun jour avec points sur cette période : non évalué.',
+            ];
+        }
+
+        $avg = round($sum / $evalDays, 1);
 
         return [
             'titre' => $titre,
@@ -410,19 +453,19 @@ final class StaffDisciplineService
             'score' => $avg,
             'zone' => $this->zoneFromScore((float) $avg),
             'points_detail' => array_slice($details, -24),
-            'jours_moyennes' => $n,
+            'jours_moyennes' => $evalDays,
         ];
     }
 
     /**
-     * @return array{titre: string, jour: null, score: float, zone: string, points_detail: list<array<string, mixed>>, jours_moyennes: int}
+     * @return array{titre: string, jour: null, score: float|null, zone: string, points_detail: list<array<string, mixed>>, jours_moyennes: int, note?: string}
      */
     private function snapshotCalendarMonthGauge(int $restaurantId, int $userId, string $anchorYmd, bool $previous, DateTimeZone $tz, string $todayYmd): array
     {
         try {
             $anchor = new DateTimeImmutable($anchorYmd . ' 00:00:00', $tz);
         } catch (\Throwable) {
-            return ['titre' => 'Mois', 'jour' => null, 'score' => 100.0, 'zone' => 'vert', 'points_detail' => [], 'jours_moyennes' => 0];
+            return ['titre' => 'Mois', 'jour' => null, 'score' => null, 'zone' => 'non_evalue', 'points_detail' => [], 'jours_moyennes' => 0, 'note' => 'Date invalide : non évalué.'];
         }
         if ($previous) {
             $firstThis = $anchor->modify('first day of this month')->setTime(0, 0, 0);
@@ -438,18 +481,35 @@ final class StaffDisciplineService
         $glob = $this->effectiveGlobalStartYmd($restaurantId);
         $cursor = $start->format('Y-m-d') >= $glob ? $start : new DateTimeImmutable($glob . ' 00:00:00', $tz);
         $sum = 0.0;
-        $n = 0;
+        $calendarDays = 0;
+        $evalDays = 0;
         $details = [];
         for ($d = $cursor; $d <= $end; $d = $d->modify('+1 day')) {
             $ymd = $d->format('Y-m-d');
-            $sd = $this->scoreForDay($restaurantId, $userId, $ymd);
-            $sum += $sd;
-            $n++;
+            $calendarDays++;
+            $sd = $this->scoreForDayOrNull($restaurantId, $userId, $ymd);
+            if ($sd !== null) {
+                $sum += $sd;
+                $evalDays++;
+            }
             foreach ($this->ledgerLinesForDay($restaurantId, $userId, $ymd) as $line) {
                 $details[] = $line;
             }
         }
-        $avg = $n > 0 ? round($sum / $n, 1) : 100.0;
+
+        if ($evalDays === 0) {
+            return [
+                'titre' => $label,
+                'jour' => null,
+                'score' => null,
+                'zone' => 'non_evalue',
+                'points_detail' => array_slice($details, -40),
+                'jours_moyennes' => $calendarDays,
+                'note' => 'Aucun jour avec points sur ce mois : non évalué.',
+            ];
+        }
+
+        $avg = round($sum / $evalDays, 1);
 
         return [
             'titre' => $label,
@@ -457,7 +517,7 @@ final class StaffDisciplineService
             'score' => $avg,
             'zone' => $this->zoneFromScore((float) $avg),
             'points_detail' => array_slice($details, -40),
-            'jours_moyennes' => $n,
+            'jours_moyennes' => $evalDays,
         ];
     }
 
@@ -488,6 +548,15 @@ final class StaffDisciplineService
         }
 
         return 'rouge';
+    }
+
+    private function zoneFromScoreNullable(?float $s): string
+    {
+        if ($s === null) {
+            return 'non_evalue';
+        }
+
+        return $this->zoneFromScore($s);
     }
 }
 

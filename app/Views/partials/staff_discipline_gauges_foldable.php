@@ -9,6 +9,24 @@ $panelTitle = trim((string) ($staff_gauges_panel_title ?? ''));
 if ($panelTitle === '') {
     $panelTitle = 'Vos jauges discipline';
 }
+$formatGaugeVal = static function (mixed $v): string {
+    if ($v === null) {
+        return 'Non évalué';
+    }
+    if (is_float($v)) {
+        return (string) $v;
+    }
+    if (is_int($v)) {
+        return (string) $v;
+    }
+
+    return (string) $v;
+};
+$formatZone = static function (mixed $z): string {
+    $s = (string) $z;
+
+    return $s === 'non_evalue' ? 'Non évalué' : ucfirst($s);
+};
 $ap = is_array($g['active_period'] ?? null) ? $g['active_period'] : [];
 $periodHint = (string) ($ap['titre'] ?? '');
 if ($periodHint === '') {
@@ -18,10 +36,10 @@ if ($periodHint === '') {
 <details class="compact-card no-print" style="margin-bottom:20px;" data-autoclose-details>
     <summary><strong><?= e($panelTitle) ?></strong> · <?= e($periodHint) ?></summary>
     <div class="grid stats" style="margin-top:14px;">
-        <article class="card stat"><span>Jour (réf.)</span><strong><?= e((string) (int) ($g['daily'] ?? 100)) ?></strong></article>
-        <article class="card stat"><span>Moy. 7 j.</span><strong><?= e((string) ($g['weekly_avg'] ?? 100)) ?></strong></article>
-        <article class="card stat"><span>Mois (cumul)</span><strong><?= e((string) ($g['monthly_avg'] ?? 100)) ?></strong></article>
-        <article class="card stat"><span>Zone mois</span><strong><?= e(ucfirst((string) ($g['zone'] ?? 'vert'))) ?></strong></article>
+        <article class="card stat"><span>Jour (réf.)</span><strong><?= e($formatGaugeVal($g['daily'] ?? null)) ?></strong></article>
+        <article class="card stat"><span>Moy. 7 j.</span><strong><?= e($formatGaugeVal($g['weekly_avg'] ?? null)) ?></strong></article>
+        <article class="card stat"><span>Mois (cumul)</span><strong><?= e($formatGaugeVal($g['monthly_avg'] ?? null)) ?></strong></article>
+        <article class="card stat"><span>Zone mois</span><strong><?= e($formatZone($g['zone'] ?? '')) ?></strong></article>
     </div>
     <?php if ($ap !== []): ?>
         <article class="card" style="padding:14px 16px; margin-top:14px;">
@@ -29,7 +47,12 @@ if ($periodHint === '') {
             <?php if (!empty($ap['jour'])): ?>
                 <p class="muted" style="margin:0;">Jour : <?= e((string) $ap['jour']) ?></p>
             <?php endif; ?>
-            <p style="margin:10px 0 0;"><strong>Score : <?= e((string) ($ap['score'] ?? '')) ?></strong> · zone <?= e(ucfirst((string) ($ap['zone'] ?? ''))) ?></p>
+            <?php
+            $apScore = $ap['score'] ?? null;
+            $apZone = (string) ($ap['zone'] ?? '');
+            $apZoneLabel = $apZone === 'non_evalue' ? 'Non évalué' : ucfirst($apZone);
+            ?>
+            <p style="margin:10px 0 0;"><strong>Score : <?= $apScore === null ? 'Non évalué' : e((string) $apScore) ?></strong> · zone <?= e($apZoneLabel) ?></p>
             <?php if (!empty($ap['note'])): ?>
                 <p class="muted" style="margin:8px 0 0;"><?= e((string) $ap['note']) ?></p>
             <?php endif; ?>
