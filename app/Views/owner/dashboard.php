@@ -156,13 +156,13 @@ $staffGauges = $staff_gauges_overview ?? [];
                 $g = $sg['gauges'] ?? [];
                 $ap = is_array($g['active_period'] ?? null) ? $g['active_period'] : [];
                 $periodScore = $ap['score'] ?? ($g['daily'] ?? null);
-                $scoreDisplay = $periodScore === null ? 'Non évalué' : (string) $periodScore;
+                $scoreDisplay = $periodScore === null ? 'Non évalué' : (string) $periodScore . ' %';
                 $zoneRaw = (string) ($ap['zone'] ?? ($g['zone'] ?? ''));
                 $zoneP = $zoneRaw === 'non_evalue' ? 'Non évalué' : ucfirst($zoneRaw);
                 $wAvg = $g['weekly_avg'] ?? null;
                 $mAvg = $g['monthly_avg'] ?? null;
-                $wDisplay = $wAvg === null ? 'Non évalué' : (string) $wAvg;
-                $mDisplay = $mAvg === null ? 'Non évalué' : (string) $mAvg;
+                $wDisplay = $wAvg === null ? 'Non évalué' : (string) $wAvg . ' %';
+                $mDisplay = $mAvg === null ? 'Non évalué' : (string) $mAvg . ' %';
                 $mavgFloat = $mAvg === null ? null : (float) $mAvg;
                 $ret = $mavgFloat === null ? '—' : (string) ($mavgFloat >= 90 ? 0.0 : ($mavgFloat >= 70 ? 5.0 : ($mavgFloat >= 50 ? 15.0 : 25.0)));
                 ?>

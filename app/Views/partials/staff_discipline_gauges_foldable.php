@@ -36,9 +36,9 @@ if ($periodHint === '') {
 <details class="compact-card no-print" style="margin-bottom:20px;" data-autoclose-details>
     <summary><strong><?= e($panelTitle) ?></strong> · <?= e($periodHint) ?></summary>
     <div class="grid stats" style="margin-top:14px;">
-        <article class="card stat"><span>Jour (réf.)</span><strong><?= e($formatGaugeVal($g['daily'] ?? null)) ?></strong></article>
-        <article class="card stat"><span>Moy. 7 j.</span><strong><?= e($formatGaugeVal($g['weekly_avg'] ?? null)) ?></strong></article>
-        <article class="card stat"><span>Mois (cumul)</span><strong><?= e($formatGaugeVal($g['monthly_avg'] ?? null)) ?></strong></article>
+        <article class="card stat"><span>Jour (réf.)</span><strong><?= $g['daily'] === null ? 'Non évalué' : e((string) $g['daily']) . ' %' ?></strong></article>
+        <article class="card stat"><span>Moy. 7 j.</span><strong><?= $g['weekly_avg'] === null ? 'Non évalué' : e((string) $g['weekly_avg']) . ' %' ?></strong></article>
+        <article class="card stat"><span>Mois (cumul)</span><strong><?= $g['monthly_avg'] === null ? 'Non évalué' : e((string) $g['monthly_avg']) . ' %' ?></strong></article>
         <article class="card stat"><span>Zone mois</span><strong><?= e($formatZone($g['zone'] ?? '')) ?></strong></article>
     </div>
     <?php if ($ap !== []): ?>
@@ -51,16 +51,63 @@ if ($periodHint === '') {
             $apScore = $ap['score'] ?? null;
             $apZone = (string) ($ap['zone'] ?? '');
             $apZoneLabel = $apZone === 'non_evalue' ? 'Non évalué' : ucfirst($apZone);
+            $sb = is_array($ap['score_breakdown'] ?? null) ? $ap['score_breakdown'] : [];
+            $sbEvaluated = ($sb['evaluated'] ?? false) === true;
             ?>
-            <p style="margin:10px 0 0;"><strong>Score : <?= $apScore === null ? 'Non évalué' : e((string) $apScore) ?></strong> · zone <?= e($apZoneLabel) ?></p>
+            <p style="margin:10px 0 0;"><strong>Score : <?= $apScore === null ? 'Non évalué' : e((string) $apScore) ?> <?= $apScore === null ? '' : '%' ?></strong> · zone <?= e($apZoneLabel) ?></p>
+            <?php if ($sb !== []): ?>
+                <?php if ($sbEvaluated): ?>
+                    <p class="muted" style="margin:8px 0 0;">
+                        <strong>Actions prises en compte :</strong> <?= e((string) (int) ($sb['action_count'] ?? 0)) ?>
+                        · <strong>Base :</strong> <?= e((string) (int) ($sb['base_score'] ?? 100)) ?>
+                        <?php if (array_key_exists('ledger_delta', $sb)): ?>
+                            · <strong>Journal (Σ pts) :</strong> <?= e((string) (int) ($sb['ledger_delta'] ?? 0)) ?>
+                        <?php endif; ?>
+                        <?php
+                        $extraSum = 0;
+                        if (!empty($sb['extra_penalties']) && is_array($sb['extra_penalties'])) {
+                            foreach ($sb['extra_penalties'] as $xp) {
+                                if (is_array($xp)) {
+                                    $extraSum += (int) ($xp['points'] ?? 0);
+                                }
+                            }
+                        }
+                        ?>
+                        · <strong>Pénalités complémentaires (Σ) :</strong> <?= e((string) $extraSum) ?>
+                    </p>
+                    <?php if (!empty($sb['activity_breakdown']) && is_array($sb['activity_breakdown'])): ?>
+                        <p class="muted" style="margin:8px 0 0;"><strong>Base de calcul (activité)</strong></p>
+                        <ul class="muted" style="margin:4px 0 0; padding-left:18px;">
+                            <?php foreach ($sb['activity_breakdown'] as $row): ?>
+                                <?php if (!is_array($row)) {
+                                    continue;
+                                } ?>
+                                <li><?= e((string) ($row['label'] ?? '')) ?> · <?= e((string) (int) ($row['count'] ?? 0)) ?></li>
+                            <?php endforeach; ?>
+                        </ul>
+                    <?php endif; ?>
+                <?php elseif (isset($sb['evaluated_days'])): ?>
+                    <p class="muted" style="margin:8px 0 0;">
+                        <strong>Jours évalués (avec activité) :</strong> <?= e((string) (int) ($sb['evaluated_days'] ?? 0)) ?>
+                        <?php if (array_key_exists('window_days', $sb)): ?>
+                            · <strong>Fenêtre (jours calendaires) :</strong> <?= e((string) (int) ($sb['window_days'] ?? 0)) ?>
+                        <?php elseif (array_key_exists('calendar_days', $sb)): ?>
+                            · <strong>Jours calendaires (mois) :</strong> <?= e((string) (int) ($sb['calendar_days'] ?? 0)) ?>
+                        <?php endif; ?>
+                        · <strong>Actions cumulées :</strong> <?= e((string) (int) ($sb['actions_total'] ?? 0)) ?>
+                    </p>
+                    <p class="muted" style="margin:6px 0 0;">Moyenne sur les seuls jours avec activité mesurable (pas de 100 % implicite).</p>
+                <?php endif; ?>
+            <?php endif; ?>
             <?php if (!empty($ap['note'])): ?>
                 <p class="muted" style="margin:8px 0 0;"><?= e((string) $ap['note']) ?></p>
             <?php endif; ?>
             <?php if (!empty($ap['jours_moyennes'])): ?>
-                <p class="muted" style="margin:6px 0 0;">Jours pris en compte : <?= e((string) (int) $ap['jours_moyennes']) ?></p>
+                <p class="muted" style="margin:6px 0 0;">Jours pris en compte pour la moyenne : <?= e((string) (int) $ap['jours_moyennes']) ?></p>
             <?php endif; ?>
             <?php if (!empty($ap['points_detail']) && is_array($ap['points_detail'])): ?>
-                <ul class="muted" style="margin:12px 0 0; padding-left:18px;">
+                <p class="muted" style="margin:10px 0 4px;"><strong>Pénalités (journal + métier)</strong></p>
+                <ul class="muted" style="margin:0; padding-left:18px;">
                     <?php foreach ($ap['points_detail'] as $row): ?>
                         <?php if (!is_array($row)) {
                             continue;

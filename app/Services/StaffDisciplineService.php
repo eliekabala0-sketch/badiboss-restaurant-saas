@@ -133,9 +133,10 @@ final class StaffDisciplineService
     public function gaugesForUser(int $restaurantId, int $userId, string $todayYmd): array
     {
         $this->ensureSchema();
-        $daily = $this->scoreForDayOrNull($restaurantId, $userId, $todayYmd);
-        $weekly = $this->averageLastDaysNullable($restaurantId, $userId, $todayYmd, 7);
-        $monthly = $this->averageMonthToDateNullable($restaurantId, $userId, $todayYmd);
+        $tz = Container::getInstance()->get('reportService')->timezoneForRestaurantReports($restaurantId);
+        $daily = $this->scoreForDayOrNull($restaurantId, $userId, $todayYmd, $tz);
+        $weekly = $this->averageLastDaysNullable($restaurantId, $userId, $todayYmd, 7, $tz);
+        $monthly = $this->averageMonthToDateNullable($restaurantId, $userId, $todayYmd, $tz);
 
         return [
             'daily' => $daily,
@@ -286,35 +287,544 @@ final class StaffDisciplineService
         return 25.0;
     }
 
-    private function scoreForDayOrNull(int $restaurantId, int $userId, string $dayYmd): ?int
+    private function resolveRoleCodeForUser(int $restaurantId, int $userId): string
     {
-        $st = $this->database->pdo()->prepare(
-            'SELECT COALESCE(SUM(delta_points), 0) AS delta_sum, COUNT(*) AS line_count
-             FROM staff_score_ledger
-             WHERE restaurant_id = :rid AND user_id = :uid AND day_ymd = :d'
-        );
-        $st->execute(['rid' => $restaurantId, 'uid' => $userId, 'd' => $dayYmd]);
-        $row = $st->fetch(PDO::FETCH_ASSOC) ?: [];
-        if ((int) ($row['line_count'] ?? 0) <= 0) {
-            return null;
+        if ($userId <= 0) {
+            return '';
         }
-        $delta = (int) ($row['delta_sum'] ?? 0);
+        foreach (Container::getInstance()->get('roleAdmin')->listUsersForRestaurant($restaurantId) as $u) {
+            if ((int) ($u['id'] ?? 0) === $userId) {
+                return (string) ($u['role_code'] ?? '');
+            }
+        }
 
-        return max(0, min(100, 100 + $delta));
+        return '';
     }
 
-    private function averageLastDaysNullable(int $restaurantId, int $userId, string $todayYmd, int $days): ?float
+    /**
+     * @return array{s: string, e: string}
+     */
+    private function mysqlDayWindowStrings(string $dayYmd, DateTimeZone $tz): array
+    {
+        try {
+            $start = new DateTimeImmutable($dayYmd . ' 00:00:00', $tz);
+            $end = $start->modify('+1 day');
+        } catch (\Throwable) {
+            return ['s' => $dayYmd . ' 00:00:00', 'e' => $dayYmd . ' 23:59:59'];
+        }
+
+        return [
+            's' => $start->format('Y-m-d H:i:s'),
+            'e' => $end->format('Y-m-d H:i:s'),
+        ];
+    }
+
+    /** @return list<array{0:string,1:string}> */
+    private function auditPairsForRole(string $roleCode): array
+    {
+        return match ($roleCode) {
+            'cashier_server' => [
+                ['sales', 'server_request_created'],
+                ['sales', 'sale_created'],
+                ['sales', 'server_request_closed_as_sale'],
+                ['sales', 'server_request_auto_closed_as_sale'],
+                ['sales', 'automatic_sale_after_24h'],
+                ['sales', 'request_cancelled'],
+                ['cash', 'cash_server_remitted'],
+            ],
+            'kitchen' => [
+                ['kitchen', 'server_request_item_fulfilled'],
+                ['kitchen', 'kitchen_production_created'],
+                ['kitchen', 'sale_return_validated_by_kitchen'],
+                ['kitchen', 'kitchen_stock_request_created'],
+                ['sales', 'request_declined'],
+            ],
+            'stock_manager' => [
+                ['stock', 'stock_entry_validated'],
+                ['stock', 'stock_free_movement_entry'],
+                ['stock', 'stock_free_movement_out'],
+                ['stock', 'stock_free_movement_return'],
+                ['stock', 'stock_inventory_correction'],
+                ['stock', 'stock_item_created'],
+                ['stock', 'stock_sent_to_kitchen'],
+                ['stock', 'stock_return_validated'],
+                ['stock', 'kitchen_stock_request_received'],
+                ['stock', 'kitchen_stock_request_responded'],
+                ['stock', 'kitchen_stock_request_processing_started'],
+                ['stock', 'stock_request_declined'],
+                ['stock', 'stock_request_cancelled'],
+            ],
+            'cashier_accountant' => [
+                ['cash', 'cash_cashier_received'],
+                ['cash', 'cash_remise_rejetee_caisse'],
+                ['cash', 'cash_remise_soumise_gerant'],
+                ['cash', 'cash_remise_rejetee_gerant'],
+            ],
+            default => [],
+        };
+    }
+
+    private function auditActionLabelFr(string $module, string $action): string
+    {
+        $key = $module . "\0" . $action;
+        $map = [
+            "sales\0server_request_created" => 'Commandes service créées',
+            "sales\0sale_created" => 'Ventes enregistrées',
+            "sales\0server_request_closed_as_sale" => 'Commandes clôturées en vente',
+            "sales\0server_request_auto_closed_as_sale" => 'Clôtures automatiques (vente)',
+            "sales\0automatic_sale_after_24h" => 'Ventes système (24 h)',
+            "sales\0request_cancelled" => 'Commandes annulées',
+            "cash\0cash_server_remitted" => 'Remises à la caisse',
+            "kitchen\0server_request_item_fulfilled" => 'Lignes commande traitées (cuisine)',
+            "kitchen\0kitchen_production_created" => 'Productions enregistrées',
+            "kitchen\0sale_return_validated_by_kitchen" => 'Retours plats validés',
+            "kitchen\0kitchen_stock_request_created" => 'Demandes magasin (cuisine)',
+            "sales\0request_declined" => 'Commandes refusées (cuisine)',
+            "stock\0stock_entry_validated" => 'Entrées stock validées',
+            "stock\0stock_free_movement_entry" => 'Mouvements stock (entrée)',
+            "stock\0stock_free_movement_out" => 'Mouvements stock (sortie)',
+            "stock\0stock_free_movement_return" => 'Mouvements stock (retour)',
+            "stock\0stock_inventory_correction" => 'Inventaires / corrections',
+            "stock\0kitchen_stock_request_received" => 'Réceptions demandes magasin',
+            "stock\0kitchen_stock_request_responded" => 'Réponses demandes magasin',
+            "stock\0kitchen_stock_request_processing_started" => 'Prises en charge demandes magasin',
+            "cash\0cash_cashier_received" => 'Remises vente reçues',
+            "cash\0cash_remise_rejetee_caisse" => 'Remises rejetées (caisse)',
+            "cash\0cash_remise_soumise_gerant" => 'Remises soumises au gérant',
+            "cash\0cash_remise_rejetee_gerant" => 'Remises rejetées par le gérant',
+        ];
+
+        return $map[$key] ?? ($module . ' · ' . $action);
+    }
+
+    /**
+     * Évaluation d’un jour calendrier (restaurant) : activité réelle + journal des points + pénalités complémentaires.
+     *
+     * @return array{
+     *   evaluated: bool,
+     *   score: ?int,
+     *   action_count: int,
+     *   activity_breakdown: list<array{label:string,count:int}>,
+     *   ledger_delta: int,
+     *   ledger_lines: list<array<string,mixed>>,
+     *   extra_penalties: list<array{label:string,points:int}>,
+     *   base_score: int
+     * }
+     */
+    private function evaluateCalendarDay(
+        int $restaurantId,
+        int $userId,
+        string $roleCode,
+        string $dayYmd,
+        DateTimeZone $tz,
+    ): array {
+        $pdo = $this->database->pdo();
+        $win = $this->mysqlDayWindowStrings($dayYmd, $tz);
+        $s = $win['s'];
+        $e = $win['e'];
+
+        $breakdown = [];
+        $actionCount = 0;
+
+        $operationalRoles = ['cashier_server', 'kitchen', 'stock_manager', 'cashier_accountant'];
+        $management = in_array($roleCode, ['owner', 'manager'], true);
+        $broadAudit = $management || $roleCode === '' || !in_array($roleCode, $operationalRoles, true);
+        if ($broadAudit) {
+            $st = $pdo->prepare(
+                'SELECT module_name, action_name, COUNT(*) AS c
+                 FROM audit_logs
+                 WHERE restaurant_id = :rid AND user_id = :uid
+                   AND created_at >= :s AND created_at < :e
+                 GROUP BY module_name, action_name
+                 ORDER BY c DESC
+                 LIMIT 40'
+            );
+            $st->execute(['rid' => $restaurantId, 'uid' => $userId, 's' => $s, 'e' => $e]);
+            while ($row = $st->fetch(PDO::FETCH_ASSOC)) {
+                $c = (int) ($row['c'] ?? 0);
+                $mn = (string) ($row['module_name'] ?? '');
+                $an = (string) ($row['action_name'] ?? '');
+                $breakdown[] = ['label' => $this->auditActionLabelFr($mn, $an), 'count' => $c];
+                $actionCount += $c;
+            }
+        } else {
+            foreach ($this->auditPairsForRole($roleCode) as [$mod, $act]) {
+                $st = $pdo->prepare(
+                    'SELECT COUNT(*) FROM audit_logs
+                     WHERE restaurant_id = :rid AND user_id = :uid
+                       AND module_name = :m AND action_name = :a
+                       AND created_at >= :s AND created_at < :e'
+                );
+                $st->execute([
+                    'rid' => $restaurantId,
+                    'uid' => $userId,
+                    'm' => $mod,
+                    'a' => $act,
+                    's' => $s,
+                    'e' => $e,
+                ]);
+                $c = (int) $st->fetchColumn();
+                if ($c > 0) {
+                    $breakdown[] = ['label' => $this->auditActionLabelFr($mod, $act), 'count' => $c];
+                    $actionCount += $c;
+                }
+            }
+        }
+
+        $supplement = $this->supplementDomainActivityCounts($restaurantId, $userId, $roleCode, $s, $e, $pdo);
+        foreach ($supplement as $row) {
+            $breakdown[] = $row;
+            $actionCount += (int) ($row['count'] ?? 0);
+        }
+
+        $ledgerLines = $this->ledgerLinesForDay($restaurantId, $userId, $dayYmd);
+        $ledgerDelta = 0;
+        $ledgerReasons = [];
+        foreach ($ledgerLines as $ln) {
+            $ledgerDelta += (int) ($ln['delta_points'] ?? 0);
+            $ledgerReasons[(string) ($ln['reason_code'] ?? '')] = true;
+        }
+
+        $extraPenalties = $this->metricExtraPenalties(
+            $restaurantId,
+            $userId,
+            $roleCode,
+            $dayYmd,
+            $s,
+            $e,
+            $ledgerReasons,
+            $pdo,
+        );
+
+        $extraSum = 0;
+        foreach ($extraPenalties as $ep) {
+            $extraSum += (int) ($ep['points'] ?? 0);
+        }
+
+        // Évaluation uniquement sur activité mesurable (audit + signaux domaine). Le ledger affine le score ce jour-là.
+        $evaluated = $actionCount > 0;
+        if (!$evaluated) {
+            return [
+                'evaluated' => false,
+                'score' => null,
+                'action_count' => 0,
+                'activity_breakdown' => [],
+                'ledger_delta' => 0,
+                'ledger_lines' => [],
+                'extra_penalties' => [],
+                'base_score' => 100,
+            ];
+        }
+
+        $raw = 100 + $ledgerDelta + $extraSum;
+        $score = max(0, min(100, $raw));
+
+        return [
+            'evaluated' => true,
+            'score' => $score,
+            'action_count' => $actionCount,
+            'activity_breakdown' => $breakdown,
+            'ledger_delta' => $ledgerDelta,
+            'ledger_lines' => $ledgerLines,
+            'extra_penalties' => $extraPenalties,
+            'base_score' => 100,
+        ];
+    }
+
+    /**
+     * @return list<array{label:string,count:int}>
+     */
+    private function supplementDomainActivityCounts(
+        int $restaurantId,
+        int $userId,
+        string $roleCode,
+        string $s,
+        string $e,
+        PDO $pdo,
+    ): array {
+        $out = [];
+        if ($roleCode === 'cashier_server') {
+            $st = $pdo->prepare(
+                'SELECT COUNT(*) FROM server_requests
+                 WHERE restaurant_id = :rid AND server_id = :uid
+                   AND created_at >= :s AND created_at < :e'
+            );
+            $st->execute(['rid' => $restaurantId, 'uid' => $userId, 's' => $s, 'e' => $e]);
+            $c = (int) $st->fetchColumn();
+            if ($c > 0) {
+                $out[] = ['label' => 'Fiches commande (création en base)', 'count' => $c];
+            }
+            $st2 = $pdo->prepare(
+                'SELECT COUNT(*) FROM sales
+                 WHERE restaurant_id = :rid AND server_id = :uid
+                   AND COALESCE(validated_at, created_at) >= :s AND COALESCE(validated_at, created_at) < :e
+                   AND status = "VALIDE"'
+            );
+            $st2->execute(['rid' => $restaurantId, 'uid' => $userId, 's' => $s, 'e' => $e]);
+            $c2 = (int) $st2->fetchColumn();
+            if ($c2 > 0) {
+                $out[] = ['label' => 'Ventes clôturées (base)', 'count' => $c2];
+            }
+        } elseif ($roleCode === 'kitchen') {
+            $st = $pdo->prepare(
+                'SELECT COUNT(*) FROM server_request_items sri
+                 INNER JOIN server_requests sr ON sr.id = sri.request_id
+                 WHERE sr.restaurant_id = :rid AND sri.technical_confirmed_by = :uid
+                   AND sri.prepared_at IS NOT NULL
+                   AND sri.prepared_at >= :s AND sri.prepared_at < :e'
+            );
+            $st->execute(['rid' => $restaurantId, 'uid' => $userId, 's' => $s, 'e' => $e]);
+            $c = (int) $st->fetchColumn();
+            if ($c > 0) {
+                $out[] = ['label' => 'Lignes préparées (traçabilité cuisine)', 'count' => $c];
+            }
+        } elseif ($roleCode === 'stock_manager') {
+            $st = $pdo->prepare(
+                'SELECT COUNT(*) FROM stock_movements
+                 WHERE restaurant_id = :rid AND user_id = :uid
+                   AND created_at >= :s AND created_at < :e'
+            );
+            $st->execute(['rid' => $restaurantId, 'uid' => $userId, 's' => $s, 'e' => $e]);
+            $c = (int) $st->fetchColumn();
+            if ($c > 0) {
+                $out[] = ['label' => 'Mouvements stock (base)', 'count' => $c];
+            }
+            $st2 = $pdo->prepare(
+                'SELECT COUNT(*) FROM kitchen_stock_requests
+                 WHERE restaurant_id = :rid AND responded_by = :uid
+                   AND responded_at IS NOT NULL
+                   AND responded_at >= :s AND responded_at < :e'
+            );
+            $st2->execute(['rid' => $restaurantId, 'uid' => $userId, 's' => $s, 'e' => $e]);
+            $c2 = (int) $st2->fetchColumn();
+            if ($c2 > 0) {
+                $out[] = ['label' => 'Demandes magasin traitées (base)', 'count' => $c2];
+            }
+        } elseif ($roleCode === 'cashier_accountant') {
+            $st = $pdo->prepare(
+                'SELECT COUNT(*) FROM cash_transfers
+                 WHERE restaurant_id = :rid AND source_type = "sale"
+                   AND received_by = :uid
+                   AND received_at IS NOT NULL
+                   AND received_at >= :s AND received_at < :e
+                   AND status IN ("RECU_CAISSE","ECART_SIGNALE")'
+            );
+            $st->execute(['rid' => $restaurantId, 'uid' => $userId, 's' => $s, 'e' => $e]);
+            $c = (int) $st->fetchColumn();
+            if ($c > 0) {
+                $out[] = ['label' => 'Remises vente reçues (base)', 'count' => $c];
+            }
+        }
+
+        return $out;
+    }
+
+    /**
+     * Inactivité relative (même rôle, même fenêtre) — léger signal, sans bonus.
+     *
+     * @return array{label:string,points:int}|null
+     */
+    private function peerInactivityPenaltyIfAny(
+        int $restaurantId,
+        int $userId,
+        string $roleCode,
+        string $s,
+        string $e,
+        PDO $pdo,
+    ): ?array {
+        $operational = ['cashier_server', 'kitchen', 'stock_manager', 'cashier_accountant'];
+        if (!in_array($roleCode, $operational, true)) {
+            return null;
+        }
+        $peers = [];
+        foreach (Container::getInstance()->get('roleAdmin')->listUsersForRestaurant($restaurantId) as $u) {
+            $pid = (int) ($u['id'] ?? 0);
+            if ($pid <= 0 || (string) ($u['role_code'] ?? '') !== $roleCode) {
+                continue;
+            }
+            $peers[] = $pid;
+        }
+        if (count($peers) < 2) {
+            return null;
+        }
+        $st = $pdo->prepare(
+            'SELECT COUNT(*) FROM audit_logs
+             WHERE restaurant_id = :rid AND user_id = :uid
+               AND created_at >= :s AND created_at < :e'
+        );
+        $counts = [];
+        foreach ($peers as $pid) {
+            $st->execute(['rid' => $restaurantId, 'uid' => $pid, 's' => $s, 'e' => $e]);
+            $counts[$pid] = (int) $st->fetchColumn();
+        }
+        $mine = $counts[$userId] ?? 0;
+        unset($counts[$userId]);
+        if ($counts === []) {
+            return null;
+        }
+        $maxPeer = max($counts);
+        if ($maxPeer < 8) {
+            return null;
+        }
+        if ($mine >= max(1, (int) floor($maxPeer * 0.2))) {
+            return null;
+        }
+
+        return ['label' => 'Activité très faible par rapport aux autres du même rôle (audit, période)', 'points' => -8];
+    }
+
+    /**
+     * @param array<string, bool> $ledgerReasons
+     *
+     * @return list<array{label:string,points:int}>
+     */
+    private function metricExtraPenalties(
+        int $restaurantId,
+        int $userId,
+        string $roleCode,
+        string $dayYmd,
+        string $s,
+        string $e,
+        array $ledgerReasons,
+        PDO $pdo,
+    ): array {
+        $out = [];
+        if ($roleCode === 'cashier_server') {
+            if (empty($ledgerReasons['server_remittance_rejected'])) {
+                $st = $pdo->prepare(
+                    'SELECT COUNT(*) FROM cash_transfers
+                     WHERE restaurant_id = :rid AND from_user_id = :uid AND source_type = "sale"
+                       AND status IN ("REMISE_REJETEE_CAISSE","REMISE_REJETEE_GERANT")
+                       AND COALESCE(updated_at, requested_at, created_at) >= :s
+                       AND COALESCE(updated_at, requested_at, created_at) < :e'
+                );
+                $st->execute(['rid' => $restaurantId, 'uid' => $userId, 's' => $s, 'e' => $e]);
+                $rej = (int) $st->fetchColumn();
+                if ($rej > 0) {
+                    $pts = max(-12, -6 * min(2, $rej));
+                    $out[] = ['label' => 'Remises rejetées (période)', 'points' => $pts];
+                }
+            }
+            $st2 = $pdo->prepare(
+                'SELECT COUNT(*) FROM cash_transfers
+                 WHERE restaurant_id = :rid AND from_user_id = :uid AND source_type = "sale"
+                   AND sale_day_ymd IS NOT NULL AND remittance_day_ymd IS NOT NULL
+                   AND sale_day_ymd <> remittance_day_ymd
+                   AND COALESCE(requested_at, created_at) >= :s
+                   AND COALESCE(requested_at, created_at) < :e'
+            );
+            $st2->execute(['rid' => $restaurantId, 'uid' => $userId, 's' => $s, 'e' => $e]);
+            $late = (int) $st2->fetchColumn();
+            if ($late > 0) {
+                $pts = max(-15, -5 * min(3, $late));
+                $out[] = ['label' => 'Remises tardives (jour de vente ≠ jour de remise)', 'points' => $pts];
+            }
+        }
+        if ($roleCode === 'kitchen') {
+            $st = $pdo->prepare(
+                'SELECT AVG(TIMESTAMPDIFF(MINUTE, sri.created_at, sri.prepared_at)) AS avg_m
+                 FROM server_request_items sri
+                 INNER JOIN server_requests sr ON sr.id = sri.request_id
+                 WHERE sr.restaurant_id = :rid AND sri.technical_confirmed_by = :uid
+                   AND sri.prepared_at IS NOT NULL
+                   AND sri.prepared_at >= :s AND sri.prepared_at < :e
+                   AND TIMESTAMPDIFF(MINUTE, sri.created_at, sri.prepared_at) >= 0'
+            );
+            $st->execute(['rid' => $restaurantId, 'uid' => $userId, 's' => $s, 'e' => $e]);
+            $row = $st->fetch(PDO::FETCH_ASSOC) ?: [];
+            $avgM = (float) ($row['avg_m'] ?? 0);
+            if ($avgM > 120.0) {
+                $out[] = ['label' => 'Délai moyen de préparation élevé (> 2 h)', 'points' => -8];
+            }
+        }
+        if ($roleCode === 'stock_manager') {
+            $st = $pdo->prepare(
+                'SELECT COUNT(*) FROM kitchen_stock_requests
+                 WHERE restaurant_id = :rid AND responded_by = :uid
+                   AND responded_at IS NOT NULL
+                   AND responded_at >= :s AND responded_at < :e
+                   AND TIMESTAMPDIFF(HOUR, created_at, responded_at) > 48'
+            );
+            $st->execute(['rid' => $restaurantId, 'uid' => $userId, 's' => $s, 'e' => $e]);
+            $slow = (int) $st->fetchColumn();
+            if ($slow > 0) {
+                $out[] = ['label' => 'Demandes magasin réponses très tardives (> 48 h)', 'points' => -6];
+            }
+        }
+        if ($roleCode === 'cashier_accountant') {
+            $st = $pdo->prepare(
+                'SELECT COUNT(*) FROM cash_transfers
+                 WHERE restaurant_id = :rid AND source_type = "sale"
+                   AND received_by = :uid
+                   AND received_at IS NOT NULL
+                   AND received_at >= :s AND received_at < :e
+                   AND requested_at IS NOT NULL
+                   AND TIMESTAMPDIFF(HOUR, requested_at, received_at) > 24'
+            );
+            $st->execute(['rid' => $restaurantId, 'uid' => $userId, 's' => $s, 'e' => $e]);
+            $lateRx = (int) $st->fetchColumn();
+            if ($lateRx > 0) {
+                $pts = max(-10, -5 * min(2, $lateRx));
+                $out[] = ['label' => 'Réceptions caisse lentes (> 24 h après remise)', 'points' => $pts];
+            }
+            $stE = $pdo->prepare(
+                'SELECT COUNT(*) FROM cash_transfers
+                 WHERE restaurant_id = :rid AND source_type = "sale"
+                   AND received_by = :uid
+                   AND received_at >= :s AND received_at < :e
+                   AND status = "ECART_SIGNALE"'
+            );
+            $stE->execute(['rid' => $restaurantId, 'uid' => $userId, 's' => $s, 'e' => $e]);
+            $ecartN = (int) $stE->fetchColumn();
+            if ($ecartN > 0) {
+                $out[] = ['label' => 'Écarts signalés à la réception', 'points' => max(-12, -6 * min(2, $ecartN))];
+            }
+        }
+
+        $peer = $this->peerInactivityPenaltyIfAny($restaurantId, $userId, $roleCode, $s, $e, $pdo);
+        if ($peer !== null) {
+            $out[] = $peer;
+        }
+
+        return $out;
+    }
+
+    private function compositeDayScoreNullable(
+        int $restaurantId,
+        int $userId,
+        string $roleCode,
+        string $dayYmd,
+        DateTimeZone $tz,
+    ): ?int {
+        $ev = $this->evaluateCalendarDay($restaurantId, $userId, $roleCode, $dayYmd, $tz);
+
+        return $ev['evaluated'] ? $ev['score'] : null;
+    }
+
+    private function scoreForDayOrNull(int $restaurantId, int $userId, string $dayYmd, DateTimeZone $tz): ?int
+    {
+        $this->ensureSchema();
+        $role = $this->resolveRoleCodeForUser($restaurantId, $userId);
+
+        return $this->compositeDayScoreNullable($restaurantId, $userId, $role, $dayYmd, $tz);
+    }
+
+    private function averageLastDaysNullable(int $restaurantId, int $userId, string $todayYmd, int $days, DateTimeZone $tz): ?float
     {
         $glob = $this->effectiveGlobalStartYmd($restaurantId);
-        $tz = new DateTimeImmutable($todayYmd);
+        try {
+            $cursor = new DateTimeImmutable($todayYmd . ' 00:00:00', $tz);
+        } catch (\Throwable) {
+            return null;
+        }
         $sum = 0.0;
         $evalDays = 0;
         for ($i = 0; $i < $days; $i++) {
-            $d = $tz->modify('-' . $i . ' days')->format('Y-m-d');
+            $d = $cursor->modify('-' . $i . ' days')->format('Y-m-d');
             if ($d < $glob) {
                 continue;
             }
-            $sc = $this->scoreForDayOrNull($restaurantId, $userId, $d);
+            $sc = $this->scoreForDayOrNull($restaurantId, $userId, $d, $tz);
             if ($sc !== null) {
                 $sum += $sc;
                 $evalDays++;
@@ -324,7 +834,7 @@ final class StaffDisciplineService
         return $evalDays > 0 ? round($sum / $evalDays, 1) : null;
     }
 
-    private function averageMonthToDateNullable(int $restaurantId, int $userId, string $todayYmd): ?float
+    private function averageMonthToDateNullable(int $restaurantId, int $userId, string $todayYmd, DateTimeZone $tz): ?float
     {
         try {
             $monthFirst = new DateTimeImmutable(substr($todayYmd, 0, 7) . '-01');
@@ -333,11 +843,11 @@ final class StaffDisciplineService
             return null;
         }
         $glob = $this->effectiveGlobalStartYmd($restaurantId);
-        $start = $monthFirst->format('Y-m-d') >= $glob ? $monthFirst : new DateTimeImmutable($glob);
+        $start = $monthFirst->format('Y-m-d') >= $glob ? $monthFirst : new DateTimeImmutable($glob . ' 00:00:00', $tz);
         $sum = 0.0;
         $evalDays = 0;
         for ($d = $start; $d <= $end; $d = $d->modify('+1 day')) {
-            $sc = $this->scoreForDayOrNull($restaurantId, $userId, $d->format('Y-m-d'));
+            $sc = $this->scoreForDayOrNull($restaurantId, $userId, $d->format('Y-m-d'), $tz);
             if ($sc !== null) {
                 $sum += $sc;
                 $evalDays++;
@@ -363,7 +873,41 @@ final class StaffDisciplineService
     }
 
     /**
-     * @return array{titre: string, jour: string|null, score: int|float|null, zone: string, points_detail: list<array<string, mixed>>, jours_moyennes?: int, note?: string}
+     * Journal + pénalités complémentaires pour l’affichage partiel.
+     *
+     * @param array<string, mixed> $ev
+     *
+     * @return list<array<string, mixed>>
+     */
+    private function ledgerPenaltyRowsForGauge(array $ev): array
+    {
+        $rows = [];
+        foreach ($ev['ledger_lines'] ?? [] as $ln) {
+            if (!is_array($ln)) {
+                continue;
+            }
+            $rows[] = [
+                'kind' => 'ledger',
+                'delta_points' => (int) ($ln['delta_points'] ?? 0),
+                'label' => (string) ($ln['label'] ?? ''),
+            ];
+        }
+        foreach ($ev['extra_penalties'] ?? [] as $ep) {
+            if (!is_array($ep)) {
+                continue;
+            }
+            $rows[] = [
+                'kind' => 'penalty',
+                'delta_points' => (int) ($ep['points'] ?? 0),
+                'label' => (string) ($ep['label'] ?? ''),
+            ];
+        }
+
+        return $rows;
+    }
+
+    /**
+     * @return array{titre: string, jour: string|null, score: int|float|null, zone: string, points_detail: list<array<string, mixed>>, jours_moyennes?: int, note?: string, score_breakdown?: array<string, mixed>}
      */
     private function snapshotDayGauge(int $restaurantId, int $userId, string $dayYmd, string $titre, DateTimeZone $tz): array
     {
@@ -375,33 +919,37 @@ final class StaffDisciplineService
                 'score' => null,
                 'zone' => 'non_evalue',
                 'points_detail' => [],
+                'score_breakdown' => ['evaluated' => false, 'action_count' => 0],
                 'note' => 'Avant le début d’activité enregistré : non évalué.',
             ];
         }
 
-        $score = $this->scoreForDayOrNull($restaurantId, $userId, $dayYmd);
-        if ($score === null) {
+        $role = $this->resolveRoleCodeForUser($restaurantId, $userId);
+        $ev = $this->evaluateCalendarDay($restaurantId, $userId, $role, $dayYmd, $tz);
+        if (!$ev['evaluated']) {
             return [
                 'titre' => $titre,
                 'jour' => $dayYmd,
                 'score' => null,
                 'zone' => 'non_evalue',
                 'points_detail' => [],
-                'note' => 'Aucune donnée de points pour ce jour : non évalué (pas de 100 % par défaut).',
+                'score_breakdown' => $ev,
+                'note' => 'Non évalué — aucune activité mesurable sur cette période.',
             ];
         }
 
         return [
             'titre' => $titre,
             'jour' => $dayYmd,
-            'score' => $score,
-            'zone' => $this->zoneFromScore((float) $score),
-            'points_detail' => $this->ledgerLinesForDay($restaurantId, $userId, $dayYmd),
+            'score' => $ev['score'],
+            'zone' => $this->zoneFromScore((float) ($ev['score'] ?? 0)),
+            'points_detail' => $this->ledgerPenaltyRowsForGauge($ev),
+            'score_breakdown' => $ev,
         ];
     }
 
     /**
-     * @return array{titre: string, jour: null, score: float|null, zone: string, points_detail: list<array<string, mixed>>, jours_moyennes: int, note?: string}
+     * @return array{titre: string, jour: null, score: float|null, zone: string, points_detail: list<array<string, mixed>>, jours_moyennes: int, note?: string, score_breakdown?: array<string, mixed>}
      */
     private function snapshotRollingAverageGauge(int $restaurantId, int $userId, string $anchorYmd, int $days, string $titre, DateTimeZone $tz): array
     {
@@ -411,23 +959,26 @@ final class StaffDisciplineService
         } catch (\Throwable) {
             return ['titre' => $titre, 'jour' => null, 'score' => null, 'zone' => 'non_evalue', 'points_detail' => [], 'jours_moyennes' => 0, 'note' => 'Date invalide : non évalué.'];
         }
+        $role = $this->resolveRoleCodeForUser($restaurantId, $userId);
         $sum = 0.0;
         $inWindow = 0;
         $evalDays = 0;
         $details = [];
+        $actionsSum = 0;
         for ($i = 0; $i < $days; $i++) {
             $d = $end->modify('-' . $i . ' days')->format('Y-m-d');
             if ($d < $glob) {
                 continue;
             }
             $inWindow++;
-            $sd = $this->scoreForDayOrNull($restaurantId, $userId, $d);
-            if ($sd !== null) {
-                $sum += $sd;
+            $ev = $this->evaluateCalendarDay($restaurantId, $userId, $role, $d, $tz);
+            if ($ev['evaluated']) {
+                $sum += (float) ($ev['score'] ?? 0);
                 $evalDays++;
-            }
-            foreach ($this->ledgerLinesForDay($restaurantId, $userId, $d) as $line) {
-                $details[] = $line;
+                $actionsSum += (int) ($ev['action_count'] ?? 0);
+                foreach ($this->ledgerPenaltyRowsForGauge($ev) as $row) {
+                    $details[] = $row;
+                }
             }
         }
 
@@ -439,9 +990,10 @@ final class StaffDisciplineService
                 'zone' => 'non_evalue',
                 'points_detail' => array_slice($details, -24),
                 'jours_moyennes' => $inWindow,
+                'score_breakdown' => ['evaluated_days' => 0, 'actions_total' => 0, 'window_days' => $inWindow],
                 'note' => $inWindow <= 0
                     ? 'Aucun jour calendaire dans la fenêtre : non évalué.'
-                    : 'Aucun jour avec points sur cette période : non évalué.',
+                    : 'Aucun jour avec activité mesurée sur cette période : non évalué.',
             ];
         }
 
@@ -454,11 +1006,16 @@ final class StaffDisciplineService
             'zone' => $this->zoneFromScore((float) $avg),
             'points_detail' => array_slice($details, -24),
             'jours_moyennes' => $evalDays,
+            'score_breakdown' => [
+                'evaluated_days' => $evalDays,
+                'actions_total' => $actionsSum,
+                'window_days' => $inWindow,
+            ],
         ];
     }
 
     /**
-     * @return array{titre: string, jour: null, score: float|null, zone: string, points_detail: list<array<string, mixed>>, jours_moyennes: int, note?: string}
+     * @return array{titre: string, jour: null, score: float|null, zone: string, points_detail: list<array<string, mixed>>, jours_moyennes: int, note?: string, score_breakdown?: array<string, mixed>}
      */
     private function snapshotCalendarMonthGauge(int $restaurantId, int $userId, string $anchorYmd, bool $previous, DateTimeZone $tz, string $todayYmd): array
     {
@@ -480,20 +1037,23 @@ final class StaffDisciplineService
         }
         $glob = $this->effectiveGlobalStartYmd($restaurantId);
         $cursor = $start->format('Y-m-d') >= $glob ? $start : new DateTimeImmutable($glob . ' 00:00:00', $tz);
+        $role = $this->resolveRoleCodeForUser($restaurantId, $userId);
         $sum = 0.0;
         $calendarDays = 0;
         $evalDays = 0;
         $details = [];
+        $actionsSum = 0;
         for ($d = $cursor; $d <= $end; $d = $d->modify('+1 day')) {
             $ymd = $d->format('Y-m-d');
             $calendarDays++;
-            $sd = $this->scoreForDayOrNull($restaurantId, $userId, $ymd);
-            if ($sd !== null) {
-                $sum += $sd;
+            $ev = $this->evaluateCalendarDay($restaurantId, $userId, $role, $ymd, $tz);
+            if ($ev['evaluated']) {
+                $sum += (float) ($ev['score'] ?? 0);
                 $evalDays++;
-            }
-            foreach ($this->ledgerLinesForDay($restaurantId, $userId, $ymd) as $line) {
-                $details[] = $line;
+                $actionsSum += (int) ($ev['action_count'] ?? 0);
+                foreach ($this->ledgerPenaltyRowsForGauge($ev) as $row) {
+                    $details[] = $row;
+                }
             }
         }
 
@@ -505,7 +1065,8 @@ final class StaffDisciplineService
                 'zone' => 'non_evalue',
                 'points_detail' => array_slice($details, -40),
                 'jours_moyennes' => $calendarDays,
-                'note' => 'Aucun jour avec points sur ce mois : non évalué.',
+                'score_breakdown' => ['evaluated_days' => 0, 'actions_total' => 0, 'calendar_days' => $calendarDays],
+                'note' => 'Aucun jour avec activité mesurée sur ce mois : non évalué.',
             ];
         }
 
@@ -518,6 +1079,11 @@ final class StaffDisciplineService
             'zone' => $this->zoneFromScore((float) $avg),
             'points_detail' => array_slice($details, -40),
             'jours_moyennes' => $evalDays,
+            'score_breakdown' => [
+                'evaluated_days' => $evalDays,
+                'actions_total' => $actionsSum,
+                'calendar_days' => $calendarDays,
+            ],
         ];
     }
 
