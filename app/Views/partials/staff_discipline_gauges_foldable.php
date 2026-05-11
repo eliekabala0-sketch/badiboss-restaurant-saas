@@ -58,12 +58,20 @@ if ($periodHint === '') {
             <?php
             $apScore = $ap['score'] ?? null;
             $apZone = (string) ($ap['zone'] ?? '');
-            $apZoneLabel = $apZone === 'non_evalue' ? 'Non évalué' : ucfirst($apZone);
+            $apZoneLabel = $formatZone($apZone);
             $sb = is_array($ap['score_breakdown'] ?? null) ? $ap['score_breakdown'] : [];
             $sbEvaluated = ($sb['evaluated'] ?? false) === true;
             $monthStats = is_array($sb['month_stats'] ?? null) ? $sb['month_stats'] : [];
             ?>
             <p style="margin:10px 0 0;"><strong>Score : <?= $apScore === null ? 'Non évalué' : e((string) $apScore) ?> <?= $apScore === null ? '' : '%' ?></strong> · zone <?= e($apZoneLabel) ?></p>
+            <?php if ($sbEvaluated && array_key_exists('activite_pct_vs_role', $sb) && $sb['activite_pct_vs_role'] !== null): ?>
+                <p class="muted" style="margin:8px 0 0;">
+                    <strong>Vs moyenne du rôle (jour)</strong> : <?= e((string) (int) $sb['activite_pct_vs_role']) ?> %
+                    <?php if (!empty($sb['role_activity_mean'])): ?>
+                        · moyenne équipe <?= e((string) (float) $sb['role_activity_mean']) ?> actes
+                    <?php endif; ?>
+                </p>
+            <?php endif; ?>
             <?php if ($monthStats !== []): ?>
                 <p class="muted" style="margin:10px 0 0;">
                     <strong>Tableau de mois (provisoire)</strong> :

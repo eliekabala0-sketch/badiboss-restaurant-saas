@@ -340,6 +340,28 @@ final class StaffDisciplineService
             $preset = 'today';
         }
         $anchor = $anchorYmd !== '' && preg_match('/^\d{4}-\d{2}-\d{2}$/', $anchorYmd) ? $anchorYmd : $todayY;
+
+        if ($this->isOwnerDisciplineRole($this->resolveRoleCodeForUser($restaurantId, $userId))) {
+            return [
+                'daily' => null,
+                'weekly_avg' => null,
+                'monthly_avg' => null,
+                'zone' => 'non_evalue',
+                'ledger_preview' => [],
+                'dash_preset' => $preset,
+                'dash_anchor_ymd' => $anchor,
+                'active_period' => [
+                    'titre' => 'Propriétaire',
+                    'jour' => null,
+                    'score' => null,
+                    'zone' => 'non_evalue',
+                    'points_detail' => [],
+                    'note' => 'Compte propriétaire : pas de jauge discipline (suivi des équipiers uniquement).',
+                ],
+                'row_metrics' => [],
+            ];
+        }
+
         $yesterday = (new DateTimeImmutable($todayY . ' 00:00:00', $tz))->modify('-1 day')->format('Y-m-d');
         $base = $this->gaugesOperationalSummaryStats($restaurantId, $userId, $preset, $anchor, $todayY, $tz);
 
@@ -406,7 +428,7 @@ final class StaffDisciplineService
         $out = [];
         foreach ($users as $u) {
             $uid = (int) ($u['id'] ?? 0);
-            if ($uid <= 0) {
+            if ($uid <= 0 || $this->isOwnerDisciplineRole((string) ($u['role_code'] ?? ''))) {
                 continue;
             }
             $out[] = [
@@ -432,7 +454,7 @@ final class StaffDisciplineService
         $out = [];
         foreach ($users as $u) {
             $uid = (int) ($u['id'] ?? 0);
-            if ($uid <= 0) {
+            if ($uid <= 0 || $this->isOwnerDisciplineRole((string) ($u['role_code'] ?? ''))) {
                 continue;
             }
             $out[] = [
@@ -504,7 +526,7 @@ final class StaffDisciplineService
         $rows = [];
         foreach (Container::getInstance()->get('roleAdmin')->listUsersForRestaurant($restaurantId) as $u) {
             $uid = (int) ($u['id'] ?? 0);
-            if ($uid <= 0) {
+            if ($uid <= 0 || $this->isOwnerDisciplineRole((string) ($u['role_code'] ?? ''))) {
                 continue;
             }
             $roleCode = (string) ($u['role_code'] ?? '');
@@ -571,6 +593,12 @@ final class StaffDisciplineService
         return '';
     }
 
+    /** Compte propriétaire : pas de cotations discipline (affichage équipe uniquement). */
+    private function isOwnerDisciplineRole(string $roleCode): bool
+    {
+        return $roleCode === 'owner';
+    }
+
     /**
      * Ordre lecture rapports : serveurs, cuisine, stock, caisse, autres.
      */
@@ -627,6 +655,45 @@ final class StaffDisciplineService
     }
 
     /**
+     * Moyenne du % d’activité vs moyenne du rôle sur la fenêtre opérationnelle
+     * (jours « audit_activity » avec comparatif calculé seulement).
+     */
+    private function averageActivitePctVsRoleForWindow(
+        int $restaurantId,
+        int $userId,
+        string $roleCode,
+        string $preset,
+        string $anchorYmd,
+    ): ?float {
+        $operational = ['cashier_server', 'kitchen', 'stock_manager', 'cashier_accountant'];
+        if (!in_array($roleCode, $operational, true)) {
+            return null;
+        }
+        $rs = Container::getInstance()->get('reportService');
+        $tz = $rs->timezoneForRestaurantReports($restaurantId);
+        $win = $rs->operationalPeriodWindow($restaurantId, $preset, $anchorYmd);
+        $sum = 0.0;
+        $n = 0;
+        for ($d = $win['start']; $d < $win['end']; $d = $d->modify('+1 day')) {
+            $ymd = $d->format('Y-m-d');
+            $ev = $this->evaluateCalendarDay($restaurantId, $userId, $roleCode, $ymd, $tz);
+            if (!($ev['evaluated'] ?? false)) {
+                continue;
+            }
+            if (($ev['evaluation_kind'] ?? '') !== 'audit_activity') {
+                continue;
+            }
+            $p = $ev['activite_pct_vs_role'] ?? null;
+            if ($p !== null && is_numeric($p)) {
+                $sum += (float) $p;
+                $n++;
+            }
+        }
+
+        return $n > 0 ? round($sum / $n, 1) : null;
+    }
+
+    /**
      * Métriques lisibles pour tableaux owner / paie (sans réévaluer tout le mois).
      *
      * @return array<string, mixed>
@@ -670,6 +737,13 @@ final class StaffDisciplineService
 
         return [
             'activite_actions' => $activite,
+            'activite_pct_moyenne_periode' => $this->averageActivitePctVsRoleForWindow(
+                $restaurantId,
+                $userId,
+                $roleCode,
+                $preset,
+                $anchorYmd,
+            ),
             'jours_evalues_periode' => array_key_exists('evaluated_days', $sb) ? (int) $sb['evaluated_days'] : null,
             'absences_injustifiees' => $ms['days_unjustified_absence'] ?? null,
             'absences_justifiees_maladie' => $ms['days_soft_absence'] ?? null,
@@ -875,11 +949,16 @@ final class StaffDisciplineService
     }
 
     /**
-     * Écart vs les collègues du même rôle (même jour) + vitesse cuisine relative.
+     * Comparatif stric même rôle : pénalités selon % de la moyenne d’activité de l’équipe sur la journée
+     * (≥80 % : 0 · 50–79 % : -10 · 25–49 % : -20 · <25 % : -30). Un seul agent du rôle : aucun comparatif.
      *
-     * @return list<array{label:string,points:int}>
+     * @return array{
+     *   lines: list<array{label:string,points:int}>,
+     *   meta: array{ratio:?float, role_mean:?float, peers_n:int},
+     *   peers: list<int>
+     * }
      */
-    private function peerRelativeActivityAdjustments(
+    private function computePeerRoleActivityPackage(
         int $restaurantId,
         int $userId,
         string $roleCode,
@@ -890,74 +969,88 @@ final class StaffDisciplineService
     ): array {
         $operational = ['cashier_server', 'kitchen', 'stock_manager', 'cashier_accountant'];
         if (!in_array($roleCode, $operational, true)) {
-            return [];
+            return [
+                'lines' => [],
+                'meta' => ['ratio' => null, 'role_mean' => null, 'peers_n' => 0],
+                'peers' => [],
+            ];
         }
         $peers = $this->peerUserIdsSameRole($restaurantId, $roleCode);
-        if (count($peers) < 2) {
-            return [];
+        $nPeers = count($peers);
+        if ($nPeers < 2) {
+            return [
+                'lines' => [],
+                'meta' => ['ratio' => null, 'role_mean' => null, 'peers_n' => $nPeers],
+                'peers' => $peers,
+            ];
         }
 
         $counts = [];
         foreach ($peers as $pid) {
             $counts[$pid] = $this->measureActivityVolumeForDay($restaurantId, $pid, $roleCode, $dayYmd, $tz)['action_count'];
         }
+        $roleAvg = array_sum($counts) / $nPeers;
         $maxC = max($counts);
-        if ($maxC < 5) {
-            return [];
-        }
+        $mine = $counts[$userId] ?? $userActionCount;
 
-        $mine = $counts[$userId] ?? 0;
-        $others = $counts;
-        unset($others[$userId]);
-        if ($others === []) {
-            return [];
-        }
-        $medianOther = $this->medianInt(array_values($others));
-        $ratio = $medianOther > 0 ? $mine / $medianOther : ($mine > 0 ? 2.5 : 0.0);
-
-        $adj = 0;
-        if ($ratio < 0.3) {
-            $adj -= 24;
-        } elseif ($ratio < 0.5) {
-            $adj -= 16;
-        } elseif ($ratio < 0.72) {
-            $adj -= 8;
-        } elseif ($ratio > 1.35) {
-            $adj += 10;
-        } elseif ($ratio > 1.12) {
-            $adj += 5;
-        }
-
-        $out = [];
-        if ($adj !== 0) {
-            $out[] = [
-                'label' => 'Comparatif d’activité vs collègues (même rôle, même journée · volume mesuré)',
-                'points' => max(-35, min(12, $adj)),
+        if ($maxC < 4) {
+            return [
+                'lines' => [],
+                'meta' => ['ratio' => null, 'role_mean' => round($roleAvg, 2), 'peers_n' => $nPeers],
+                'peers' => $peers,
             ];
         }
 
-        if ($roleCode === 'kitchen') {
-            $win = $this->mysqlDayWindowStrings($dayYmd, $tz);
-            $sp = $this->kitchenPeerSpeedAdjustment($restaurantId, $userId, $peers, $pdo, $win['s'], $win['e']);
-            if ($sp !== null) {
-                $out[] = $sp;
+        $ratio = $roleAvg > 0 ? $mine / $roleAvg : 0.0;
+        if (!is_finite($ratio)) {
+            $ratio = 0.0;
+        }
+
+        $penalty = 0;
+        if ($ratio >= 0.80) {
+            $penalty = 0;
+        } elseif ($ratio >= 0.50) {
+            $penalty = -10;
+        } elseif ($ratio >= 0.25) {
+            $penalty = -20;
+        } else {
+            $penalty = -30;
+        }
+
+        $bonus = 0;
+        if ($penalty === 0) {
+            if ($ratio >= 1.35) {
+                $bonus = 8;
+            } elseif ($ratio >= 1.15) {
+                $bonus = 5;
             }
         }
 
-        return $out;
-    }
+        $pts = $penalty + $bonus;
+        $pts = max(-30, min(8, $pts));
 
-    /** @param list<int> $vals */
-    private function medianInt(array $vals): float
-    {
-        if ($vals === []) {
-            return 0.0;
+        $lines = [];
+        if ($pts !== 0) {
+            $lines[] = [
+                'label' => sprintf(
+                    'Activité vs moyenne du rôle (jour) : vous %d actes · moy. équipe %.1f · %d %% de la moyenne',
+                    $mine,
+                    $roleAvg,
+                    (int) max(0, min(500, (int) round($ratio * 100)))
+                ),
+                'points' => $pts,
+            ];
         }
-        sort($vals);
-        $n = count($vals);
-        $mid = (int) floor(($n - 1) / 2);
 
-        return $n % 2 === 1 ? (float) $vals[$mid] : ((float) $vals[$mid] + (float) $vals[$mid + 1]) / 2.0;
+        return [
+            'lines' => $lines,
+            'meta' => [
+                'ratio' => $ratio,
+                'role_mean' => round($roleAvg, 2),
+                'peers_n' => $nPeers,
+            ],
+            'peers' => $peers,
+        ];
     }
 
     /**
@@ -1311,7 +1404,7 @@ final class StaffDisciplineService
     /**
      * @param list<array{label:string,points:int}> $extraPenalties
      *
-     * @return array{evaluated:bool, score:?int, action_count:int, activity_breakdown: list<array{label:string,count:int}>, ledger_delta:int, ledger_lines: list<array<string,mixed>>, extra_penalties: list<array{label:string,points:int}>, base_score:int, evaluation_kind:string, synthetic_adjustment:int}
+     * @return array{evaluated:true, score:int, action_count:int, activity_breakdown: list<array{label:string,count:int}>, ledger_delta:int, ledger_lines: list<array<string,mixed>>, extra_penalties: list<array{label:string,points:int}>, base_score:int, evaluation_kind:string, synthetic_adjustment:int, peer_activity_ratio:?float, role_activity_mean:?float, activite_pct_vs_role:?int}
      */
     private function finalizeEvaluatedDay(
         int $actionCount,
@@ -1321,6 +1414,9 @@ final class StaffDisciplineService
         array $extraPenalties,
         string $evaluationKind,
         int $syntheticAdjustment,
+        ?float $peerActivityRatio = null,
+        ?float $peerRoleActivityMean = null,
+        int $peerGroupSize = 0,
     ): array {
         $extraSum = 0;
         foreach ($extraPenalties as $ep) {
@@ -1331,6 +1427,23 @@ final class StaffDisciplineService
             $raw = 100.0;
         }
         $score = max(0, min(100, (int) round($raw)));
+
+        if ($evaluationKind === 'audit_activity'
+            && $peerActivityRatio !== null
+            && is_finite($peerActivityRatio)
+            && $peerGroupSize >= 2) {
+            if ($peerActivityRatio < 0.25) {
+                $score = min($score, 58);
+            } elseif ($peerActivityRatio < 0.50) {
+                $score = min($score, 73);
+            } elseif ($peerActivityRatio < 0.80) {
+                $score = min($score, 88);
+            }
+        }
+
+        $pct = ($peerActivityRatio !== null && is_finite($peerActivityRatio))
+            ? (int) max(0, min(500, (int) round($peerActivityRatio * 100)))
+            : null;
 
         return [
             'evaluated' => true,
@@ -1343,6 +1456,9 @@ final class StaffDisciplineService
             'base_score' => 100,
             'evaluation_kind' => $evaluationKind,
             'synthetic_adjustment' => $syntheticAdjustment,
+            'peer_activity_ratio' => $peerActivityRatio,
+            'role_activity_mean' => $peerRoleActivityMean,
+            'activite_pct_vs_role' => $pct,
         ];
     }
 
@@ -1367,6 +1483,24 @@ final class StaffDisciplineService
         string $dayYmd,
         DateTimeZone $tz,
     ): array {
+        if ($roleCode === 'owner') {
+            return [
+                'evaluated' => false,
+                'score' => null,
+                'action_count' => 0,
+                'activity_breakdown' => [],
+                'ledger_delta' => 0,
+                'ledger_lines' => [],
+                'extra_penalties' => [],
+                'base_score' => 100,
+                'evaluation_kind' => 'owner_exempt',
+                'synthetic_adjustment' => 0,
+                'peer_activity_ratio' => null,
+                'role_activity_mean' => null,
+                'activite_pct_vs_role' => null,
+            ];
+        }
+
         $pdo = $this->database->pdo();
         $pack = $this->measureActivityVolumeForDay($restaurantId, $userId, $roleCode, $dayYmd, $tz);
         $actionCount = $pack['action_count'];
@@ -1434,7 +1568,7 @@ final class StaffDisciplineService
                 $ledgerReasons,
                 $pdo,
             );
-            $peerAdj = $this->peerRelativeActivityAdjustments(
+            $peerPack = $this->computePeerRoleActivityPackage(
                 $restaurantId,
                 $userId,
                 $roleCode,
@@ -1443,7 +1577,22 @@ final class StaffDisciplineService
                 $tz,
                 $pdo,
             );
+            $peerAdj = $peerPack['lines'];
+            if ($roleCode === 'kitchen' && $peerPack['peers'] !== []) {
+                $sp = $this->kitchenPeerSpeedAdjustment(
+                    $restaurantId,
+                    $userId,
+                    $peerPack['peers'],
+                    $pdo,
+                    $s,
+                    $e,
+                );
+                if ($sp !== null) {
+                    $peerAdj[] = $sp;
+                }
+            }
             $merged = array_merge($extraPenalties, $bonuses, $peerAdj);
+            $meta = $peerPack['meta'];
 
             return $this->finalizeEvaluatedDay(
                 $actionCount,
@@ -1453,6 +1602,9 @@ final class StaffDisciplineService
                 $merged,
                 'audit_activity',
                 0,
+                $meta['ratio'],
+                $meta['role_mean'],
+                $meta['peers_n'],
             );
         }
 
