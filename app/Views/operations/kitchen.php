@@ -14,6 +14,7 @@ $kitchenStockRequestItemsByRequest = $kitchen_stock_request_items_by_request ?? 
 $kitchen_evolution = $kitchen_evolution ?? [];
 $module_today_pulse = $module_today_pulse ?? [];
 $day_start_hold = $day_start_hold ?? ['blocked' => false, 'reasons' => []];
+$dash_tab_extra_qs = '';
 
 ?>
 <style>
@@ -471,24 +472,22 @@ $stockBadgeClass = static function (?string $status): string {
 <?php if (!empty($flash_success)): ?><div class="flash-ok"><?= e($flash_success) ?></div><?php endif; ?>
 <?php if (!empty($flash_error)): ?><div class="flash-bad"><?= e($flash_error) ?></div><?php endif; ?>
 
-<?php if (!empty($day_start_hold['blocked'])): ?>
-<section class="status-banner status-danger no-print" style="margin-bottom:18px;">
-    <div>
-        <strong>Régularisation cuisine / service</strong>
-        <?php foreach (($day_start_hold['reasons'] ?? []) as $kr): ?><p style="margin:6px 0 0;"><?= e($kr) ?></p><?php endforeach; ?>
-    </div>
-</section>
-<?php endif; ?>
+<?php require base_path('app/Views/partials/regularization_hold_banner.php'); ?>
+<?php require base_path('app/Views/partials/operational_period_tabs.php'); ?>
 
 <?php if ($module_today_pulse !== []): ?>
 <section class="card" style="padding:18px; margin-bottom:20px;">
-    <h2 style="margin:0 0 10px;">Cuisine · journée en cours</h2>
+    <h2 style="margin:0 0 8px;">Cuisine · situation opérationnelle</h2>
+    <p class="muted" style="margin:0 0 12px;"><?= e((string) ($module_today_pulse['period_label'] ?? '')) ?><?php if (!empty($module_today_pulse['range_start_ymd']) && !empty($module_today_pulse['range_end_ymd'])): ?> · <?= e((string) $module_today_pulse['range_start_ymd']) ?> → <?= e((string) $module_today_pulse['range_end_ymd']) ?><?php endif; ?></p>
     <div class="grid stats">
-        <article class="card stat"><span>Productions (jour)</span><strong><?= e((string) (int) ($module_today_pulse['kitchen_production_count_today'] ?? 0)) ?></strong></article>
-        <article class="card stat"><span>Service ouvert</span><strong><?= e((string) (int) ($module_today_pulse['open_service_requests'] ?? 0)) ?></strong></article>
+        <article class="card stat"><span>Productions</span><strong><?= e((string) (int) ($module_today_pulse['kitchen_production_count_today'] ?? 0)) ?></strong></article>
+        <article class="card stat"><span>Service (file)</span><strong><?= e((string) (int) ($module_today_pulse['open_service_requests'] ?? 0)) ?></strong></article>
         <article class="card stat"><span>Mouv. stock</span><strong><?= e((string) (int) ($module_today_pulse['stock_movements_count_today'] ?? 0)) ?></strong></article>
         <article class="card stat"><span>Ventes clôturées</span><strong><?= e((string) (int) ($module_today_pulse['sales_closed_count_today'] ?? 0)) ?></strong></article>
     </div>
+    <?php if (empty($module_today_pulse['include_live_queues'])): ?>
+        <p class="muted" style="margin:10px 0 0;">La file service « en direct » n’est affichée que lorsque la période inclut aujourd’hui.</p>
+    <?php endif; ?>
 </section>
 <?php endif; ?>
 
@@ -514,7 +513,7 @@ $stockBadgeClass = static function (?string $status): string {
         <strong><?= e((string) count($waitingServerItems)) ?></strong>
     </article>
     <article class="card stat">
-        <span>En preparation</span>
+        <span>En préparation</span>
         <strong><?= e((string) count($preparingServerItems)) ?></strong>
     </article>
     <article class="card stat">

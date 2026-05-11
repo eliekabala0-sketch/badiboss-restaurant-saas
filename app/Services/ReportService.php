@@ -17,6 +17,24 @@ final class ReportService
     }
     public function todayForRestaurant(int $restaurantId): string { return (new DateTimeImmutable('now', $this->reportTimezone($restaurantId)))->format('Y-m-d'); }
 
+    public function timezoneForRestaurantReports(int $restaurantId): DateTimeZone
+    {
+        return $this->reportTimezone($restaurantId);
+    }
+
+    public function normalizeDatePublic(string $date, DateTimeZone $timezone): DateTimeImmutable
+    {
+        return $this->normalizeDate($date, $timezone);
+    }
+
+    /**
+     * @return array{0: DateTimeImmutable, 1: DateTimeImmutable, 2: string}
+     */
+    public function periodBoundsPublic(DateTimeImmutable $base, string $period, DateTimeZone $timezone): array
+    {
+        return $this->periodBounds($base, $period, $timezone);
+    }
+
     /**
      * Aperçu compact pour le tableau de bord /owner (jour courant uniquement, sans charger tout le rapport).
      *
@@ -174,10 +192,36 @@ final class ReportService
      */
     public function moduleTodayPulse(int $restaurantId): array
     {
+        $todayYmd = $this->todayForRestaurant($restaurantId);
+
+        return $this->moduleOperationalPulse($restaurantId, 'today', $todayYmd);
+    }
+
+    /**
+     * Tableau de bord opérationnel par période (lecture seule).
+     * Préréglages : today | yesterday | date | week | month | prev_month
+     *
+     * @return array<string, mixed>
+     */
+    public function moduleOperationalPulse(int $restaurantId, string $preset, string $anchorYmd): array
+    {
         $timezone = $this->reportTimezone($restaurantId);
         $todayYmd = $this->todayForRestaurant($restaurantId);
-        $selectedDate = $this->normalizeDate($todayYmd, $timezone);
-        [$startAt, $endAt, $label] = $this->periodBounds($selectedDate, 'daily', $timezone);
+        $preset = strtolower(trim($preset));
+        $allowed = ['today', 'yesterday', 'date', 'week', 'month', 'prev_month'];
+        if (!in_array($preset, $allowed, true)) {
+            $preset = 'today';
+        }
+        $anchor = $this->normalizeDate($anchorYmd !== '' ? $anchorYmd : $todayYmd, $timezone);
+        [$startAt, $endAt, $label] = match ($preset) {
+            'today' => $this->periodBounds($this->normalizeDate($todayYmd, $timezone), 'daily', $timezone),
+            'yesterday' => $this->periodBounds($this->normalizeDate($todayYmd, $timezone)->modify('-1 day'), 'daily', $timezone),
+            'date' => $this->periodBounds($anchor, 'daily', $timezone),
+            'week' => $this->periodBounds($anchor, 'weekly', $timezone),
+            'month' => $this->periodBounds($anchor, 'monthly', $timezone),
+            'prev_month' => $this->previousMonthBounds($this->normalizeDate($todayYmd, $timezone), $timezone),
+            default => $this->periodBounds($this->normalizeDate($todayYmd, $timezone), 'daily', $timezone),
+        };
         $s = $startAt->format('Y-m-d H:i:s');
         $e = $endAt->format('Y-m-d H:i:s');
         $closedIn = '"VALIDE","CLOTURE","VENDU_TOTAL","VENDU_PARTIEL"';
@@ -205,20 +249,26 @@ final class ReportService
         $kProdStmt->execute(['rid' => $restaurantId, 's' => $s, 'e' => $e]);
         $kitchenProductionToday = (int) $kProdStmt->fetchColumn();
 
-        $pendSrv = $pdo->prepare(
-            'SELECT COUNT(*) FROM server_requests
-             WHERE restaurant_id = :rid
-               AND status IN ("DEMANDE","EN_PREPARATION","PRET_A_SERVIR","FOURNI_PARTIEL","FOURNI_TOTAL","REMIS_SERVEUR")'
-        );
-        $pendSrv->execute(['rid' => $restaurantId]);
-        $openServiceRequests = (int) $pendSrv->fetchColumn();
+        $now = new DateTimeImmutable('now', $timezone);
+        $includeLiveQueues = $now >= $startAt && $now < $endAt;
+        $openServiceRequests = 0;
+        $openKitchenStockRequests = 0;
+        if ($includeLiveQueues) {
+            $pendSrv = $pdo->prepare(
+                'SELECT COUNT(*) FROM server_requests
+                 WHERE restaurant_id = :rid
+                   AND status IN ("DEMANDE","EN_PREPARATION","PRET_A_SERVIR","FOURNI_PARTIEL","FOURNI_TOTAL","REMIS_SERVEUR")'
+            );
+            $pendSrv->execute(['rid' => $restaurantId]);
+            $openServiceRequests = (int) $pendSrv->fetchColumn();
 
-        $pendMagasin = $pdo->prepare(
-            'SELECT COUNT(*) FROM kitchen_stock_requests
-             WHERE restaurant_id = :rid AND status NOT IN ("ANNULE","REFUSE_STOCK","CLOTURE")'
-        );
-        $pendMagasin->execute(['rid' => $restaurantId]);
-        $openKitchenStockRequests = (int) $pendMagasin->fetchColumn();
+            $pendMagasin = $pdo->prepare(
+                'SELECT COUNT(*) FROM kitchen_stock_requests
+                 WHERE restaurant_id = :rid AND status NOT IN ("ANNULE","REFUSE_STOCK","CLOTURE")'
+            );
+            $pendMagasin->execute(['rid' => $restaurantId]);
+            $openKitchenStockRequests = (int) $pendMagasin->fetchColumn();
+        }
 
         $auditStmt = $pdo->prepare(
             'SELECT COUNT(*) FROM audit_logs WHERE restaurant_id = :rid AND created_at >= :s AND created_at < :e'
@@ -227,8 +277,13 @@ final class ReportService
         $auditActionsToday = (int) $auditStmt->fetchColumn();
 
         return [
+            'dash_preset' => $preset,
+            'anchor_ymd' => $anchor->format('Y-m-d'),
+            'range_start_ymd' => $startAt->format('Y-m-d'),
+            'range_end_ymd' => $endAt->modify('-1 day')->format('Y-m-d'),
             'date_ymd' => $todayYmd,
             'period_label' => $label,
+            'include_live_queues' => $includeLiveQueues,
             'sales_closed_count_today' => (int) ($salesRow['c'] ?? 0),
             'sales_closed_total_today' => round((float) ($salesRow['t'] ?? 0), 2),
             'stock_movements_count_today' => $stockMovementsToday,
@@ -237,6 +292,19 @@ final class ReportService
             'open_kitchen_stock_requests' => $openKitchenStockRequests,
             'audit_actions_today' => $auditActionsToday,
         ];
+    }
+
+    /**
+     * @return array{0: DateTimeImmutable, 1: DateTimeImmutable, 2: string}
+     */
+    private function previousMonthBounds(DateTimeImmutable $referenceInTz, DateTimeZone $timezone): array
+    {
+        $ref = $referenceInTz->setTimezone($timezone)->setTime(0, 0, 0);
+        $firstThis = $ref->modify('first day of this month')->setTime(0, 0, 0);
+        $start = $firstThis->modify('-1 month');
+        $end = $firstThis;
+
+        return [$start, $end, 'Mois précédent · ' . $start->format('m/Y')];
     }
 
     /**

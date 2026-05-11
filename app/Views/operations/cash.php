@@ -23,15 +23,8 @@ $cashRegBack = $regularization_backlog ?? [];
 <?php if (!empty($flash_success)): ?><div class="flash-ok"><?= e($flash_success) ?></div><?php endif; ?>
 <?php if (!empty($flash_error)): ?><div class="flash-bad"><?= e($flash_error) ?></div><?php endif; ?>
 
-<?php if (!empty($dayHoldCash['blocked'])): ?>
-<section class="status-banner status-danger no-print" style="margin-bottom:20px;">
-    <div>
-        <strong>Situation à régulariser</strong>
-        <?php foreach (($dayHoldCash['reasons'] ?? []) as $r): ?><p style="margin:6px 0 0;"><?= e($r) ?></p><?php endforeach; ?>
-    </div>
-    <span class="pill badge-bad">Opérations limitées</span>
-</section>
-<?php endif; ?>
+<?php require base_path('app/Views/partials/regularization_hold_banner.php'); ?>
+<?php require base_path('app/Views/partials/operational_period_tabs.php'); ?>
 
 <?php if (is_array($cashTodaySnapC) && $cashTodaySnapC !== []): ?>
 <section class="card" style="padding:22px; margin-bottom:20px;">
@@ -49,12 +42,16 @@ $cashRegBack = $regularization_backlog ?? [];
 
 <?php if ($cashPulse !== []): ?>
 <section class="card" style="padding:18px; margin-bottom:20px;">
-    <h3 style="margin:0 0 10px;">Activité jour · restaurant</h3>
+    <h3 style="margin:0 0 8px;">Activité · restaurant</h3>
+    <p class="muted" style="margin:0 0 12px;"><?= e((string) ($cashPulse['period_label'] ?? '')) ?><?php if (!empty($cashPulse['range_start_ymd']) && !empty($cashPulse['range_end_ymd'])): ?> · <?= e((string) $cashPulse['range_start_ymd']) ?> → <?= e((string) $cashPulse['range_end_ymd']) ?><?php endif; ?></p>
     <div class="grid stats">
         <article class="card stat"><span>Ventes clôturées</span><strong><?= e((string) (int) ($cashPulse['sales_closed_count_today'] ?? 0)) ?></strong></article>
         <article class="card stat"><span>Mouv. stock</span><strong><?= e((string) (int) ($cashPulse['stock_movements_count_today'] ?? 0)) ?></strong></article>
         <article class="card stat"><span>Audit (traces)</span><strong><?= e((string) (int) ($cashPulse['audit_actions_today'] ?? 0)) ?></strong></article>
     </div>
+    <?php if (empty($cashPulse['include_live_queues'])): ?>
+        <p class="muted" style="margin:10px 0 0;">Les indicateurs « file » détaillés restent limités hors période incluant aujourd’hui.</p>
+    <?php endif; ?>
 </section>
 <?php endif; ?>
 
@@ -74,7 +71,7 @@ $rbCash = (int) (($cashRegBack['overdue_remis_a_caisse'] ?? 0) + ($cashRegBack['
 <section class="grid stats">
     <article class="card stat"><span>Total vendu</span><strong><?= e(format_money($summary['total_sold'] ?? 0, $restaurantCurrency)) ?></strong></article>
     <article class="card stat"><span>Remis a caisse</span><strong><?= e(format_money($summary['total_remitted_to_cash'] ?? 0, $restaurantCurrency)) ?></strong></article>
-    <article class="card stat"><span>Recu caisse</span><strong><?= e(format_money($summary['total_received_by_cash'] ?? 0, $restaurantCurrency)) ?></strong></article>
+    <article class="card stat"><span>Reçu caisse</span><strong><?= e(format_money($summary['total_received_by_cash'] ?? 0, $restaurantCurrency)) ?></strong></article>
     <article class="card stat"><span>Depenses</span><strong><?= e(format_money($summary['cash_expenses'] ?? 0, $restaurantCurrency)) ?></strong></article>
     <article class="card stat"><span>Solde caisse</span><strong><?= e(format_money($summary['cash_balance'] ?? 0, $restaurantCurrency)) ?></strong></article>
     <article class="card stat"><span>Ecarts</span><strong><?= e(format_money($summary['discrepancies'] ?? 0, $restaurantCurrency)) ?></strong></article>

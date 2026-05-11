@@ -6,6 +6,8 @@ namespace App\Services;
 
 use App\Core\Container;
 use App\Core\Database;
+use DateTimeImmutable;
+use DateTimeZone;
 use PDO;
 
 /**
@@ -144,6 +146,81 @@ final class StaffDisciplineService
         ];
     }
 
+    /**
+     * Panneau jauge selon le même préréglage que le tableau de bord opérationnel.
+     *
+     * @return array<string, mixed>
+     */
+    public function gaugesForUserOperationalPanel(int $restaurantId, int $userId, string $preset, string $anchorYmd): array
+    {
+        if ($userId <= 0) {
+            return [];
+        }
+        $this->ensureSchema();
+        $rs = Container::getInstance()->get('reportService');
+        $tz = $rs->timezoneForRestaurantReports($restaurantId);
+        $todayY = $rs->todayForRestaurant($restaurantId);
+        $preset = strtolower(trim($preset));
+        $allowed = ['today', 'yesterday', 'date', 'week', 'month', 'prev_month'];
+        if (!in_array($preset, $allowed, true)) {
+            $preset = 'today';
+        }
+        $anchor = $anchorYmd !== '' && preg_match('/^\d{4}-\d{2}-\d{2}$/', $anchorYmd) ? $anchorYmd : $todayY;
+        $yesterday = (new DateTimeImmutable($todayY . ' 00:00:00', $tz))->modify('-1 day')->format('Y-m-d');
+        $base = $this->gaugesForUser($restaurantId, $userId, $todayY);
+
+        $active = match ($preset) {
+            'today' => $this->snapshotDayGauge($restaurantId, $userId, $todayY, 'Aujourd’hui', $tz),
+            'yesterday' => $this->snapshotDayGauge($restaurantId, $userId, $yesterday, 'Hier', $tz),
+            'date' => $this->snapshotDayGauge($restaurantId, $userId, $anchor, 'Jour au calendrier', $tz),
+            'week' => $this->snapshotRollingAverageGauge($restaurantId, $userId, $anchor, 7, 'Moyenne sur 7 jours', $tz),
+            'month' => $this->snapshotCalendarMonthGauge($restaurantId, $userId, $anchor, false, $tz, $todayY),
+            'prev_month' => $this->snapshotCalendarMonthGauge($restaurantId, $userId, $anchor, true, $tz, $todayY),
+            default => $this->snapshotDayGauge($restaurantId, $userId, $todayY, 'Aujourd’hui', $tz),
+        };
+
+        return array_merge($base, [
+            'dash_preset' => $preset,
+            'dash_anchor_ymd' => $anchor,
+            'active_period' => $active,
+        ]);
+    }
+
+    public function restaurantActivityStartYmd(int $restaurantId): string
+    {
+        $st = $this->database->pdo()->prepare(
+            'SELECT MIN(DATE(created_at)) FROM audit_logs WHERE restaurant_id = :rid'
+        );
+        $st->execute(['rid' => $restaurantId]);
+        $d = $st->fetchColumn();
+        if (is_string($d) && $d !== '' && str_starts_with($d, '0000') === false) {
+            return $d;
+        }
+        $r = Container::getInstance()->get('restaurantAdmin')->findRestaurant($restaurantId);
+        $created = (string) ($r['created_at'] ?? '');
+        if ($created !== '') {
+            return substr($created, 0, 10);
+        }
+
+        return Container::getInstance()->get('reportService')->todayForRestaurant($restaurantId);
+    }
+
+    public function lastOperationalResetDayYmd(int $restaurantId): ?string
+    {
+        $st = $this->database->pdo()->prepare(
+            'SELECT DATE(created_at) AS d FROM audit_logs
+             WHERE restaurant_id = :rid AND action_name IN ("super_admin_data_reset","super_admin_stock_reset")
+             ORDER BY created_at DESC LIMIT 1'
+        );
+        $st->execute(['rid' => $restaurantId]);
+        $d = $st->fetchColumn();
+        if (!is_string($d) || $d === '' || str_starts_with($d, '0000')) {
+            return null;
+        }
+
+        return $d;
+    }
+
     /** @return list<array{user_id:int, full_name:string, role_code:?string, gauges: array<string,mixed>}> */
     public function gaugesSnapshotRestaurant(int $restaurantId, string $todayYmd): array
     {
@@ -159,6 +236,32 @@ final class StaffDisciplineService
                 'full_name' => (string) ($u['full_name'] ?? ''),
                 'role_code' => $u['role_code'] ?? null,
                 'gauges' => $this->gaugesForUser($restaurantId, $uid, $todayYmd),
+            ];
+        }
+
+        return $out;
+    }
+
+    /**
+     * Aperçu restaurant : même préréglage « dash » que les modules opérationnels.
+     *
+     * @return list<array{user_id:int, full_name:string, role_code:?string, gauges: array<string,mixed>}>
+     */
+    public function gaugesSnapshotRestaurantOperational(int $restaurantId, string $preset, string $anchorYmd): array
+    {
+        $this->ensureSchema();
+        $users = Container::getInstance()->get('roleAdmin')->listUsersForRestaurant($restaurantId);
+        $out = [];
+        foreach ($users as $u) {
+            $uid = (int) ($u['id'] ?? 0);
+            if ($uid <= 0) {
+                continue;
+            }
+            $out[] = [
+                'user_id' => $uid,
+                'full_name' => (string) ($u['full_name'] ?? ''),
+                'role_code' => $u['role_code'] ?? null,
+                'gauges' => $this->gaugesForUserOperationalPanel($restaurantId, $uid, $preset, $anchorYmd),
             ];
         }
 
@@ -194,11 +297,15 @@ final class StaffDisciplineService
 
     private function averageLastDays(int $restaurantId, int $userId, string $todayYmd, int $days): float
     {
-        $tz = new \DateTimeImmutable($todayYmd);
+        $glob = $this->effectiveGlobalStartYmd($restaurantId);
+        $tz = new DateTimeImmutable($todayYmd);
         $sum = 0.0;
         $n = 0;
         for ($i = 0; $i < $days; $i++) {
             $d = $tz->modify('-' . $i . ' days')->format('Y-m-d');
+            if ($d < $glob) {
+                continue;
+            }
             $sum += $this->scoreForDay($restaurantId, $userId, $d);
             $n++;
         }
@@ -209,11 +316,13 @@ final class StaffDisciplineService
     private function averageMonthToDate(int $restaurantId, int $userId, string $todayYmd): float
     {
         try {
-            $start = new \DateTimeImmutable(substr($todayYmd, 0, 7) . '-01');
-            $end = new \DateTimeImmutable($todayYmd);
+            $monthFirst = new DateTimeImmutable(substr($todayYmd, 0, 7) . '-01');
+            $end = new DateTimeImmutable($todayYmd);
         } catch (\Throwable) {
             return 100.0;
         }
+        $glob = $this->effectiveGlobalStartYmd($restaurantId);
+        $start = $monthFirst->format('Y-m-d') >= $glob ? $monthFirst : new DateTimeImmutable($glob);
         $sum = 0.0;
         $n = 0;
         for ($d = $start; $d <= $end; $d = $d->modify('+1 day')) {
@@ -222,6 +331,147 @@ final class StaffDisciplineService
         }
 
         return $n > 0 ? round($sum / $n, 1) : 100.0;
+    }
+
+    private function effectiveGlobalStartYmd(int $restaurantId): string
+    {
+        $activity = $this->restaurantActivityStartYmd($restaurantId);
+        $reset = $this->lastOperationalResetDayYmd($restaurantId);
+        $starts = [$activity];
+        if ($reset !== null) {
+            try {
+                $starts[] = (new DateTimeImmutable($reset))->modify('+1 day')->format('Y-m-d');
+            } catch (\Throwable) {
+            }
+        }
+
+        return max($starts);
+    }
+
+    /**
+     * @return array{titre: string, jour: string|null, score: int|float, zone: string, points_detail: list<array<string, mixed>>, jours_moyennes?: int}
+     */
+    private function snapshotDayGauge(int $restaurantId, int $userId, string $dayYmd, string $titre, DateTimeZone $tz): array
+    {
+        $score = $this->scoreForDay($restaurantId, $userId, $dayYmd);
+        $glob = $this->effectiveGlobalStartYmd($restaurantId);
+        if ($dayYmd < $glob) {
+            return [
+                'titre' => $titre,
+                'jour' => $dayYmd,
+                'score' => 100,
+                'zone' => 'neutre',
+                'points_detail' => [],
+                'note' => 'Avant l’activité enregistrée : neutre (non pénalisant).',
+            ];
+        }
+
+        return [
+            'titre' => $titre,
+            'jour' => $dayYmd,
+            'score' => $score,
+            'zone' => $this->zoneFromScore((float) $score),
+            'points_detail' => $this->ledgerLinesForDay($restaurantId, $userId, $dayYmd),
+        ];
+    }
+
+    /**
+     * @return array{titre: string, jour: null, score: float, zone: string, points_detail: list<array<string, mixed>>, jours_moyennes: int}
+     */
+    private function snapshotRollingAverageGauge(int $restaurantId, int $userId, string $anchorYmd, int $days, string $titre, DateTimeZone $tz): array
+    {
+        $glob = $this->effectiveGlobalStartYmd($restaurantId);
+        try {
+            $end = new DateTimeImmutable($anchorYmd . ' 00:00:00', $tz);
+        } catch (\Throwable) {
+            return ['titre' => $titre, 'jour' => null, 'score' => 100.0, 'zone' => 'vert', 'points_detail' => [], 'jours_moyennes' => 0];
+        }
+        $sum = 0.0;
+        $n = 0;
+        $details = [];
+        for ($i = 0; $i < $days; $i++) {
+            $d = $end->modify('-' . $i . ' days')->format('Y-m-d');
+            if ($d < $glob) {
+                continue;
+            }
+            $sd = $this->scoreForDay($restaurantId, $userId, $d);
+            $sum += $sd;
+            $n++;
+            foreach ($this->ledgerLinesForDay($restaurantId, $userId, $d) as $line) {
+                $details[] = $line;
+            }
+        }
+
+        $avg = $n > 0 ? round($sum / $n, 1) : 100.0;
+
+        return [
+            'titre' => $titre,
+            'jour' => null,
+            'score' => $avg,
+            'zone' => $this->zoneFromScore((float) $avg),
+            'points_detail' => array_slice($details, -24),
+            'jours_moyennes' => $n,
+        ];
+    }
+
+    /**
+     * @return array{titre: string, jour: null, score: float, zone: string, points_detail: list<array<string, mixed>>, jours_moyennes: int}
+     */
+    private function snapshotCalendarMonthGauge(int $restaurantId, int $userId, string $anchorYmd, bool $previous, DateTimeZone $tz, string $todayYmd): array
+    {
+        try {
+            $anchor = new DateTimeImmutable($anchorYmd . ' 00:00:00', $tz);
+        } catch (\Throwable) {
+            return ['titre' => 'Mois', 'jour' => null, 'score' => 100.0, 'zone' => 'vert', 'points_detail' => [], 'jours_moyennes' => 0];
+        }
+        if ($previous) {
+            $firstThis = $anchor->modify('first day of this month')->setTime(0, 0, 0);
+            $start = $firstThis->modify('-1 month');
+            $end = $firstThis->modify('-1 day')->setTime(0, 0, 0);
+            $label = 'Mois précédent · ' . $start->format('m/Y');
+        } else {
+            $start = $anchor->modify('first day of this month')->setTime(0, 0, 0);
+            $endClamp = min($anchor->format('Y-m-d'), $todayYmd);
+            $end = new DateTimeImmutable($endClamp . ' 00:00:00', $tz);
+            $label = 'Mois en cours · ' . $start->format('m/Y');
+        }
+        $glob = $this->effectiveGlobalStartYmd($restaurantId);
+        $cursor = $start->format('Y-m-d') >= $glob ? $start : new DateTimeImmutable($glob . ' 00:00:00', $tz);
+        $sum = 0.0;
+        $n = 0;
+        $details = [];
+        for ($d = $cursor; $d <= $end; $d = $d->modify('+1 day')) {
+            $ymd = $d->format('Y-m-d');
+            $sd = $this->scoreForDay($restaurantId, $userId, $ymd);
+            $sum += $sd;
+            $n++;
+            foreach ($this->ledgerLinesForDay($restaurantId, $userId, $ymd) as $line) {
+                $details[] = $line;
+            }
+        }
+        $avg = $n > 0 ? round($sum / $n, 1) : 100.0;
+
+        return [
+            'titre' => $label,
+            'jour' => null,
+            'score' => $avg,
+            'zone' => $this->zoneFromScore((float) $avg),
+            'points_detail' => array_slice($details, -40),
+            'jours_moyennes' => $n,
+        ];
+    }
+
+    /** @return list<array<string, mixed>> */
+    private function ledgerLinesForDay(int $restaurantId, int $userId, string $dayYmd): array
+    {
+        $st = $this->database->pdo()->prepare(
+            'SELECT reason_code, delta_points, label FROM staff_score_ledger
+             WHERE restaurant_id = :rid AND user_id = :uid AND day_ymd = :d
+             ORDER BY id ASC'
+        );
+        $st->execute(['rid' => $restaurantId, 'uid' => $userId, 'd' => $dayYmd]);
+
+        return $st->fetchAll(PDO::FETCH_ASSOC);
     }
 
     /** Vert / Jaune / Orange / Rouge */
@@ -240,3 +490,4 @@ final class StaffDisciplineService
         return 'rouge';
     }
 }
+

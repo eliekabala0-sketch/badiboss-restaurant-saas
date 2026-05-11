@@ -18,6 +18,7 @@ $stock_movement_history = array_slice($movements_display, 0, $stock_movement_dis
 $module_today_pulse = $module_today_pulse ?? [];
 $day_start_hold = $day_start_hold ?? ['blocked' => false, 'reasons' => []];
 $regularization_backlog = $regularization_backlog ?? [];
+$dash_tab_extra_qs = ($stockCategoryFilter !== 'all' && $stockCategoryFilter !== '') ? '&stock_cat=' . rawurlencode($stockCategoryFilter) : '';
 ?>
 <style>
 @media (max-width: 900px) {
@@ -338,24 +339,22 @@ $priorityBadgeClass = static function (?string $priority): string {
 <?php if (!empty($flash_success)): ?><div class="flash-ok"><?= e($flash_success) ?></div><?php endif; ?>
 <?php if (!empty($flash_error)): ?><div class="flash-bad"><?= e($flash_error) ?></div><?php endif; ?>
 
-<?php if (!empty($day_start_hold['blocked'])): ?>
-<section class="status-banner status-danger no-print" style="margin-bottom:18px;">
-    <div>
-        <strong>Régularisation requise</strong>
-        <?php foreach (($day_start_hold['reasons'] ?? []) as $rr): ?><p style="margin:6px 0 0;"><?= e($rr) ?></p><?php endforeach; ?>
-    </div>
-</section>
-<?php endif; ?>
+<?php require base_path('app/Views/partials/regularization_hold_banner.php'); ?>
+<?php require base_path('app/Views/partials/operational_period_tabs.php'); ?>
 
 <?php if ($module_today_pulse !== []): ?>
 <section class="card" style="padding:18px; margin-bottom:20px;">
-    <h2 style="margin:0 0 10px;">Stock · situation du jour</h2>
+    <h2 style="margin:0 0 8px;">Stock · situation opérationnelle</h2>
+    <p class="muted" style="margin:0 0 12px;"><?= e((string) ($module_today_pulse['period_label'] ?? '')) ?><?php if (!empty($module_today_pulse['range_start_ymd']) && !empty($module_today_pulse['range_end_ymd'])): ?> · <?= e((string) $module_today_pulse['range_start_ymd']) ?> → <?= e((string) $module_today_pulse['range_end_ymd']) ?><?php endif; ?></p>
     <div class="grid stats">
         <article class="card stat"><span>Mouvements magasin</span><strong><?= e((string) (int) ($module_today_pulse['stock_movements_count_today'] ?? 0)) ?></strong></article>
         <article class="card stat"><span>Productions cuisine</span><strong><?= e((string) (int) ($module_today_pulse['kitchen_production_count_today'] ?? 0)) ?></strong></article>
         <article class="card stat"><span>Demandes magasin ouvertes</span><strong><?= e((string) (int) ($module_today_pulse['open_kitchen_stock_requests'] ?? 0)) ?></strong></article>
-        <article class="card stat"><span>Ventes clôturées (jour)</span><strong><?= e((string) (int) ($module_today_pulse['sales_closed_count_today'] ?? 0)) ?></strong></article>
+        <article class="card stat"><span>Ventes clôturées</span><strong><?= e((string) (int) ($module_today_pulse['sales_closed_count_today'] ?? 0)) ?></strong></article>
     </div>
+    <?php if (empty($module_today_pulse['include_live_queues'])): ?>
+        <p class="muted" style="margin:10px 0 0;">Les demandes magasin « ouvertes » sont un instantané disponible seulement lorsque la période inclut aujourd’hui.</p>
+    <?php endif; ?>
 </section>
 <?php endif; ?>
 

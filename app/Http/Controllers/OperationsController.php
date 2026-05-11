@@ -14,6 +14,7 @@ final class OperationsController
         $restaurantId = $this->resolveRestaurantId($request);
         authorize_access('stock.view');
         $incidentCatalog = $this->incidentCatalog();
+        $kitchenStockBlocks = Container::getInstance()->get('stockService')->listKitchenStockRequestBlocks($restaurantId);
         $items = Container::getInstance()->get('stockService')->listItems($restaurantId);
         $movements = Container::getInstance()->get('stockService')->listMovementHistoryRows($restaurantId);
         $stockCategoryFilter = trim((string) ($request->query['stock_cat'] ?? 'all'));
@@ -36,7 +37,10 @@ final class OperationsController
         ksort($stockCategoryLabels, SORT_NATURAL | SORT_FLAG_CASE);
         $stockCategoryLabels = array_keys($stockCategoryLabels);
 
-        view('operations/stock', [
+        $dash = $this->operationalDashboardBundle($request, $restaurantId);
+        $hold = Container::getInstance()->get('regularizationGate')->assessForUser($restaurantId, current_user() ?? []);
+
+        view('operations/stock', array_merge($dash, [
             'title' => 'Stock',
             'restaurant' => Container::getInstance()->get('restaurantAdmin')->findRestaurant($restaurantId),
             'items' => $items,
@@ -56,10 +60,9 @@ final class OperationsController
             'responsibility_targets' => $incidentCatalog['responsibility_targets'],
             'flash_success' => flash('success'),
             'flash_error' => flash('error'),
-            'module_today_pulse' => Container::getInstance()->get('reportService')->moduleTodayPulse($restaurantId),
-            'day_start_hold' => Container::getInstance()->get('regularizationGate')->assessForUser($restaurantId, current_user() ?? []),
+            'day_start_hold' => $hold,
             'regularization_backlog' => Container::getInstance()->get('salesService')->regularizationBacklogCounts($restaurantId),
-        ]);
+        ]));
 
         audit_access('stock', $restaurantId, 'screens', 'stock', 'Consultation module stock');
     }
@@ -68,6 +71,13 @@ final class OperationsController
     {
         $restaurantId = $this->resolveRestaurantId($request);
         authorize_access('stock.create');
+
+        try {
+            $this->assertDayStartAllowsNewOperations($restaurantId);
+        } catch (\RuntimeException $exception) {
+            flash('error', ui_safe_message($exception->getMessage()));
+            redirect($this->stockUrl($restaurantId));
+        }
 
         Container::getInstance()->get('stockService')->createItem($restaurantId, [
             'name' => $request->input('name'),
@@ -209,6 +219,13 @@ final class OperationsController
         $restaurantId = $this->resolveRestaurantId($request);
         authorize_access('stock.loss.declare');
 
+        try {
+            $this->assertDayStartAllowsNewOperations($restaurantId);
+        } catch (\RuntimeException $exception) {
+            flash('error', ui_safe_message($exception->getMessage()));
+            redirect($this->stockUrl($restaurantId));
+        }
+
         Container::getInstance()->get('stockService')->declareLoss($restaurantId, [
             'stock_item_id' => $request->input('stock_item_id'),
             'quantity' => $request->input('quantity'),
@@ -228,6 +245,13 @@ final class OperationsController
             authorize_access('stock.loss.declare');
         } else {
             authorize_access('stock.entry.create');
+        }
+
+        try {
+            $this->assertDayStartAllowsNewOperations($restaurantId);
+        } catch (\RuntimeException $exception) {
+            flash('error', ui_safe_message($exception->getMessage()));
+            redirect($this->stockUrl($restaurantId));
         }
 
         Container::getInstance()->get('stockService')->recordFreeStockMovement($restaurantId, [
@@ -339,7 +363,10 @@ final class OperationsController
 
         $allCases = Container::getInstance()->get('incidentService')->listCases($restaurantId);
 
-        view('operations/kitchen', [
+        $dash = $this->operationalDashboardBundle($request, $restaurantId);
+        $hold = Container::getInstance()->get('regularizationGate')->assessForUser($restaurantId, current_user() ?? []);
+
+        view('operations/kitchen', array_merge($dash, [
             'title' => 'Cuisine',
             'restaurant' => Container::getInstance()->get('restaurantAdmin')->findRestaurant($restaurantId),
             'productions' => Container::getInstance()->get('kitchenService')->listProductions($restaurantId),
@@ -365,10 +392,9 @@ final class OperationsController
             'responsibility_targets' => $incidentCatalog['responsibility_targets'],
             'flash_success' => flash('success'),
             'flash_error' => flash('error'),
-            'module_today_pulse' => Container::getInstance()->get('reportService')->moduleTodayPulse($restaurantId),
-            'day_start_hold' => Container::getInstance()->get('regularizationGate')->assessForUser($restaurantId, current_user() ?? []),
+            'day_start_hold' => $hold,
             'regularization_backlog' => Container::getInstance()->get('salesService')->regularizationBacklogCounts($restaurantId),
-        ]);
+        ]));
 
         audit_access('kitchen', $restaurantId, 'screens', 'kitchen', 'Consultation module cuisine');
     }
@@ -439,6 +465,13 @@ final class OperationsController
         $restaurantId = $this->resolveRestaurantId($request);
         authorize_access('kitchen.incident.signal');
 
+        try {
+            $this->assertDayStartAllowsNewOperations($restaurantId);
+        } catch (\RuntimeException $exception) {
+            flash('error', ui_safe_message($exception->getMessage()));
+            redirect($this->moduleUrl('/cuisine', $restaurantId));
+        }
+
         Container::getInstance()->get('incidentService')->signalKitchenIncident($restaurantId, [
             'production_id' => $request->input('production_id'),
             'reported_category' => $request->input('reported_category', 'produit_defectueux'),
@@ -454,6 +487,13 @@ final class OperationsController
     {
         $restaurantId = $this->resolveRestaurantId($request);
         authorize_access('kitchen.stock.request');
+
+        try {
+            $this->assertDayStartAllowsNewOperations($restaurantId);
+        } catch (\RuntimeException $exception) {
+            flash('error', ui_safe_message($exception->getMessage()));
+            redirect($this->moduleUrl('/cuisine', $restaurantId));
+        }
 
         Container::getInstance()->get('stockService')->createKitchenStockRequest($restaurantId, [
             'stock_item_id' => $request->input('stock_item_id'),
@@ -564,19 +604,21 @@ final class OperationsController
         $incidentCatalog = $this->incidentCatalog();
 
         $actor = current_user();
-        $todayYRestaurant = Container::getInstance()->get('reportService')->todayForRestaurant($restaurantId);
+        $dash = $this->operationalDashboardBundle($request, $restaurantId);
+        $todayYRestaurant = $dash['today_ymd_restaurant'];
         $selfGauges = (is_array($actor) && ($actor['role_code'] ?? null) === 'cashier_server')
-            ? Container::getInstance()->get('staffDiscipline')->gaugesForUser(
+            ? Container::getInstance()->get('staffDiscipline')->gaugesForUserOperationalPanel(
                 $restaurantId,
                 (int) ($actor['id'] ?? 0),
-                $todayYRestaurant
+                (string) $dash['dash_preset'],
+                (string) $dash['dash_date'],
             )
             : null;
         $agentCash = (is_array($actor) && ($actor['role_code'] ?? null) === 'cashier_server')
             ? Container::getInstance()->get('reportService')->agentServerCashAccountReadModel($restaurantId, (int) ($actor['id'] ?? 0))
             : null;
 
-        view('operations/sales', [
+        view('operations/sales', array_merge($dash, [
             'title' => 'Ventes',
             'restaurant' => Container::getInstance()->get('restaurantAdmin')->findRestaurant($restaurantId),
             'sales' => Container::getInstance()->get('salesService')->listSales($restaurantId, $this->salesActorIdFilter()),
@@ -591,14 +633,13 @@ final class OperationsController
             'sales_overview' => Container::getInstance()->get('salesService')->serverSalesOverview($restaurantId, $this->salesActorIdFilter()),
             'agent_server_cash' => $agentCash,
             'incident_types' => $incidentCatalog['incident_types'],
-            'module_today_pulse' => Container::getInstance()->get('reportService')->moduleTodayPulse($restaurantId),
             'day_start_hold' => Container::getInstance()->get('regularizationGate')->assessForUser($restaurantId, current_user() ?? []),
             'regularization_backlog' => Container::getInstance()->get('salesService')->regularizationBacklogCounts($restaurantId),
             'cash_today_snapshot' => Container::getInstance()->get('reportService')->cashTodayOperationalSnapshot($restaurantId),
             'self_staff_gauges' => $selfGauges,
             'flash_success' => flash('success'),
             'flash_error' => flash('error'),
-        ]);
+        ]));
 
         audit_access('sales', $restaurantId, 'screens', 'sales', 'Consultation module ventes');
     }
@@ -621,7 +662,10 @@ final class OperationsController
         $clarityTo = $filters['date_to'] !== '' ? $filters['date_to'] : $today;
         $cashClarity = Container::getInstance()->get('cashService')->periodCashClarity($restaurantId, $clarityFrom, $clarityTo);
 
-        view('operations/cash', [
+        $dash = $this->operationalDashboardBundle($request, $restaurantId);
+        $hold = Container::getInstance()->get('regularizationGate')->assessForUser($restaurantId, current_user() ?? []);
+
+        view('operations/cash', array_merge($dash, [
             'title' => 'Caisse',
             'restaurant' => Container::getInstance()->get('restaurantAdmin')->findRestaurant($restaurantId),
             'cash' => Container::getInstance()->get('cashService')->dashboard($restaurantId, $filters),
@@ -630,12 +674,11 @@ final class OperationsController
             'filters' => $filters,
             'cash_clarity_period' => $cashClarity,
             'cash_today_snapshot' => Container::getInstance()->get('reportService')->cashTodayOperationalSnapshot($restaurantId),
-            'module_today_pulse' => Container::getInstance()->get('reportService')->moduleTodayPulse($restaurantId),
-            'day_start_hold' => Container::getInstance()->get('regularizationGate')->assessForUser($restaurantId, current_user() ?? []),
+            'day_start_hold' => $hold,
             'regularization_backlog' => Container::getInstance()->get('salesService')->regularizationBacklogCounts($restaurantId),
             'flash_success' => flash('success'),
             'flash_error' => flash('error'),
-        ]);
+        ]));
 
         audit_access('cash', $restaurantId, 'screens', 'cash', 'Consultation module caisse');
     }
@@ -645,6 +688,12 @@ final class OperationsController
         $restaurantId = $this->resolveRestaurantId($request);
         authorize_access('sales.create');
 
+        try {
+            $this->assertDayStartAllowsNewOperations($restaurantId);
+        } catch (\RuntimeException $exception) {
+            flash('error', ui_safe_message($exception->getMessage()));
+            redirect($this->moduleUrl('/ventes', $restaurantId));
+        }
         $items = [[
             'menu_item_id' => $request->input('menu_item_id'),
             'kitchen_production_id' => (string) $request->input('kitchen_production_id', ''),
@@ -775,6 +824,13 @@ final class OperationsController
         $restaurantId = $this->resolveRestaurantId($request);
         authorize_access('sales.incident.signal');
 
+        try {
+            $this->assertDayStartAllowsNewOperations($restaurantId);
+        } catch (\RuntimeException $exception) {
+            flash('error', ui_safe_message($exception->getMessage()));
+            redirect($this->moduleUrl('/ventes', $restaurantId));
+        }
+
         Container::getInstance()->get('incidentService')->signalSaleIncident($restaurantId, [
             'sale_item_id' => $request->input('sale_item_id'),
             'reported_category' => $request->input('reported_category', 'retour_avec_anomalie'),
@@ -815,6 +871,13 @@ final class OperationsController
     {
         $restaurantId = $this->resolveRestaurantId($request);
         authorize_access('cash_loss.declare');
+
+        try {
+            $this->assertDayStartAllowsNewOperations($restaurantId);
+        } catch (\RuntimeException $exception) {
+            flash('error', ui_safe_message($exception->getMessage()));
+            redirect($this->moduleUrl('/caisse', $restaurantId));
+        }
 
         Container::getInstance()->get('stockService')->declareCashLoss($restaurantId, [
             'reference_id' => (string) $request->input('reference_id', ''),
@@ -989,6 +1052,13 @@ final class OperationsController
         $restaurantId = $this->resolveRestaurantId($request);
         authorize_access('cash.transfer.manager');
 
+        try {
+            $this->assertDayStartAllowsNewOperations($restaurantId);
+        } catch (\RuntimeException $exception) {
+            flash('error', ui_safe_message($exception->getMessage()));
+            redirect($this->moduleUrl('/caisse', $restaurantId));
+        }
+
         Container::getInstance()->get('cashService')->transferToManager($restaurantId, [
             'to_user_id' => $request->input('to_user_id'),
             'amount' => $request->input('amount'),
@@ -1019,6 +1089,13 @@ final class OperationsController
     {
         $restaurantId = $this->resolveRestaurantId($request);
         authorize_access('cash.transfer.owner');
+
+        try {
+            $this->assertDayStartAllowsNewOperations($restaurantId);
+        } catch (\RuntimeException $exception) {
+            flash('error', ui_safe_message($exception->getMessage()));
+            redirect($this->moduleUrl('/caisse', $restaurantId));
+        }
 
         Container::getInstance()->get('cashService')->transferToOwner($restaurantId, [
             'to_user_id' => $request->input('to_user_id'),
@@ -1118,7 +1195,9 @@ final class OperationsController
             default => 'Rapport journalier',
         };
 
-        view('operations/report', [
+        $dash = $this->operationalDashboardBundle($request, $restaurantId);
+
+        view('operations/report', array_merge($dash, [
             'title' => $title,
             'restaurant' => Container::getInstance()->get('restaurantAdmin')->findRestaurant($restaurantId),
             'date' => $date,
@@ -1136,8 +1215,8 @@ final class OperationsController
             'pending_late_remittance_attributions' => Container::getInstance()->get('cashService')->listPendingLateRemittanceAttributions($restaurantId),
             'today_ymd_restaurant' => $todayYmd,
             'regularization_backlog' => Container::getInstance()->get('salesService')->regularizationBacklogCounts($restaurantId),
-            'module_today_pulse' => Container::getInstance()->get('reportService')->moduleTodayPulse($restaurantId),
-        ]);
+            'day_start_hold' => Container::getInstance()->get('regularizationGate')->assessForUser($restaurantId, current_user() ?? []),
+        ]));
 
         audit_access('reports', $restaurantId, 'screens', 'daily-report', 'Consultation rapport journalier');
     }
@@ -1164,6 +1243,30 @@ final class OperationsController
     private function resolveRestaurantId(Request $request): int
     {
         return current_restaurant_id();
+    }
+
+    /**
+     * @return array{dash_preset: string, dash_date: string, today_ymd_restaurant: string, module_today_pulse: array<string, mixed>}
+     */
+    private function operationalDashboardBundle(Request $request, int $restaurantId): array
+    {
+        $rs = Container::getInstance()->get('reportService');
+        $todayY = $rs->todayForRestaurant($restaurantId);
+        $preset = strtolower(trim((string) ($request->query['dash_preset'] ?? 'today')));
+        $allowed = ['today', 'yesterday', 'date', 'week', 'month', 'prev_month'];
+        if (!in_array($preset, $allowed, true)) {
+            $preset = 'today';
+        }
+        $dRaw = trim((string) ($request->query['dash_date'] ?? ''));
+        $d = preg_match('/^\d{4}-\d{2}-\d{2}$/', $dRaw) ? $dRaw : $todayY;
+        $pulse = $rs->moduleOperationalPulse($restaurantId, $preset, $d);
+
+        return [
+            'dash_preset' => $preset,
+            'dash_date' => $d,
+            'today_ymd_restaurant' => $todayY,
+            'module_today_pulse' => $pulse,
+        ];
     }
 
     private function assertDayStartAllowsNewOperations(int $restaurantId): void

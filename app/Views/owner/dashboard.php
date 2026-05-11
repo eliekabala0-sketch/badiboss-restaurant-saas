@@ -35,6 +35,12 @@ $decisionBadgeClass = static function (?string $status): string {
 
 <?php if (!empty($flash_success)): ?><div class="flash-ok"><?= e($flash_success) ?></div><?php endif; ?>
 <?php if (!empty($flash_error)): ?><div class="flash-bad"><?= e($flash_error) ?></div><?php endif; ?>
+<?php
+$dash_tab_extra_qs = $dash_tab_extra_qs ?? '';
+$day_start_hold = $day_start_hold ?? ['blocked' => false, 'reasons' => [], 'items' => []];
+?>
+<?php require base_path('app/Views/partials/regularization_hold_banner.php'); ?>
+<?php require base_path('app/Views/partials/operational_period_tabs.php'); ?>
 <section class="card brand-visual" style="margin-bottom:24px; background-image:url('<?= e($restaurantCover) ?>');">
     <div class="brand-visual-body">
         <img src="<?= e($restaurantLogo) ?>" alt="Logo restaurant" class="brand-visual-logo">
@@ -113,61 +119,73 @@ $decisionBadgeClass = static function (?string $status): string {
 <?php endif; ?>
 
 <?php
-$regBacklog = $regularization_backlog ?? [];
 $opPulse = $module_today_pulse ?? [];
 $staffGauges = $staff_gauges_overview ?? [];
-$regSum = (int) (($regBacklog['overdue_server_remis_serveur'] ?? 0) + ($regBacklog['overdue_remis_a_caisse'] ?? 0) + ($regBacklog['overdue_kitchen_production_returns'] ?? 0));
 ?>
-<?php if ($regSum > 0): ?>
-<section class="card no-print" style="padding:20px; margin-bottom:24px; border-left:4px solid #f59e0b;">
-    <h2 style="margin:0 0 10px;">À régulariser (aucune action automatique)</h2>
-    <p class="muted" style="margin:0 0 10px;">Le système ne crée plus de vente ni de réception caisse implicite. Les responsables doivent clôturer, remettre ou décider en caisse.</p>
-    <ul style="margin:0; padding-left:20px; line-height:1.7;">
-        <li>Commandes servies non clôturées (veille+) : <strong><?= e((string) (int) ($regBacklog['overdue_server_remis_serveur'] ?? 0)) ?></strong></li>
-        <li>Remises <code>REMIS_A_CAISSE</code> en attente décision caisse (veille+) : <strong><?= e((string) (int) ($regBacklog['overdue_remis_a_caisse'] ?? 0)) ?></strong></li>
-        <li>Productions cuisine avec retour stock provisoire &gt; 24h : <strong><?= e((string) (int) ($regBacklog['overdue_kitchen_production_returns'] ?? 0)) ?></strong></li>
-    </ul>
-</section>
-<?php endif; ?>
-
 <?php if ($opPulse !== []): ?>
 <section class="card" style="padding:20px; margin-bottom:24px;">
-    <h2 style="margin:0 0 8px;">Pulse opérationnel · <?= e((string) ($opPulse['period_label'] ?? 'aujourd’hui')) ?></h2>
+    <h2 style="margin:0 0 8px;">Pulse opérationnel · <?= e((string) ($opPulse['period_label'] ?? 'Aujourd’hui')) ?></h2>
+    <?php if (!empty($opPulse['range_start_ymd']) && !empty($opPulse['range_end_ymd'])): ?>
+        <p class="muted" style="margin:0 0 12px;"><?= e((string) $opPulse['range_start_ymd']) ?> → <?= e((string) $opPulse['range_end_ymd']) ?></p>
+    <?php endif; ?>
     <div class="grid stats">
-        <article class="card stat"><span>Ventes clôturées (jour)</span><strong><?= e((string) (int) ($opPulse['sales_closed_count_today'] ?? 0)) ?></strong></article>
+        <article class="card stat"><span>Ventes clôturées</span><strong><?= e((string) (int) ($opPulse['sales_closed_count_today'] ?? 0)) ?></strong></article>
         <article class="card stat"><span>Montant ventes clôturées</span><strong><?= e(format_money((float) ($opPulse['sales_closed_total_today'] ?? 0), $restaurantCurrency)) ?></strong></article>
-        <article class="card stat"><span>Mouvements stock (jour)</span><strong><?= e((string) (int) ($opPulse['stock_movements_count_today'] ?? 0)) ?></strong></article>
-        <article class="card stat"><span>Productions cuisine (jour)</span><strong><?= e((string) (int) ($opPulse['kitchen_production_count_today'] ?? 0)) ?></strong></article>
-        <article class="card stat"><span>Demandes service ouvertes</span><strong><?= e((string) (int) ($opPulse['open_service_requests'] ?? 0)) ?></strong></article>
+        <article class="card stat"><span>Mouvements stock</span><strong><?= e((string) (int) ($opPulse['stock_movements_count_today'] ?? 0)) ?></strong></article>
+        <article class="card stat"><span>Productions cuisine</span><strong><?= e((string) (int) ($opPulse['kitchen_production_count_today'] ?? 0)) ?></strong></article>
+        <article class="card stat"><span>Demandes service (file)</span><strong><?= e((string) (int) ($opPulse['open_service_requests'] ?? 0)) ?></strong></article>
         <article class="card stat"><span>Demandes magasin cuisine</span><strong><?= e((string) (int) ($opPulse['open_kitchen_stock_requests'] ?? 0)) ?></strong></article>
-        <article class="card stat"><span>Traçabilité (actions jour)</span><strong><?= e((string) (int) ($opPulse['audit_actions_today'] ?? 0)) ?></strong></article>
+        <article class="card stat"><span>Traçabilité (actions)</span><strong><?= e((string) (int) ($opPulse['audit_actions_today'] ?? 0)) ?></strong></article>
     </div>
+    <?php if (empty($opPulse['include_live_queues'])): ?>
+        <p class="muted" style="margin:14px 0 0;">La file service et les demandes magasin « en direct » ne s’affichent que lorsque la période inclut aujourd’hui.</p>
+    <?php endif; ?>
 </section>
 <?php endif; ?>
 
 <?php if ($staffGauges !== []): ?>
 <details class="card no-print" style="padding:18px 22px; margin-bottom:24px;">
-    <summary style="cursor:pointer;"><strong>Discipline &amp; jauges (J / S / M)</strong> · aperçu paie</summary>
-    <p class="muted" style="margin:10px 0 14px;">Score du jour = 100 + somme des points du journal (plancher 0, plafond 100). Moyenne hebdo sur 7 jours, mensuelle depuis le 1er du mois. Retenue indicative sur salaire de base : 0 % (≥90), 5 % (70–89), 15 % (50–69), 25 % (&lt;50) — les manquants caisse restent en dette séparée.</p>
+    <summary style="cursor:pointer;"><strong>Discipline et jauges</strong> · selon l’onglet période ci-dessus</summary>
+    <p class="muted" style="margin:10px 0 14px;">Score affiché = période choisie (jour, semaine, mois, etc.). Retenue indicative : selon la moyenne du mois en cours (zone mois).</p>
     <div class="table-wrap">
         <table>
-            <thead><tr><th>Agent</th><th>Rôle</th><th>Jour</th><th>Moy. 7j</th><th>Mois</th><th>Zone</th><th>Retenue indicative</th></tr></thead>
+            <thead><tr><th>Agent</th><th>Rôle</th><th>Score (période)</th><th>Zone</th><th>Moy. 7 j.</th><th>Mois</th><th>Retenue</th></tr></thead>
             <tbody>
             <?php foreach ($staffGauges as $sg): ?>
                 <?php
                 $g = $sg['gauges'] ?? [];
+                $ap = is_array($g['active_period'] ?? null) ? $g['active_period'] : [];
+                $scoreP = $ap['score'] ?? ($g['daily'] ?? 100);
+                $zoneP = $ap['zone'] ?? ($g['zone'] ?? 'vert');
                 $mavg = (float) ($g['monthly_avg'] ?? 100);
                 $ret = $mavg >= 90 ? 0.0 : ($mavg >= 70 ? 5.0 : ($mavg >= 50 ? 15.0 : 25.0));
                 ?>
                 <tr>
                     <td><?= e((string) ($sg['full_name'] ?? '')) ?></td>
-                    <td><?= e((string) ($sg['role_code'] ?? '')) ?></td>
-                    <td><?= e((string) (int) ($g['daily'] ?? 100)) ?></td>
+                    <td><?= e(restaurant_role_label($sg['role_code'] ?? null)) ?></td>
+                    <td><?= e((string) $scoreP) ?></td>
+                    <td><?= e(ucfirst((string) $zoneP)) ?></td>
                     <td><?= e((string) ($g['weekly_avg'] ?? 100)) ?></td>
                     <td><?= e((string) ($g['monthly_avg'] ?? 100)) ?></td>
-                    <td><?= e((string) ($g['zone'] ?? 'vert')) ?></td>
                     <td><?= e((string) $ret) ?> %</td>
                 </tr>
+                <?php if (!empty($ap['points_detail']) && is_array($ap['points_detail'])): ?>
+                <tr>
+                    <td colspan="7" class="muted" style="font-size:0.92rem;">
+                        <strong><?= e((string) ($ap['titre'] ?? '')) ?></strong><?php if (!empty($ap['jour'])): ?> · <?= e((string) $ap['jour']) ?><?php endif; ?>
+                        <?php if (!empty($ap['note'])): ?><span> — <?= e((string) $ap['note']) ?></span><?php endif; ?>
+                        <?php if (!empty($ap['jours_moyennes'])): ?><span> — <?= e((string) (int) $ap['jours_moyennes']) ?> jour(s) pris en compte</span><?php endif; ?>
+                        <ul style="margin:8px 0 0; padding-left:18px;">
+                            <?php foreach ($ap['points_detail'] as $row): ?>
+                                <?php if (!is_array($row)) {
+                                    continue;
+                                } ?>
+                                <li><?= e((string) ($row['delta_points'] ?? '')) ?> pts — <?= e((string) ($row['label'] ?? '')) ?></li>
+                            <?php endforeach; ?>
+                        </ul>
+                    </td>
+                </tr>
+                <?php endif; ?>
             <?php endforeach; ?>
             </tbody>
         </table>

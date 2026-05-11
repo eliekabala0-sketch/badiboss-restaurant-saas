@@ -50,6 +50,9 @@ $rptUserQ = $rptUid > 0 ? '&user_id=' . rawurlencode((string) $rptUid) : '';
 $ridQsa = ((current_user()['scope'] ?? null) === 'super_admin' && !empty($restaurant['id']))
     ? '&restaurant_id=' . rawurlencode((string) (int) $restaurant['id'])
     : '';
+$dash_tab_extra_qs = $rptUserQ . $ridQsa;
+$dash_tab_extra_qs .= '&date=' . rawurlencode((string) ($date ?? ''));
+$dash_tab_extra_qs .= '&period=' . rawurlencode((string) ($period ?? 'daily'));
 $regularizationBacklog = $regularization_backlog ?? [];
 $module_today_pulse = $module_today_pulse ?? [];
 ?>
@@ -140,6 +143,9 @@ window.addEventListener('beforeprint', function () {
     </div>
 </section>
 
+<?php require base_path('app/Views/partials/regularization_hold_banner.php'); ?>
+<?php require base_path('app/Views/partials/operational_period_tabs.php'); ?>
+
 <?php if (!empty($cashTodaySnap)): ?>
 <section class="card" style="padding:22px; margin-top:24px;">
     <div class="topbar" style="margin-bottom:14px;">
@@ -201,13 +207,17 @@ $mPulse = $module_today_pulse ?? [];
 
 <?php if ($mPulse !== []): ?>
 <section class="card" style="padding:18px; margin-top:16px;">
-    <h3 style="margin:0 0 10px;">Activité du jour (restaurant)</h3>
+    <h3 style="margin:0 0 8px;">Activité opérationnelle (aperçu)</h3>
+    <p class="muted" style="margin:0 0 12px;"><?= e((string) ($mPulse['period_label'] ?? '')) ?><?php if (!empty($mPulse['range_start_ymd']) && !empty($mPulse['range_end_ymd'])): ?> · <?= e((string) $mPulse['range_start_ymd']) ?> → <?= e((string) $mPulse['range_end_ymd']) ?><?php endif; ?></p>
     <div class="grid stats">
         <article class="card stat"><span>Ventes clôturées</span><strong><?= e((string) (int) ($mPulse['sales_closed_count_today'] ?? 0)) ?></strong></article>
         <article class="card stat"><span>Stock (mouv.)</span><strong><?= e((string) (int) ($mPulse['stock_movements_count_today'] ?? 0)) ?></strong></article>
         <article class="card stat"><span>Cuisine (prod.)</span><strong><?= e((string) (int) ($mPulse['kitchen_production_count_today'] ?? 0)) ?></strong></article>
-        <article class="card stat"><span>Service ouvert</span><strong><?= e((string) (int) ($mPulse['open_service_requests'] ?? 0)) ?></strong></article>
+        <article class="card stat"><span>Service (file)</span><strong><?= e((string) (int) ($mPulse['open_service_requests'] ?? 0)) ?></strong></article>
     </div>
+    <?php if (empty($mPulse['include_live_queues'])): ?>
+        <p class="muted" style="margin:10px 0 0;">File service « en direct » : uniquement si la période sélectionnée inclut aujourd’hui.</p>
+    <?php endif; ?>
 </section>
 <?php endif; ?>
 

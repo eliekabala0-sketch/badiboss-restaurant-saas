@@ -899,6 +899,23 @@ function service_flow_status_label(?string $status): string
     };
 }
 
+function cash_transfer_public_label(?string $status): string
+{
+    return match ((string) $status) {
+        'REMIS_A_CAISSE' => 'En attente à la caisse',
+        'RECU_CAISSE' => 'Reçu à la caisse',
+        'REMISE_REJETEE_CAISSE', 'REMISE_REJETEE_GERANT' => 'Rejeté',
+        'ECART_SIGNALE' => 'Écart signalé',
+        'SOUMIS_GERANT' => 'Soumis au gérant',
+        'REMIS_A_GERANT' => 'En attente gérant',
+        'RECU_GERANT' => 'Reçu gérant',
+        'REMIS_A_PROPRIETAIRE' => 'En attente propriétaire',
+        'RECU_PROPRIETAIRE' => 'Reçu propriétaire',
+        'EN_ATTENTE_REMISE' => 'En attente de remise',
+        default => 'À traiter',
+    };
+}
+
 function stock_request_status_label(?string $status): string
 {
     return match ($status) {

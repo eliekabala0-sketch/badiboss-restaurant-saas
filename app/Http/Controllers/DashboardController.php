@@ -226,7 +226,11 @@ final class DashboardController
         $staffDisc = Container::getInstance()->get('staffDiscipline');
         $staffDisc->ensureSchema();
 
-        view('owner/dashboard', [
+        $dash = $this->ownerOperationalDashboardBundle($request, $restaurantId);
+        $wideTasks = Container::getInstance()->get('regularizationGate')->listRestaurantWideTasks($restaurantId, 30);
+        $hold = Container::getInstance()->get('regularizationGate')->assessForUser($restaurantId, current_user() ?? []);
+
+        view('owner/dashboard', array_merge($dash, [
             'title' => 'Tableau de bord restaurant',
             'user' => $_SESSION['user'],
             'restaurant' => $restaurant,
@@ -252,15 +256,44 @@ final class DashboardController
                 ? Container::getInstance()->get('reportService')->reportDetailSummaryForDashboard($restaurantId)
                 : null,
             'regularization_backlog' => Container::getInstance()->get('salesService')->regularizationBacklogCounts($restaurantId),
-            'module_today_pulse' => Container::getInstance()->get('reportService')->moduleTodayPulse($restaurantId),
+            'restaurant_reg_tasks' => $wideTasks,
+            'day_start_hold' => $hold,
             'staff_gauges_overview' => in_array((string) ($_SESSION['user']['role_code'] ?? ''), ['owner', 'manager'], true)
-                ? $staffDisc->gaugesSnapshotRestaurant($restaurantId, $todayY)
+                ? $staffDisc->gaugesSnapshotRestaurantOperational(
+                    $restaurantId,
+                    (string) ($dash['dash_preset'] ?? 'today'),
+                    (string) ($dash['dash_date'] ?? $todayY),
+                )
                 : [],
             'flash_success' => flash('success'),
             'flash_error' => flash('error'),
-        ]);
+        ]));
 
         audit_access('dashboard', $restaurantId, 'screens', 'owner-dashboard', 'Consultation tableau de bord restaurant');
+    }
+
+    /**
+     * @return array{dash_preset: string, dash_date: string, today_ymd_restaurant: string, module_today_pulse: array<string, mixed>}
+     */
+    private function ownerOperationalDashboardBundle(Request $request, int $restaurantId): array
+    {
+        $rs = Container::getInstance()->get('reportService');
+        $todayY = $rs->todayForRestaurant($restaurantId);
+        $preset = strtolower(trim((string) ($request->query['dash_preset'] ?? 'today')));
+        $allowed = ['today', 'yesterday', 'date', 'week', 'month', 'prev_month'];
+        if (!in_array($preset, $allowed, true)) {
+            $preset = 'today';
+        }
+        $dRaw = trim((string) ($request->query['dash_date'] ?? ''));
+        $d = preg_match('/^\d{4}-\d{2}-\d{2}$/', $dRaw) ? $dRaw : $todayY;
+        $pulse = $rs->moduleOperationalPulse($restaurantId, $preset, $d);
+
+        return [
+            'dash_preset' => $preset,
+            'dash_date' => $d,
+            'today_ymd_restaurant' => $todayY,
+            'module_today_pulse' => $pulse,
+        ];
     }
 
     private function superAdminDashboardPayload(
