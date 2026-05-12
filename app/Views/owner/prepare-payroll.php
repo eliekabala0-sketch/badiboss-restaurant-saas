@@ -40,9 +40,13 @@ $periodLabel = (string) ($preview['period_label'] ?? '');
             <th>Salaire base</th>
             <th>Jauge mois (moy.)</th>
             <th>Profil</th>
+            <th>Abs. non just.</th>
+            <th>Repos (saisis)</th>
             <th>Présences (lignes)</th>
-            <th>Pts pénalité (ledger)</th>
-            <th>Retenue proposée</th>
+            <th>Pts pénalité</th>
+            <th>Retenue %</th>
+            <th>Retenue (est.)</th>
+            <th>Déduc. absence (est.)</th>
             <th>Prime</th>
             <th>Net proposé</th>
         </tr>
@@ -83,9 +87,13 @@ $periodLabel = (string) ($preview['period_label'] ?? '');
                 <td><?= e(format_money((float) ($r['base_salary_monthly'] ?? 0), (string) ($r['currency'] ?? 'USD'))) ?></td>
                 <td><?= ($r['monthly_score_avg'] ?? null) === null ? 'Non évalué' : e((string) $r['monthly_score_avg']) . ' %' ?></td>
                 <td><span class="pill <?= e($payrollZonePill($zRaw)) ?>"><?= e($payrollZoneLabel($zRaw)) ?></span></td>
+                <td><?= e((string) (int) ($r['unjustified_absence_days'] ?? 0)) ?></td>
+                <td><?= e((string) (int) ($r['rest_days_recorded'] ?? 0)) ?></td>
                 <td><?= e((string) (int) ($r['attendance_days_recorded'] ?? 0)) ?></td>
                 <td><?= e((string) (int) ($r['ledger_penalty_points_month'] ?? 0)) ?></td>
                 <td><?= e((string) (float) ($r['retention_proposed_pct'] ?? 0)) ?> %</td>
+                <td><?= e(format_money((float) ($r['retention_amount_est'] ?? 0), (string) ($r['currency'] ?? 'USD'))) ?></td>
+                <td><?= e(format_money((float) ($r['deduction_absence_est'] ?? 0), (string) ($r['currency'] ?? 'USD'))) ?></td>
                 <td><?= e(format_money((float) ($r['bonus_monthly'] ?? 0), (string) ($r['currency'] ?? 'USD'))) ?></td>
                 <td><strong><?= e(format_money((float) ($r['net_pay_proposed'] ?? 0), (string) ($r['currency'] ?? 'USD'))) ?></strong></td>
             </tr>

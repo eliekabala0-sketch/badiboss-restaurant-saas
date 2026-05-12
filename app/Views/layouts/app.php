@@ -719,8 +719,10 @@ declare(strict_types=1);
                     <?php if (can_access('platform.audit.view')): ?><a href="/super-admin/audit">Journal d’audit</a><?php endif; ?>
                 <?php else: ?>
                     <?php if (can_access('tenant.dashboard.view')): ?><a href="/owner">Tableau de bord</a><?php endif; ?>
+                    <?php if (can_access('staff.team_gauges.view')): ?><a href="/owner/discipline">Discipline</a><?php endif; ?>
                     <?php if (can_access('menu.view')): ?><a href="/owner/menu">Menu</a><?php endif; ?>
                     <?php if (can_access('payroll.prepare.view')): ?><a href="/owner/paie/preparer">Préparer la paie</a><?php endif; ?>
+                    <?php if (!can_access('staff.team_gauges.view') && (current_user()['scope'] ?? null) !== 'super_admin'): ?><a href="/ma-discipline">Ma discipline</a><?php endif; ?>
                     <?php if (can_access('stock.view')): ?><a href="/stock">Stock</a><?php endif; ?>
                     <?php if (can_access('kitchen.view')): ?><a href="/cuisine">Cuisine</a><?php endif; ?>
                     <?php if (can_access('sales.view')): ?><a href="/ventes">Ventes</a><?php endif; ?>

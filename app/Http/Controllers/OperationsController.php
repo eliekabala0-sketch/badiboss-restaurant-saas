@@ -1462,6 +1462,49 @@ final class OperationsController
         redirect($this->moduleUrl('/owner', $restaurantId));
     }
 
+    public function myDiscipline(Request $request): void
+    {
+        $actor = current_user();
+        if (!is_array($actor) || ($actor['scope'] ?? null) === 'super_admin') {
+            http_response_code(403);
+            echo '403 Forbidden';
+
+            return;
+        }
+        $restaurantId = $this->resolveRestaurantId($request);
+        if ($restaurantId <= 0) {
+            redirect('/login');
+        }
+        if (can_access('staff.team_gauges.view')) {
+            redirect('/owner/discipline');
+        }
+        $staffDisc = Container::getInstance()->get('staffDiscipline');
+        $staffDisc->ensureSchema();
+        $todayY = Container::getInstance()->get('reportService')->todayForRestaurant($restaurantId);
+        $dash = $this->operationalDashboardBundle($request, $restaurantId, (int) ($actor['id'] ?? 0), false);
+        $role = (string) ($actor['role_code'] ?? '');
+        $highlights = [];
+        if (in_array($role, ['cashier_server', 'kitchen', 'stock_manager', 'cashier_accountant'], true)) {
+            $highlights = Container::getInstance()->get('reportService')->userAuditHighlightsForOperationalPreset(
+                $restaurantId,
+                (int) ($actor['id'] ?? 0),
+                (string) ($dash['dash_preset'] ?? 'today'),
+                (string) ($dash['dash_date'] ?? $todayY),
+                $role,
+            );
+        }
+        view('operations/my-discipline', array_merge($dash, [
+            'title' => 'Ma discipline',
+            'user' => $actor,
+            'restaurant' => Container::getInstance()->get('restaurantAdmin')->findRestaurant($restaurantId),
+            'my_gauges' => $staffDisc->gaugesForUserOperationalPanel($restaurantId, (int) ($actor['id'] ?? 0), 'today', $todayY),
+            'discipline_schedule' => $staffDisc->disciplineWorkScheduleForRestaurant($restaurantId),
+            'staff_audit_highlights' => $highlights,
+        ]));
+
+        audit_access('discipline', $restaurantId, 'screens', 'my-discipline', 'Consultation discipline personnelle');
+    }
+
     private function resolveRestaurantId(Request $request): int
     {
         return current_restaurant_id();

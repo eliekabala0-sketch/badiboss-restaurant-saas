@@ -42,7 +42,7 @@ $day_start_hold = $day_start_hold ?? ['blocked' => false, 'reasons' => [], 'item
 <?php require base_path('app/Views/partials/regularization_hold_banner.php'); ?>
 <?php require base_path('app/Views/partials/operational_period_tabs.php'); ?>
 <?php if (can_access('staff.team_gauges.view')): ?>
-<section class="card no-print" style="padding:16px 18px; margin-bottom:18px;">
+<section class="card no-print" id="discipline-horaires" style="padding:16px 18px; margin-bottom:18px;">
     <h3 style="margin:0 0 8px; font-size:1.05rem;">Paramètres horaires discipline</h3>
     <?php $dws = is_array($discipline_work_schedule ?? null) ? $discipline_work_schedule : []; ?>
     <?php if (!empty($dws['notice_unset'])): ?>

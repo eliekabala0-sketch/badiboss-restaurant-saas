@@ -21,6 +21,9 @@ final class StaffDisciplineService
     /** @var array<string, true> */
     private array $absenceEscalationSynced = [];
 
+    /** @var array<string, string> */
+    private array $engagementStartYmdCache = [];
+
     public function __construct(private readonly Database $database)
     {
     }
@@ -74,6 +77,28 @@ final class StaffDisciplineService
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci'
         );
         $this->ensureStaffDisciplinePermissions();
+        $this->ensureStaffPayrollProfileExtras();
+    }
+
+    /**
+     * Colonnes optionnelles (ALTER idempotent) — pas de suppression de données.
+     */
+    private function ensureStaffPayrollProfileExtras(): void
+    {
+        $pdo = $this->database->pdo();
+        foreach ([
+            'ALTER TABLE staff_payroll_profiles ADD COLUMN service_start_ymd DATE NULL',
+            'ALTER TABLE staff_payroll_profiles ADD COLUMN bonus_monthly DECIMAL(12,2) NOT NULL DEFAULT 0',
+            'ALTER TABLE staff_payroll_profiles ADD COLUMN profile_note VARCHAR(500) NULL',
+        ] as $sql) {
+            try {
+                $pdo->exec($sql);
+            } catch (\PDOException $e) {
+                if ((int) ($e->errorInfo[1] ?? 0) !== 1060) {
+                    throw $e;
+                }
+            }
+        }
     }
 
     private function ensureStaffDisciplinePermissions(): void
@@ -130,6 +155,152 @@ final class StaffDisciplineService
         $this->userFirstActivityYmdCache[$k] = $ymd;
 
         return $ymd;
+    }
+
+    /**
+     * Premier jour où la discipline s’applique : max(début restaurant / post-reset,
+     * date sur le profil paie, sinon date de création du compte — fuseau rapports).
+     */
+    public function effectiveAgentEngagementStartYmd(int $restaurantId, int $userId, DateTimeZone $tz): string
+    {
+        $this->ensureSchema();
+        $cacheKey = $restaurantId . ':' . $userId . ':' . $tz->getName();
+        if (array_key_exists($cacheKey, $this->engagementStartYmdCache)) {
+            return $this->engagementStartYmdCache[$cacheKey];
+        }
+        $glob = $this->effectiveGlobalStartYmd($restaurantId);
+        $st = $this->database->pdo()->prepare(
+            'SELECT u.created_at, p.service_start_ymd
+             FROM users u
+             LEFT JOIN staff_payroll_profiles p ON p.restaurant_id = u.restaurant_id AND p.user_id = u.id
+             WHERE u.id = :uid AND u.restaurant_id = :rid
+             LIMIT 1'
+        );
+        $st->execute(['uid' => $userId, 'rid' => $restaurantId]);
+        $row = $st->fetch(PDO::FETCH_ASSOC) ?: null;
+        if ($row === null) {
+            $this->engagementStartYmdCache[$cacheKey] = $glob;
+
+            return $glob;
+        }
+        $createdYmd = $glob;
+        $createdAt = trim((string) ($row['created_at'] ?? ''));
+        if ($createdAt !== '') {
+            try {
+                $createdYmd = (new DateTimeImmutable($createdAt, new DateTimeZone('UTC')))->setTimezone($tz)->format('Y-m-d');
+            } catch (\Throwable) {
+            }
+        }
+        if (str_starts_with($createdYmd, '0000')) {
+            $createdYmd = $glob;
+        }
+        $manual = trim((string) ($row['service_start_ymd'] ?? ''));
+        if ($manual !== '' && preg_match('/^\d{4}-\d{2}-\d{2}$/', $manual)) {
+            $base = $manual;
+        } else {
+            $base = $createdYmd;
+        }
+        $out = max($glob, $base);
+        $this->engagementStartYmdCache[$cacheKey] = $out;
+
+        return $out;
+    }
+
+    /** @return array{status: string, created_at: string}|null */
+    private function userTenantRowForDiscipline(int $restaurantId, int $userId): ?array
+    {
+        $st = $this->database->pdo()->prepare(
+            'SELECT status, created_at FROM users WHERE id = :uid AND restaurant_id = :rid LIMIT 1'
+        );
+        $st->execute(['uid' => $userId, 'rid' => $restaurantId]);
+        $row = $st->fetch(PDO::FETCH_ASSOC);
+
+        return $row === false ? null : $row;
+    }
+
+    public function normalizeAttendanceStatusPublic(string $raw): string
+    {
+        return $this->normalizeAttendanceStatus($raw);
+    }
+
+    public function upsertStaffAttendanceDay(
+        int $restaurantId,
+        int $targetUserId,
+        string $dayYmd,
+        string $plannedStatusRaw,
+        ?string $managerNote,
+        array $actor,
+    ): void {
+        $this->ensureSchema();
+        if ($targetUserId <= 0 || !preg_match('/^\d{4}-\d{2}-\d{2}$/', $dayYmd)) {
+            throw new \RuntimeException('Données présence invalides.');
+        }
+        $status = $this->normalizeAttendanceStatus($plannedStatusRaw);
+        $note = $managerNote !== null ? trim($managerNote) : '';
+        $note = $note === '' ? null : $note;
+        $actorId = (int) ($actor['id'] ?? 0);
+        $ins = $this->database->pdo()->prepare(
+            'INSERT INTO staff_attendance_day
+            (restaurant_id, user_id, day_ymd, planned_status, manager_note, updated_by)
+             VALUES (:rid, :uid, :d, :st, :note, :by)
+             ON DUPLICATE KEY UPDATE planned_status = VALUES(planned_status), manager_note = VALUES(manager_note), updated_by = VALUES(updated_by)'
+        );
+        $ins->execute([
+            'rid' => $restaurantId,
+            'uid' => $targetUserId,
+            'd' => $dayYmd,
+            'st' => $status,
+            'note' => $note,
+            'by' => $actorId > 0 ? $actorId : null,
+        ]);
+    }
+
+    public function upsertStaffPayrollProfile(
+        int $restaurantId,
+        int $targetUserId,
+        array $payload,
+        array $actor,
+    ): void {
+        $this->ensureSchema();
+        $base = (float) ($payload['base_salary_monthly'] ?? 0);
+        if ($base < 0 || !is_finite($base)) {
+            throw new \RuntimeException('Salaire de base invalide.');
+        }
+        $bonus = (float) ($payload['bonus_monthly'] ?? 0);
+        if ($bonus < 0 || !is_finite($bonus)) {
+            throw new \RuntimeException('Prime invalide.');
+        }
+        $currency = strtoupper(trim((string) ($payload['currency'] ?? 'USD')));
+        if ($currency === '' || strlen($currency) > 8) {
+            throw new \RuntimeException('Devise invalide.');
+        }
+        $svcRaw = trim((string) ($payload['service_start_ymd'] ?? ''));
+        $serviceStart = null;
+        if ($svcRaw !== '' && preg_match('/^\d{4}-\d{2}-\d{2}$/', $svcRaw)) {
+            $serviceStart = $svcRaw;
+        }
+        $profileNote = trim((string) ($payload['profile_note'] ?? ''));
+        $profileNote = $profileNote === '' ? null : $profileNote;
+        $actorId = (int) ($actor['id'] ?? 0);
+        $sql = 'INSERT INTO staff_payroll_profiles
+            (restaurant_id, user_id, base_salary_monthly, bonus_monthly, currency, service_start_ymd, profile_note, updated_by)
+            VALUES (:rid, :uid, :base, :bonus, :cur, :svc, :pn, :by)
+            ON DUPLICATE KEY UPDATE base_salary_monthly = VALUES(base_salary_monthly), bonus_monthly = VALUES(bonus_monthly), currency = VALUES(currency), service_start_ymd = VALUES(service_start_ymd), profile_note = VALUES(profile_note), updated_by = VALUES(updated_by)';
+        $this->database->pdo()->prepare($sql)->execute([
+            'rid' => $restaurantId,
+            'uid' => $targetUserId,
+            'base' => round($base, 2),
+            'bonus' => round($bonus, 2),
+            'cur' => $currency,
+            'svc' => $serviceStart,
+            'pn' => $profileNote,
+            'by' => $actorId > 0 ? $actorId : null,
+        ]);
+        foreach (array_keys($this->engagementStartYmdCache) as $ck) {
+            if (str_starts_with($ck, $restaurantId . ':' . $targetUserId . ':')) {
+                unset($this->engagementStartYmdCache[$ck]);
+            }
+        }
     }
 
     /**
@@ -375,12 +546,9 @@ final class StaffDisciplineService
             return null;
         }
         $glob = $this->effectiveGlobalStartYmd($restaurantId);
-        $userFirst = $this->userFirstActivityDayYmd($restaurantId, $userId, $tz);
-        if ($userFirst === null) {
-            return null;
-        }
+        $engagement = $this->effectiveAgentEngagementStartYmd($restaurantId, $userId, $tz);
         try {
-            $start = max($fromYmd, $glob, $userFirst);
+            $start = max($fromYmd, $glob, $engagement);
             $endD = new DateTimeImmutable($toYmd . ' 00:00:00', $tz);
             $cur = new DateTimeImmutable($start . ' 00:00:00', $tz);
         } catch (\Throwable) {
@@ -522,6 +690,9 @@ final class StaffDisciplineService
             if ($uid <= 0 || $this->isOwnerDisciplineRole((string) ($u['role_code'] ?? ''))) {
                 continue;
             }
+            if (($u['status'] ?? '') !== 'active') {
+                continue;
+            }
             $out[] = [
                 'user_id' => $uid,
                 'full_name' => (string) ($u['full_name'] ?? ''),
@@ -546,6 +717,9 @@ final class StaffDisciplineService
         foreach ($users as $u) {
             $uid = (int) ($u['id'] ?? 0);
             if ($uid <= 0 || $this->isOwnerDisciplineRole((string) ($u['role_code'] ?? ''))) {
+                continue;
+            }
+            if (($u['status'] ?? '') !== 'active') {
                 continue;
             }
             $out[] = [
@@ -617,6 +791,9 @@ final class StaffDisciplineService
             $uid = (int) ($u['id'] ?? 0);
             $role = (string) ($u['role_code'] ?? '');
             if ($uid <= 0 || $this->isOwnerDisciplineRole($role)) {
+                continue;
+            }
+            if (($u['status'] ?? '') !== 'active') {
                 continue;
             }
             $name = (string) ($u['full_name'] ?? '');
@@ -1017,6 +1194,48 @@ final class StaffDisciplineService
         return 25.0;
     }
 
+    private function countUnjustifiedAbsenceDaysInRange(
+        int $restaurantId,
+        int $userId,
+        string $roleCode,
+        string $fromYmd,
+        string $toYmd,
+        DateTimeZone $tz,
+    ): int {
+        $eng = $this->effectiveAgentEngagementStartYmd($restaurantId, $userId, $tz);
+        $start = max($fromYmd, $eng);
+        if ($start > $toYmd) {
+            return 0;
+        }
+        try {
+            $cur = new DateTimeImmutable($start . ' 00:00:00', $tz);
+            $endD = new DateTimeImmutable($toYmd . ' 00:00:00', $tz);
+        } catch (\Throwable) {
+            return 0;
+        }
+        $n = 0;
+        for ($d = $cur; $d <= $endD; $d = $d->modify('+1 day')) {
+            $ev = $this->evaluateCalendarDay($restaurantId, $userId, $roleCode, $d->format('Y-m-d'), $tz);
+            if (!empty($ev['evaluated']) && ($ev['evaluation_kind'] ?? '') === 'absence_unjustified') {
+                $n++;
+            }
+        }
+
+        return $n;
+    }
+
+    private function countReposAttendanceDaysInMonth(int $restaurantId, int $userId, string $monthKey): int
+    {
+        $st = $this->database->pdo()->prepare(
+            'SELECT COUNT(*) FROM staff_attendance_day
+             WHERE restaurant_id = :rid AND user_id = :uid AND DATE_FORMAT(day_ymd, "%Y-%m") = :m
+               AND planned_status = "REPOS"'
+        );
+        $st->execute(['rid' => $restaurantId, 'uid' => $userId, 'm' => $monthKey]);
+
+        return (int) $st->fetchColumn();
+    }
+
     /**
      * Aperçu paie (lecture) : mois, agents, base, jauge, présences, retenue indicative, net proposé.
      *
@@ -1044,7 +1263,8 @@ final class StaffDisciplineService
 
         $pdo = $this->database->pdo();
         $profSt = $pdo->prepare(
-            'SELECT user_id, base_salary_monthly, currency FROM staff_payroll_profiles WHERE restaurant_id = :rid'
+            'SELECT user_id, base_salary_monthly, bonus_monthly, currency, service_start_ymd, profile_note
+             FROM staff_payroll_profiles WHERE restaurant_id = :rid'
         );
         $profSt->execute(['rid' => $restaurantId]);
         $profiles = [];
@@ -1058,13 +1278,23 @@ final class StaffDisciplineService
             if ($uid <= 0 || $this->isOwnerDisciplineRole((string) ($u['role_code'] ?? ''))) {
                 continue;
             }
+            if (($u['status'] ?? '') !== 'active') {
+                continue;
+            }
             $roleCode = (string) ($u['role_code'] ?? '');
             $monthlyScore = $this->averageEvaluatedDaysInRange($restaurantId, $uid, $start, $end, $tz);
             $retentionPct = $this->proposedSalaryRetentionPercent($monthlyScore);
             $base = (float) ($profiles[$uid]['base_salary_monthly'] ?? 0);
             $currency = (string) ($profiles[$uid]['currency'] ?? 'USD');
-            $bonus = 0.0;
-            $net = round($base * (1 - $retentionPct / 100) + $bonus, 2);
+            $bonus = (float) ($profiles[$uid]['bonus_monthly'] ?? 0);
+            if (!is_finite($bonus) || $bonus < 0) {
+                $bonus = 0.0;
+            }
+            $unjDays = $this->countUnjustifiedAbsenceDaysInRange($restaurantId, $uid, $roleCode, $start, $end, $tz);
+            $perDayAbs = $base > 0 ? min($base / 22, $base * 0.12) : 0.0;
+            $absDeduction = round(min($base * 0.35, $unjDays * $perDayAbs), 2);
+            $scoreRetentionAmt = round($base * ($retentionPct / 100), 2);
+            $net = round(max(0, $base - $scoreRetentionAmt + $bonus - $absDeduction), 2);
 
             $attSt = $pdo->prepare(
                 'SELECT COUNT(*) FROM staff_attendance_day
@@ -1072,6 +1302,7 @@ final class StaffDisciplineService
             );
             $attSt->execute(['rid' => $restaurantId, 'uid' => $uid, 'm' => $monthKey]);
             $attDays = (int) $attSt->fetchColumn();
+            $restDays = $this->countReposAttendanceDaysInMonth($restaurantId, $uid, $monthKey);
 
             $penSt = $pdo->prepare(
                 'SELECT COALESCE(SUM(LEAST(0, delta_points)), 0) AS pts
@@ -1090,7 +1321,13 @@ final class StaffDisciplineService
                 'monthly_score_avg' => $monthlyScore,
                 'monthly_score_zone' => $this->zoneFromScoreNullable($monthlyScore),
                 'retention_proposed_pct' => $retentionPct,
+                'retention_amount_est' => $scoreRetentionAmt,
                 'bonus_monthly' => $bonus,
+                'unjustified_absence_days' => $unjDays,
+                'rest_days_recorded' => $restDays,
+                'deduction_absence_est' => $absDeduction,
+                'service_start_ymd' => $profiles[$uid]['service_start_ymd'] ?? null,
+                'profile_note' => $profiles[$uid]['profile_note'] ?? null,
                 'net_pay_proposed' => $net,
                 'attendance_days_recorded' => $attDays,
                 'ledger_penalty_points_month' => $ledgerPenaltyPts,
@@ -1925,6 +2162,11 @@ final class StaffDisciplineService
             'ABS_AUTORISEE' => 'ABSENCE_AUTORISEE',
             'MALADIE' => 'MALADIE',
             'SICK' => 'MALADIE',
+            'PRESENT' => 'PRESENT_CONFIRME',
+            'PRÉSENT' => 'PRESENT_CONFIRME',
+            'PRESENT_CONFIRME' => 'PRESENT_CONFIRME',
+            'RETARD_JUSTIFIE' => 'RETARD_JUSTIFIE',
+            'RETARD_JUSTIFIÉ' => 'RETARD_JUSTIFIE',
         ];
 
         return $aliases[$u] ?? (str_starts_with($u, 'REPOS') ? 'REPOS' : 'TRAVAIL');
@@ -2030,13 +2272,43 @@ final class StaffDisciplineService
             ];
         }
 
-        $pdo = $this->database->pdo();
-        $pack = $this->measureActivityVolumeForDay($restaurantId, $userId, $roleCode, $dayYmd, $tz);
-        $actionCount = $pack['action_count'];
-        $breakdown = $pack['breakdown'];
-        $s = $pack['s'];
-        $e = $pack['e'];
+        $uTenant = $this->userTenantRowForDiscipline($restaurantId, $userId);
+        if ($uTenant === null) {
+            return [
+                'evaluated' => false,
+                'score' => null,
+                'action_count' => 0,
+                'activity_breakdown' => [],
+                'ledger_delta' => 0,
+                'ledger_lines' => [],
+                'extra_penalties' => [],
+                'base_score' => 100,
+                'evaluation_kind' => 'unknown_user',
+                'synthetic_adjustment' => 0,
+                'peer_activity_ratio' => null,
+                'role_activity_mean' => null,
+                'activite_pct_vs_role' => null,
+            ];
+        }
+        if (($uTenant['status'] ?? '') !== 'active') {
+            return [
+                'evaluated' => false,
+                'score' => null,
+                'action_count' => 0,
+                'activity_breakdown' => [],
+                'ledger_delta' => 0,
+                'ledger_lines' => [],
+                'extra_penalties' => [],
+                'base_score' => 100,
+                'evaluation_kind' => 'account_inactive',
+                'synthetic_adjustment' => 0,
+                'peer_activity_ratio' => null,
+                'role_activity_mean' => null,
+                'activite_pct_vs_role' => null,
+            ];
+        }
 
+        $pdo = $this->database->pdo();
         $ledgerLines = $this->ledgerLinesForDay($restaurantId, $userId, $dayYmd);
         $ledgerDelta = 0;
         $ledgerReasons = [];
@@ -2058,11 +2330,14 @@ final class StaffDisciplineService
                 'base_score' => 100,
                 'evaluation_kind' => 'pre_reset',
                 'synthetic_adjustment' => 0,
+                'peer_activity_ratio' => null,
+                'role_activity_mean' => null,
+                'activite_pct_vs_role' => null,
             ];
         }
 
-        $firstEver = $this->userFirstActivityDayYmd($restaurantId, $userId, $tz);
-        if ($firstEver === null || $dayYmd < $firstEver) {
+        $engagementYmd = $this->effectiveAgentEngagementStartYmd($restaurantId, $userId, $tz);
+        if ($dayYmd < $engagementYmd) {
             return [
                 'evaluated' => false,
                 'score' => null,
@@ -2072,10 +2347,19 @@ final class StaffDisciplineService
                 'ledger_lines' => $ledgerLines,
                 'extra_penalties' => [],
                 'base_score' => 100,
-                'evaluation_kind' => $firstEver === null ? 'never_active' : 'pre_hire',
+                'evaluation_kind' => 'pre_hire',
                 'synthetic_adjustment' => 0,
+                'peer_activity_ratio' => null,
+                'role_activity_mean' => null,
+                'activite_pct_vs_role' => null,
             ];
         }
+
+        $pack = $this->measureActivityVolumeForDay($restaurantId, $userId, $roleCode, $dayYmd, $tz);
+        $actionCount = $pack['action_count'];
+        $breakdown = $pack['breakdown'];
+        $s = $pack['s'];
+        $e = $pack['e'];
 
         if ($actionCount > 0) {
             $extraPenalties = $this->metricExtraPenalties(
@@ -2154,6 +2438,16 @@ final class StaffDisciplineService
 
             return $this->finalizeEvaluatedDay(0, $bd, $ledgerDelta, $ledgerLines, [], 'neutral_exempt', 0);
         }
+        if ($planned === 'PRESENT_CONFIRME') {
+            $bd = [['label' => 'Présence confirmée par le responsable · neutre', 'count' => 0]];
+
+            return $this->finalizeEvaluatedDay(0, $bd, $ledgerDelta, $ledgerLines, [], 'manager_present_confirm', 0);
+        }
+        if ($planned === 'RETARD_JUSTIFIE') {
+            $bd = [['label' => 'Retard justifié (planning)', 'count' => 0]];
+
+            return $this->finalizeEvaluatedDay(0, $bd, $ledgerDelta, $ledgerLines, [], 'late_justified', -6);
+        }
         if ($planned === 'ABSENCE_AUTORISEE') {
             $bd = [['label' => 'Absence autorisée (planning) · pénalité légère', 'count' => 0]];
 
@@ -2215,6 +2509,44 @@ final class StaffDisciplineService
             if ($late > 0) {
                 $pts = max(-36, -12 * min(3, $late));
                 $out[] = ['label' => 'Remises tardives (jour de vente ≠ jour de remise) — gravité élevée', 'points' => $pts];
+            }
+            $schedCd = $this->disciplineWorkScheduleForRestaurant($restaurantId);
+            $tzCd = Container::getInstance()->get('reportService')->timezoneForRestaurantReports($restaurantId);
+            try {
+                $dayStartCd = new DateTimeImmutable($dayYmd . ' 00:00:00', $tzCd);
+                $cdParts = explode(':', $schedCd['cash_deadline']);
+                $cdH = (int) ($cdParts[0] ?? 22);
+                $cdMi = (int) ($cdParts[1] ?? 0);
+                $cashDeadline = $dayStartCd->setTime(max(0, min(23, $cdH)), max(0, min(59, $cdMi)));
+                $suffixCd = $schedCd['notice_unset'] ? ' (horaire par défaut)' : '';
+                $stCd = $pdo->prepare(
+                    'SELECT COALESCE(requested_at, created_at) AS t FROM cash_transfers
+                     WHERE restaurant_id = :rid AND from_user_id = :uid AND source_type = "sale"
+                       AND COALESCE(requested_at, created_at) >= :s AND COALESCE(requested_at, created_at) < :e'
+                );
+                $stCd->execute(['rid' => $restaurantId, 'uid' => $userId, 's' => $s, 'e' => $e]);
+                $lateAfterDl = 0;
+                while ($rowCd = $stCd->fetch(PDO::FETCH_ASSOC)) {
+                    $ts = (string) ($rowCd['t'] ?? '');
+                    if ($ts === '') {
+                        continue;
+                    }
+                    try {
+                        $locT = (new DateTimeImmutable($ts, new DateTimeZone('UTC')))->setTimezone($tzCd);
+                    } catch (\Throwable) {
+                        continue;
+                    }
+                    if ($locT->format('Y-m-d') === $dayYmd && $locT > $cashDeadline) {
+                        $lateAfterDl++;
+                    }
+                }
+                if ($lateAfterDl > 0) {
+                    $out[] = [
+                        'label' => 'Remise caisse après l’heure limite paramétrée (' . $schedCd['cash_deadline'] . ')' . $suffixCd,
+                        'points' => max(-18, -6 * min(3, $lateAfterDl)),
+                    ];
+                }
+            } catch (\Throwable) {
             }
         }
         if ($roleCode === 'kitchen') {
@@ -2293,7 +2625,7 @@ final class StaffDisciplineService
                     $localFirst = $first->setTimezone($tzLocal);
                     if ($localFirst > $deadline) {
                         $minsLate = (int) max(0, floor(($localFirst->getTimestamp() - $deadline->getTimestamp()) / 60));
-                        $suffix = $sched['notice_unset'] ? ' (paramètres par défaut)' : '';
+                        $suffix = $sched['notice_unset'] ? ' (horaire par défaut)' : '';
                         $pts = $minsLate <= 20 ? -5 : ($minsLate <= 60 ? -8 : -12);
                         $out[] = [
                             'label' => 'Retard léger · 1re action après ' . $sched['work_start']
@@ -2332,11 +2664,7 @@ final class StaffDisciplineService
     private function averageLastDaysNullable(int $restaurantId, int $userId, string $todayYmd, int $days, DateTimeZone $tz): ?float
     {
         $glob = $this->effectiveGlobalStartYmd($restaurantId);
-        $userFirst = $this->userFirstActivityDayYmd($restaurantId, $userId, $tz);
-        if ($userFirst === null) {
-            return null;
-        }
-        $floor = max($glob, $userFirst);
+        $engagement = $this->effectiveAgentEngagementStartYmd($restaurantId, $userId, $tz);
         try {
             $cursor = new DateTimeImmutable($todayYmd . ' 00:00:00', $tz);
         } catch (\Throwable) {
@@ -2346,7 +2674,7 @@ final class StaffDisciplineService
         $evalDays = 0;
         for ($i = 0; $i < $days; $i++) {
             $d = $cursor->modify('-' . $i . ' days')->format('Y-m-d');
-            if ($d < $floor) {
+            if ($d < max($glob, $engagement)) {
                 continue;
             }
             $sc = $this->scoreForDayOrNull($restaurantId, $userId, $d, $tz);
@@ -2373,12 +2701,9 @@ final class StaffDisciplineService
             return null;
         }
         $glob = $this->effectiveGlobalStartYmd($restaurantId);
-        $userFirst = $this->userFirstActivityDayYmd($restaurantId, $userId, $tz);
-        if ($userFirst === null) {
-            return null;
-        }
+        $engagement = $this->effectiveAgentEngagementStartYmd($restaurantId, $userId, $tz);
         $monthStartYmd = $monthFirst->format('Y-m-d') >= $glob ? $monthFirst->format('Y-m-d') : $glob;
-        $startYmd = max($monthStartYmd, $userFirst);
+        $startYmd = max($monthStartYmd, $engagement);
         try {
             $start = new DateTimeImmutable($startYmd . ' 00:00:00', $tz);
         } catch (\Throwable) {
@@ -2457,6 +2782,8 @@ final class StaffDisciplineService
                 'absence_authorized' => 'Ajustement discipline · absence autorisée',
                 'absence_illness' => 'Ajustement discipline · maladie',
                 'absence_unjustified' => 'Ajustement discipline · absence / inactivité non justifiée',
+                'late_justified' => 'Ajustement discipline · retard justifié',
+                'manager_present_confirm' => 'Ajustement discipline · présence confirmée',
                 default => 'Ajustement discipline (jour sans mesure d’activité)',
             };
             $rows[] = [
@@ -2493,8 +2820,10 @@ final class StaffDisciplineService
             $why = (string) ($ev['evaluation_kind'] ?? '');
             $note = match ($why) {
                 'never_active' => 'Non évalué — aucune activité historique dans ce restaurant.',
-                'pre_hire' => 'Non évalué — agent pas encore en service à cette date.',
+                'pre_hire' => 'Non évalué — avant la date de prise de service (compte ou date renseignée sur le profil paie).',
                 'pre_reset' => 'Non évalué — période avant donnée exploitable après réinitialisation.',
+                'account_inactive' => 'Compte inactif, suspendu ou archivé : pas de cotation discipline.',
+                'unknown_user' => 'Utilisateur introuvable pour ce restaurant.',
                 default => 'Non évalué.',
             };
 
@@ -2531,20 +2860,8 @@ final class StaffDisciplineService
         $titre = (string) ($win['label'] ?? 'Semaine');
         $start = $win['start'];
         $endExcl = $win['end'];
-        $userFirst = $this->userFirstActivityDayYmd($restaurantId, $userId, $tz);
-        if ($userFirst === null) {
-            return [
-                'titre' => $titre,
-                'jour' => null,
-                'score' => null,
-                'zone' => 'non_evalue',
-                'points_detail' => [],
-                'jours_moyennes' => 0,
-                'score_breakdown' => ['evaluated_days' => 0, 'actions_total' => 0, 'window_days' => 0],
-                'note' => 'Aucune activité historique pour cet agent : non évalué.',
-            ];
-        }
-        $floor = max($glob, $userFirst);
+        $engagement = $this->effectiveAgentEngagementStartYmd($restaurantId, $userId, $tz);
+        $floor = max($glob, $engagement);
         $role = $this->resolveRoleCodeForUser($restaurantId, $userId);
         $sum = 0.0;
         $inWindow = 0;
@@ -2609,20 +2926,8 @@ final class StaffDisciplineService
     private function snapshotRollingAverageGauge(int $restaurantId, int $userId, string $anchorYmd, int $days, string $titre, DateTimeZone $tz): array
     {
         $glob = $this->effectiveGlobalStartYmd($restaurantId);
-        $userFirst = $this->userFirstActivityDayYmd($restaurantId, $userId, $tz);
-        if ($userFirst === null) {
-            return [
-                'titre' => $titre,
-                'jour' => null,
-                'score' => null,
-                'zone' => 'non_evalue',
-                'points_detail' => [],
-                'jours_moyennes' => 0,
-                'score_breakdown' => ['evaluated_days' => 0, 'actions_total' => 0, 'window_days' => 0],
-                'note' => 'Aucune activité historique pour cet agent : non évalué.',
-            ];
-        }
-        $floor = max($glob, $userFirst);
+        $engagement = $this->effectiveAgentEngagementStartYmd($restaurantId, $userId, $tz);
+        $floor = max($glob, $engagement);
         try {
             $end = new DateTimeImmutable($anchorYmd . ' 00:00:00', $tz);
         } catch (\Throwable) {
@@ -2709,25 +3014,8 @@ final class StaffDisciplineService
         }
         $glob = $this->effectiveGlobalStartYmd($restaurantId);
         $cursor = $start->format('Y-m-d') >= $glob ? $start : new DateTimeImmutable($glob . ' 00:00:00', $tz);
-        $userFirst = $this->userFirstActivityDayYmd($restaurantId, $userId, $tz);
-        if ($userFirst === null) {
-            return [
-                'titre' => $label,
-                'jour' => null,
-                'score' => null,
-                'zone' => 'non_evalue',
-                'points_detail' => [],
-                'jours_moyennes' => 0,
-                'score_breakdown' => [
-                    'evaluated_days' => 0,
-                    'actions_total' => 0,
-                    'calendar_days' => 0,
-                    'month_stats' => [],
-                ],
-                'note' => 'Aucune activité historique pour cet agent : non évalué.',
-            ];
-        }
-        $cursorY = max($cursor->format('Y-m-d'), $userFirst);
+        $engagement = $this->effectiveAgentEngagementStartYmd($restaurantId, $userId, $tz);
+        $cursorY = max($cursor->format('Y-m-d'), $engagement);
         try {
             $cursor = new DateTimeImmutable($cursorY . ' 00:00:00', $tz);
         } catch (\Throwable) {
@@ -2767,12 +3055,12 @@ final class StaffDisciplineService
                 $evalDays++;
                 $ac = (int) ($ev['action_count'] ?? 0);
                 $actionsSum += $ac;
-                if ($ac === 0) {
+                $ek = (string) ($ev['evaluation_kind'] ?? '');
+                if ($ac === 0 && !in_array($ek, ['neutral_rest', 'neutral_exempt', 'manager_present_confirm'], true)) {
                     $stZeroAct++;
                 }
                 $sc = (int) ($ev['score'] ?? 0);
                 $penOff += max(0, 100 - $sc);
-                $ek = (string) ($ev['evaluation_kind'] ?? '');
                 if ($ek === 'audit_activity') {
                     $stActivity++;
                 } elseif ($ek === 'neutral_rest') {
@@ -2783,6 +3071,10 @@ final class StaffDisciplineService
                     $stSoft++;
                 } elseif ($ek === 'absence_unjustified') {
                     $stUnj++;
+                } elseif ($ek === 'manager_present_confirm') {
+                    $stExempt++;
+                } elseif ($ek === 'late_justified') {
+                    $stSoft++;
                 }
                 foreach ($this->ledgerPenaltyRowsForGauge($ev) as $row) {
                     $details[] = $row;

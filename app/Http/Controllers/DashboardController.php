@@ -328,6 +328,90 @@ final class DashboardController
         audit_access('payroll', $restaurantId, 'screens', 'prepare-payroll', 'Consultation préparation paie');
     }
 
+    public function disciplineHub(Request $request): void
+    {
+        authorize_access('staff.team_gauges.view');
+        $restaurantId = current_restaurant_id();
+        $staffDisc = Container::getInstance()->get('staffDiscipline');
+        $staffDisc->ensureSchema();
+        $todayY = Container::getInstance()->get('reportService')->todayForRestaurant($restaurantId);
+        $users = Container::getInstance()->get('roleAdmin')->listUsersForRestaurant($restaurantId);
+        $attUsers = array_values(array_filter(
+            $users,
+            static fn (array $u): bool => ($u['status'] ?? '') === 'active' && (string) ($u['role_code'] ?? '') !== 'owner',
+        ));
+        $pdo = Container::getInstance()->get('db')->pdo();
+        $payrollProfiles = [];
+        $ps = $pdo->prepare(
+            'SELECT user_id, base_salary_monthly, bonus_monthly, currency, service_start_ymd, profile_note
+             FROM staff_payroll_profiles WHERE restaurant_id = :rid'
+        );
+        $ps->execute(['rid' => $restaurantId]);
+        foreach ($ps->fetchAll(PDO::FETCH_ASSOC) as $pr) {
+            $payrollProfiles[(int) ($pr['user_id'] ?? 0)] = $pr;
+        }
+
+        view('owner/discipline-hub', [
+            'title' => 'Discipline & présences',
+            'user' => $_SESSION['user'],
+            'restaurant' => Container::getInstance()->get('restaurantAdmin')->findRestaurant($restaurantId),
+            'today_ymd' => $todayY,
+            'discipline_schedule' => $staffDisc->disciplineWorkScheduleForRestaurant($restaurantId),
+            'alerts' => $staffDisc->listDisciplinaryAlerts($restaurantId),
+            'gauge_rows' => $staffDisc->gaugesSnapshotRestaurantOperational($restaurantId, 'today', $todayY),
+            'staff_users' => $attUsers,
+            'payroll_profiles' => $payrollProfiles,
+            'flash_success' => flash('success'),
+            'flash_error' => flash('error'),
+        ]);
+
+        audit_access('discipline', $restaurantId, 'screens', 'discipline-hub', 'Consultation hub discipline');
+    }
+
+    public function postDisciplineAttendance(Request $request): void
+    {
+        authorize_access('staff.team_gauges.view');
+        $restaurantId = current_restaurant_id();
+        try {
+            Container::getInstance()->get('staffDiscipline')->upsertStaffAttendanceDay(
+                $restaurantId,
+                (int) $request->input('target_user_id', 0),
+                trim((string) $request->input('day_ymd', '')),
+                (string) $request->input('planned_status', ''),
+                $request->input('manager_note'),
+                current_user() ?? [],
+            );
+            flash('success', 'Présence / statut enregistré.');
+        } catch (\Throwable $e) {
+            flash('error', ui_safe_message($e->getMessage()));
+        }
+        redirect('/owner/discipline');
+    }
+
+    public function postDisciplinePayrollProfile(Request $request): void
+    {
+        authorize_access('staff.team_gauges.view');
+        $restaurantId = current_restaurant_id();
+        try {
+            Container::getInstance()->get('staffDiscipline')->upsertStaffPayrollProfile(
+                $restaurantId,
+                (int) $request->input('target_user_id', 0),
+                [
+                    'base_salary_monthly' => $request->input('base_salary_monthly', 0),
+                    'bonus_monthly' => $request->input('bonus_monthly', 0),
+                    'currency' => $request->input('currency', 'USD'),
+                    'service_start_ymd' => $request->input('service_start_ymd', ''),
+                    'profile_note' => $request->input('profile_note', ''),
+                ],
+                current_user() ?? [],
+            );
+            flash('success', 'Profil paie / date de service enregistré.');
+        } catch (\Throwable $e) {
+            flash('error', ui_safe_message($e->getMessage()));
+        }
+        redirect('/owner/discipline');
+    }
+
     /**
      * @return array{dash_preset: string, dash_date: string, today_ymd_restaurant: string, module_today_pulse: array<string, mixed>}
      */

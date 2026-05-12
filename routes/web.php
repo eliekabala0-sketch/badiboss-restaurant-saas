@@ -64,6 +64,9 @@ $router->post('/owner/subscription/pay', [RestaurantAdminController::class, 'dec
 $router->post('/owner/settings/currency', [RestaurantAdminController::class, 'updateOwnerCurrency'], [AuthMiddleware::class, OwnerOrManagerMiddleware::class]);
 $router->post('/owner/settings/discipline-schedule', [RestaurantAdminController::class, 'updateDisciplineSchedule'], [AuthMiddleware::class, OwnerOrManagerMiddleware::class]);
 $router->post('/owner/discipline/alert-action', [DashboardController::class, 'postDisciplinaryAlertAction'], [AuthMiddleware::class, OwnerOrManagerMiddleware::class]);
+$router->get('/owner/discipline', [DashboardController::class, 'disciplineHub'], [AuthMiddleware::class, OwnerAreaMiddleware::class]);
+$router->post('/owner/discipline/attendance', [DashboardController::class, 'postDisciplineAttendance'], [AuthMiddleware::class, OwnerAreaMiddleware::class]);
+$router->post('/owner/discipline/payroll-profile', [DashboardController::class, 'postDisciplinePayrollProfile'], [AuthMiddleware::class, OwnerAreaMiddleware::class]);
 $router->get('/owner/menu', [MenuAdminController::class, 'ownerIndex'], [AuthMiddleware::class, OwnerAreaMiddleware::class]);
 $router->post('/owner/menu/categories', [MenuAdminController::class, 'storeOwnerCategory'], [AuthMiddleware::class, OwnerOrManagerMiddleware::class]);
 $router->post('/owner/menu/items', [MenuAdminController::class, 'storeOwnerItem'], [AuthMiddleware::class, OwnerOrManagerMiddleware::class]);
@@ -112,6 +115,7 @@ $router->post('/ventes/incidents', [OperationsController::class, 'signalSaleInci
 $router->post('/operations/cases/{id}/decision', [OperationsController::class, 'decideCase'], [AuthMiddleware::class]);
 $router->post('/ventes/pertes-argent', [OperationsController::class, 'createCashLoss'], [AuthMiddleware::class, SalesAccessMiddleware::class]);
 $router->get('/rapport', [OperationsController::class, 'report'], [AuthMiddleware::class, ReportsAccessMiddleware::class]);
+$router->get('/ma-discipline', [OperationsController::class, 'myDiscipline'], [AuthMiddleware::class]);
 $router->get('/caisse', [OperationsController::class, 'cash'], [AuthMiddleware::class]);
 $router->post('/caisse/remises-serveur', [OperationsController::class, 'remitServerCash'], [AuthMiddleware::class]);
 $router->post('/caisse/transferts/{id}/reception-caisse', [OperationsController::class, 'receiveCashAtCashier'], [AuthMiddleware::class]);
