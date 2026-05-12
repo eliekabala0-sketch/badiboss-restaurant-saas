@@ -57,6 +57,8 @@ final class AuthorizationService
         'kitchen.stock.request' => ['roles' => ['kitchen'], 'permissions' => ['kitchen.manage']],
         'stock.request.respond' => ['roles' => ['stock_manager', 'manager'], 'permissions' => ['stock.manage']],
         'reports.view' => ['roles' => ['owner', 'manager'], 'permissions' => ['reports.view', 'reports.daily']],
+        'stock.control.report.view' => ['roles' => ['owner', 'manager', 'stock_manager'], 'permissions' => []],
+        'stock.control.perform' => ['roles' => ['owner', 'manager', 'stock_manager'], 'permissions' => []],
         /** Propriétaire / gérant : accès par défaut. Autres rôles : uniquement si permission « staff.gauges.view » accordée. */
         'staff.team_gauges.view' => [
             'roles' => ['owner', 'manager'],
@@ -71,6 +73,8 @@ final class AuthorizationService
         'kitchen.view',
         'sales.view',
         'reports.view',
+        'stock.control.report.view',
+        'stock.control.perform',
     ];
 
     private const SUBSCRIPTION_RESTRICTED_ABILITIES = [
@@ -110,6 +114,8 @@ final class AuthorizationService
         'kitchen.stock.request',
         'stock.request.respond',
         'reports.view',
+        'stock.control.report.view',
+        'stock.control.perform',
         'staff.team_gauges.view',
         'payroll.prepare.view',
     ];

@@ -1005,6 +1005,32 @@ function stock_item_category_bucket(?string $categoryLabel): string
 }
 
 /**
+ * Libellé agrégé pour le rapport contrôle stock (proche des rubriques métier demandées).
+ */
+function stock_control_macro_category(?string $categoryLabel): string
+{
+    $bucket = stock_item_category_bucket($categoryLabel);
+    $l = mb_strtolower(trim((string) $categoryLabel), 'UTF-8');
+
+    if ($bucket === 'boissons') {
+        return 'Boissons';
+    }
+
+    if ($bucket === 'cuisine') {
+        if (preg_match('/viande|volaille|poisson|boucher/i', $l)) {
+            return 'Viandes';
+        }
+        if (preg_match('/accompagnement|frite|frites|riz|pur[eé]e|plantain|alloco|manioc|pondu/i', $l)) {
+            return 'Accompagnements';
+        }
+
+        return 'Matières premières';
+    }
+
+    return 'Autres';
+}
+
+/**
  * @param list<array<string, mixed>> $items Lignes stock_items du restaurant
  *
  * @return list<int>|null null = pas de filtre (tout afficher)

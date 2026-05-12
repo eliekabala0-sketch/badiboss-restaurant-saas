@@ -224,6 +224,8 @@ $mPulse = $module_today_pulse ?? [];
 </section>
 <?php endif; ?>
 
+<?php require base_path('app/Views/partials/stock_control_report_section.php'); ?>
+
 <?php if ($rptUid > 0): ?>
 <section class="card no-print" style="padding:18px; margin-top:16px;">
     <details class="compact-card" open data-autoclose-details>

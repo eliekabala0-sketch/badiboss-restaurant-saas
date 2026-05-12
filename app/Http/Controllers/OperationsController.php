@@ -41,6 +41,24 @@ final class OperationsController
         $hold = Container::getInstance()->get('regularizationGate')->assessForUser($restaurantId, current_user() ?? []);
         $disc = $this->staffDisciplineOperationalExtras($dash, $restaurantId, current_user(), ['stock_manager']);
 
+        $scDate = trim((string) ($request->query['sc_date'] ?? ''));
+        if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $scDate)) {
+            $scDate = Container::getInstance()->get('reportService')->todayForRestaurant($restaurantId);
+        }
+        $scPeriod = strtolower(trim((string) ($request->query['sc_period'] ?? 'daily')));
+        if (!in_array($scPeriod, ['daily', 'weekly', 'monthly'], true)) {
+            $scPeriod = 'daily';
+        }
+        $stockControlBundle = null;
+        if (can_access('stock.control.report.view')) {
+            $stockControlBundle = Container::getInstance()->get('stockControlReport')->buildBundle($restaurantId, $scDate, $scPeriod);
+        }
+        $stockControlStockQuery = http_build_query(array_filter([
+            'sc_date' => $scDate,
+            'sc_period' => $scPeriod,
+            'stock_cat' => ($stockCategoryFilter !== 'all' && $stockCategoryFilter !== '') ? $stockCategoryFilter : null,
+        ], static fn ($v): bool => $v !== null && $v !== ''));
+
         view('operations/stock', array_merge($dash, $disc, [
             'title' => 'Stock',
             'restaurant' => Container::getInstance()->get('restaurantAdmin')->findRestaurant($restaurantId),
@@ -64,6 +82,9 @@ final class OperationsController
             'day_start_hold' => $hold,
             'regularization_backlog' => Container::getInstance()->get('salesService')->regularizationBacklogCounts($restaurantId),
             'staff_gauges_panel_title' => 'Discipline · magasin',
+            'stock_control_bundle' => $stockControlBundle,
+            'stock_control_return_to' => 'stock',
+            'stock_control_stock_query' => $stockControlStockQuery,
         ]));
 
         audit_access('stock', $restaurantId, 'screens', 'stock', 'Consultation module stock');
@@ -854,7 +875,7 @@ final class OperationsController
             $msg = ui_safe_message($e->getMessage());
             if ((str_contains(strtolower($msg), 'deja') && str_contains(strtolower($msg), 'tranche'))
                 || str_contains(strtolower($msg), 'deja ete envoyee')) {
-                flash('success', 'Deja traite par un responsable — aucun doublon enregistre.');
+                flash('success', 'Déjà traité par responsable — aucune double action.');
             } else {
                 flash('error', $msg);
             }
@@ -891,12 +912,46 @@ final class OperationsController
             $msg = ui_safe_message($e->getMessage());
             if ((str_contains(strtolower($msg), 'deja') && str_contains(strtolower($msg), 'tranche'))
                 || str_contains(strtolower($msg), 'deja ete envoyee')) {
-                flash('success', 'Deja traite par un responsable — aucun doublon enregistre.');
+                flash('success', 'Déjà traité par responsable — aucune double action.');
             } else {
                 flash('error', $msg);
             }
         }
         $this->redirectWithQuerySuffix($this->moduleUrl('/caisse', $restaurantId), $redirectExtra);
+    }
+
+    public function postStockPhysicalRecord(Request $request): void
+    {
+        $restaurantId = $this->resolveRestaurantId($request);
+        authorize_access('stock.control.perform');
+        $actor = current_user();
+        $returnTo = trim((string) $request->input('return_to', 'report'));
+        $scDate = trim((string) $request->input('sc_date', ''));
+        $scPeriod = trim((string) $request->input('sc_period', 'daily'));
+        try {
+            Container::getInstance()->get('stockControlReport')->recordPhysicalChecksFromRequest(
+                $restaurantId,
+                $_POST,
+                is_array($actor) ? $actor : null,
+            );
+            flash('success', 'Contrôle physique enregistré — aucune correction automatique du stock.');
+        } catch (\Throwable $e) {
+            flash('error', ui_safe_message($e->getMessage()));
+        }
+        if ($returnTo === 'stock') {
+            $q = http_build_query(array_filter([
+                'sc_date' => preg_match('/^\d{4}-\d{2}-\d{2}$/', $scDate) ? $scDate : null,
+                'sc_period' => $scPeriod !== '' ? $scPeriod : null,
+            ], static fn ($v): bool => $v !== null && $v !== ''));
+
+            redirect($this->stockUrl($restaurantId) . ($q !== '' ? '?' . $q : ''));
+        }
+        $q = http_build_query(array_filter([
+            'date' => preg_match('/^\d{4}-\d{2}-\d{2}$/', $scDate) ? $scDate : null,
+            'period' => $scPeriod !== '' ? $scPeriod : null,
+        ], static fn ($v): bool => $v !== null && $v !== ''));
+
+        redirect($this->moduleUrl('/rapport', $restaurantId) . ($q !== '' ? '?' . $q : ''));
     }
 
     private function buildManagerResolutionPanelFromRequest(Request $request, int $restaurantId): ?array
@@ -1341,6 +1396,11 @@ final class OperationsController
             false,
         );
 
+        $stockControlBundle = null;
+        if (can_access('stock.control.report.view')) {
+            $stockControlBundle = Container::getInstance()->get('stockControlReport')->buildBundle($restaurantId, $date, $period);
+        }
+
         view('operations/report', array_merge($dash, [
             'title' => $title,
             'restaurant' => Container::getInstance()->get('restaurantAdmin')->findRestaurant($restaurantId),
@@ -1366,6 +1426,9 @@ final class OperationsController
             ),
             'report_agent_filter_locked' => $isServerReporter,
             'day_start_hold' => Container::getInstance()->get('regularizationGate')->assessForUser($restaurantId, current_user() ?? []),
+            'stock_control_bundle' => $stockControlBundle,
+            'stock_control_return_to' => 'report',
+            'stock_control_stock_query' => '',
         ]));
 
         audit_access('reports', $restaurantId, 'screens', 'daily-report', 'Consultation rapport journalier');

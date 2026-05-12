@@ -360,6 +360,8 @@ $priorityBadgeClass = static function (?string $priority): string {
 </section>
 <?php endif; ?>
 
+<?php require base_path('app/Views/partials/stock_control_report_section.php'); ?>
+
 <?php require base_path('app/Views/partials/staff_discipline_gauges_foldable.php'); ?>
 
 <details class="card no-print" style="padding:18px 22px; margin-bottom:20px;">

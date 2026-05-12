@@ -83,6 +83,7 @@ $router->post('/stock/sorties-cuisine', [OperationsController::class, 'sendToKit
 $router->post('/stock/retours', [OperationsController::class, 'validateReturnStock'], [AuthMiddleware::class, StockAccessMiddleware::class]);
 $router->post('/stock/retours-endommages', [OperationsController::class, 'signalDamagedStockReturn'], [AuthMiddleware::class, StockAccessMiddleware::class]);
 $router->post('/stock/pertes', [OperationsController::class, 'createLoss'], [AuthMiddleware::class, StockAccessMiddleware::class]);
+$router->post('/stock/controle-physique', [OperationsController::class, 'postStockPhysicalRecord'], [AuthMiddleware::class, StockAccessMiddleware::class]);
 $router->post('/stock/movements/{id}/correction-request', [OperationsController::class, 'requestStockMovementCorrection'], [AuthMiddleware::class, StockAccessMiddleware::class]);
 $router->post('/stock/corrections/sensitive', [OperationsController::class, 'requestSensitiveCorrection'], [AuthMiddleware::class, StockAccessMiddleware::class]);
 $router->post('/stock/demandes-cuisine/{id}/reponse', [OperationsController::class, 'respondKitchenStockRequest'], [AuthMiddleware::class, StockAccessMiddleware::class]);

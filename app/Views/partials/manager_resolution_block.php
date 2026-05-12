@@ -15,7 +15,7 @@ if (!empty($mr['already_resolved'])) {
     }
     ?>
 <section class="card no-print manager-resolution-block" style="padding:18px 22px; margin-bottom:22px; border-left:4px solid #15803d;">
-    <h3 style="margin:0 0 6px;">Déjà traité par un responsable</h3>
+    <h3 style="margin:0 0 6px;">Déjà traité par responsable</h3>
     <p class="muted" style="margin:0 0 12px;">Aucune action supplémentaire requise sur ce dossier. Les rapports utilisent l’état figé ci-dessous.</p>
     <p style="margin:0 0 8px;"><strong><?= e((string) ($mr['outcome_label'] ?? responsible_outcome_label((string) ($mr['outcome_code'] ?? '')))) ?></strong>
         <?php if (($mr['decided_by_label'] ?? '') !== ''): ?> · par <?= e((string) $mr['decided_by_label']) ?><?php endif; ?>

@@ -23,6 +23,7 @@ use App\Services\RestaurantAdminService;
 use App\Services\RoleAdminService;
 use App\Services\SalesService;
 use App\Services\StaffDisciplineService;
+use App\Services\StockControlReportService;
 use App\Services\StockService;
 use App\Services\SuperAdminOperationsService;
 use App\Services\SubscriptionService;
@@ -118,7 +119,9 @@ final class App
         $container->set('kitchenService', new KitchenService($database));
         $container->set('salesService', new SalesService($database));
         $container->set('cashService', new CashService($database));
-        $container->set('reportService', new ReportService($database));
+        $reportService = new ReportService($database);
+        $container->set('reportService', $reportService);
+        $container->set('stockControlReport', new StockControlReportService($database, $reportService));
         $container->set('staffDiscipline', new StaffDisciplineService($database));
         $container->set('managerResolution', new ManagerResolutionService($database));
         $container->set('regularizationGate', new RegularizationGateService($database));
