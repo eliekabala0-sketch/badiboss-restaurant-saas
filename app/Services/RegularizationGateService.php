@@ -26,6 +26,7 @@ final class RegularizationGateService
      *   codes: list<string>,
      *   backlog: array<string, int>,
      *   items: list<array<string, mixed>>,
+     *   items_today_soft: list<array<string, mixed>>,
      *   super_admin_unblocked: bool
      * }
      */
@@ -39,6 +40,7 @@ final class RegularizationGateService
                 'codes' => [],
                 'backlog' => [],
                 'items' => [],
+                'items_today_soft' => [],
                 'super_admin_unblocked' => true,
             ];
         }
@@ -48,6 +50,7 @@ final class RegularizationGateService
         $backlog = Container::getInstance()->get('salesService')->regularizationBacklogCounts($restaurantId);
         $cutoff = $this->todayStartSql($restaurantId);
         $items = $this->visibleTasksForRole($restaurantId, $role, $uid, $cutoff, 40);
+        [$itemsBlocking, $itemsTodaySoft] = $this->partitionHoldItems($items);
 
         if (in_array($role, ['owner', 'manager'], true)) {
             return [
@@ -55,7 +58,8 @@ final class RegularizationGateService
                 'reasons' => [],
                 'codes' => [],
                 'backlog' => $backlog,
-                'items' => $items,
+                'items' => $itemsBlocking,
+                'items_today_soft' => $itemsTodaySoft,
                 'super_admin_unblocked' => false,
             ];
         }
@@ -65,12 +69,7 @@ final class RegularizationGateService
 
         if ($role === 'cashier_server' && $uid > 0) {
             $cash = Container::getInstance()->get('reportService')->agentServerCashAccountReadModel($restaurantId, $uid);
-            $todaySf = (float) (($cash['today']['shortfall'] ?? 0));
             $legacySf = (float) ($cash['legacy_shortfall'] ?? 0);
-            if ($todaySf > 0.0001) {
-                $reasons[] = 'Manquant ou remise en attente sur vos ventes clôturées (aujourd’hui).';
-                $codes[] = 'server_shortfall_today';
-            }
             if ($legacySf > 0.0001) {
                 $reasons[] = 'Anciennes ventes non entièrement régularisées à la caisse.';
                 $codes[] = 'server_shortfall_legacy';
@@ -121,9 +120,32 @@ final class RegularizationGateService
             'reasons' => $reasons,
             'codes' => $codes,
             'backlog' => $backlog,
-            'items' => $items,
+            'items' => $itemsBlocking,
+            'items_today_soft' => $itemsTodaySoft,
             'super_admin_unblocked' => false,
         ];
+    }
+
+    /**
+     * @param list<array<string, mixed>> $items
+     * @return array{0: list<array<string, mixed>>, 1: list<array<string, mixed>>}
+     */
+    private function partitionHoldItems(array $items): array
+    {
+        $blocking = [];
+        $soft = [];
+        foreach ($items as $it) {
+            if (!is_array($it)) {
+                continue;
+            }
+            if (($it['hold_tier'] ?? 'blocking') === 'today_soft') {
+                $soft[] = $it;
+            } else {
+                $blocking[] = $it;
+            }
+        }
+
+        return [$blocking, $soft];
     }
 
     /**
@@ -235,6 +257,7 @@ final class RegularizationGateService
                 'href' => '/caisse?focus=cash_transfer:' . $tid,
                 'focus' => 'cash_transfer:' . $tid,
                 'manquant_a_charge' => false,
+                'hold_tier' => 'blocking',
             ];
         }
 
@@ -305,6 +328,7 @@ final class RegularizationGateService
                 'href' => '/stock?focus=kitchen_stock_request:' . $ksrId,
                 'focus' => 'kitchen_stock_request:' . $ksrId,
                 'manquant_a_charge' => false,
+                'hold_tier' => 'blocking',
             ];
         }
 
@@ -340,6 +364,7 @@ final class RegularizationGateService
                 'href' => '/caisse?focus=cash_transfer:' . $tid,
                 'focus' => 'cash_transfer:' . $tid,
                 'manquant_a_charge' => false,
+                'hold_tier' => 'blocking',
             ];
         }
 
@@ -352,6 +377,9 @@ final class RegularizationGateService
         $trimmed = array_slice($tasks, 0, $limit);
         foreach ($trimmed as &$t) {
             unset($t['at_raw']);
+            if (!array_key_exists('hold_tier', $t)) {
+                $t['hold_tier'] = 'blocking';
+            }
         }
         unset($t);
 
@@ -359,10 +387,37 @@ final class RegularizationGateService
     }
 
     /**
+     * Jour de vente / service pour savoir si l’arriéré est antérieur au jour courant (blocage après clôture de journée).
+     *
+     * @param array<string, mixed> $row ligne listSaleRemittanceTracking ou équivalent
+     */
+    private function saleServiceDayYmdForHold(array $row, int $restaurantId): string
+    {
+        $day = trim((string) ($row['sale_day_ymd'] ?? ''));
+        if ($day !== '' && preg_match('/^\d{4}-\d{2}-\d{2}$/', $day)) {
+            return $day;
+        }
+        $tz = $this->reportTz($restaurantId);
+        foreach (['validated_at', 'sale_created_at'] as $k) {
+            $t = trim((string) ($row[$k] ?? ''));
+            if ($t === '') {
+                continue;
+            }
+            try {
+                return (new DateTimeImmutable($t))->setTimezone($tz)->format('Y-m-d');
+            } catch (\Throwable) {
+            }
+        }
+
+        return '';
+    }
+
+    /**
      * @param list<array<string, mixed>> $tasks
      */
     private function appendServerShortfallAndRejections(int $restaurantId, string $currency, array &$tasks): void
     {
+        $todayYmd = Container::getInstance()->get('reportService')->todayForRestaurant($restaurantId);
         $stU = $this->database->pdo()->prepare(
             'SELECT id FROM users WHERE restaurant_id = :rid AND status = "active"'
         );
@@ -372,10 +427,12 @@ final class RegularizationGateService
             $cash = Container::getInstance()->get('cashService')->listSaleRemittanceTracking($restaurantId, $sid);
             foreach ($cash as $row) {
                 $st = (string) ($row['transfer_status'] ?? '');
-                if (in_array($st, ['REMISE_REJETEE_CAISSE', 'REMISE_REJETEE_GERANT'], true)) {
+                if ($st === 'REMISE_REJETEE_CAISSE' || $st === 'REMISE_REJETEE_GERANT') {
                     $saleId = (int) ($row['sale_id'] ?? 0);
                     $rawTs = (string) ($row['remitted_at'] ?? $row['cash_received_at'] ?? $row['validated_at'] ?? $row['sale_created_at'] ?? '');
                     $gerantFinal = $st === 'REMISE_REJETEE_GERANT';
+                    $svcYmd = $this->saleServiceDayYmdForHold($row, $restaurantId);
+                    $tier = ($svcYmd !== '' && $svcYmd >= $todayYmd) ? 'today_soft' : 'blocking';
                     $tasks[] = [
                         'audience' => ['server', 'manager', 'owner'],
                         'server_user_id' => $sid,
@@ -393,6 +450,7 @@ final class RegularizationGateService
                         'href' => '/ventes?focus=sale:' . $saleId,
                         'focus' => 'sale:' . $saleId,
                         'manquant_a_charge' => true,
+                        'hold_tier' => $tier,
                     ];
                 }
             }
@@ -425,12 +483,13 @@ final class RegularizationGateService
                         'happened_at' => $this->formatTs($rawMs, $restaurantId),
                         'agent_label' => (string) ($ag['server_name'] ?? ''),
                         'amount_label' => $this->moneyHint((float) ($ms['total_amount'] ?? 0), $currency),
-                        'detail_label' => 'Vente clôturée sans remise caisse complète',
-                        'status_label' => 'À régulariser',
+                        'detail_label' => 'Vente clôturée sans remise caisse complète (jour en cours — à finaliser avant fin de journée)',
+                        'status_label' => 'En cours',
                         'action_label' => 'Remettre le montant sur Ventes',
                         'href' => '/ventes?focus=sale:' . $saleIdMs,
                         'focus' => 'sale:' . $saleIdMs,
                         'manquant_a_charge' => true,
+                        'hold_tier' => 'today_soft',
                     ];
                 }
             }
@@ -496,14 +555,21 @@ final class RegularizationGateService
 
     private function serverHasRejectedRemittanceOutstanding(int $restaurantId, int $serverUserId): bool
     {
+        $todayYmd = $this->todayYmd($restaurantId);
         foreach (Container::getInstance()->get('cashService')->listSaleRemittanceTracking($restaurantId, $serverUserId) as $row) {
             if ((int) ($row['server_id'] ?? 0) !== $serverUserId) {
                 continue;
             }
             $st = (string) ($row['transfer_status'] ?? '');
-            if ($st === 'REMISE_REJETEE_CAISSE') {
-                return true;
+            if (!in_array($st, ['REMISE_REJETEE_CAISSE', 'REMISE_REJETEE_GERANT'], true)) {
+                continue;
             }
+            $saleYmd = $this->saleServiceDayYmdForHold($row, $restaurantId);
+            if ($saleYmd === '' || $saleYmd >= $todayYmd) {
+                continue;
+            }
+
+            return true;
         }
 
         return false;
