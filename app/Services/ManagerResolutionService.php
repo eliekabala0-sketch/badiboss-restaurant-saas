@@ -385,6 +385,16 @@ final class ManagerResolutionService
         $blockReason = $this->inferBlockReasonServerRequest($status, $row);
         $amount = (float) ($row['total_supplied_amount'] ?? $row['total_requested_amount'] ?? 0);
 
+        $salesSvc = Container::getInstance()->get('salesService');
+        $existingSaleId = $salesSvc->latestSaleIdLinkedToServerRequest($restaurantId, $requestId);
+        $supAmt = (float) ($row['total_supplied_amount'] ?? 0);
+        $responsibleStockNotice = null;
+        if ($existingSaleId !== null) {
+            $responsibleStockNotice = 'Stock déjà impacté / vente n° ' . $existingSaleId . ' : « Valider comme servie » aligne uniquement statuts et lignes — aucune nouvelle vente ni mouvement de stock.';
+        } elseif ($supAmt > 0.0001) {
+            $responsibleStockNotice = 'Pas de vente liée encore : « Valider comme servie » peut créer la vente une seule fois au flux normal — sans double mouvement si une vente existe déjà.';
+        }
+
         return [
             'entity_kind' => 'server_request',
             'entity_id' => $requestId,
@@ -398,6 +408,8 @@ final class ManagerResolutionService
             'lines' => $lines,
             'sanction_preview' => $serverId > 0 ? $disc->gaugesForUser($restaurantId, $serverId, $todayYmd) : [],
             'decisions' => $this->serverRequestDecisionButtons($status, $row, $lines),
+            'existing_sale_id' => $existingSaleId,
+            'responsible_stock_notice' => $responsibleStockNotice,
             'penalty_message_default' => 'Régularisé par responsable — pénalité conservée',
         ];
     }
@@ -463,7 +475,7 @@ final class ManagerResolutionService
     /**
      * @param list<array<string, mixed>> $lines
      *
-     * @return list<array{code:string,label:string}>
+     * @return list<array{code:string,label:string,disabled:bool,disabled_reason:string}>
      */
     private function serverRequestDecisionButtons(string $status, array $row, array $lines): array
     {
@@ -473,16 +485,52 @@ final class ManagerResolutionService
         if (in_array($status, ['ANNULE', 'REFUSE_CUISINE', 'CLOTURE', 'VENDU_TOTAL', 'VENDU_PARTIEL'], true)) {
             return [];
         }
+        $rid = (int) ($row['id'] ?? 0);
+        $restaurantId = (int) ($row['restaurant_id'] ?? 0);
         $sup = (float) ($row['total_supplied_amount'] ?? 0);
-        $out = [];
-        if ($sup > 0.0001) {
-            $out[] = ['code' => 'served_sale', 'label' => 'Valider comme servie'];
-            $out[] = ['code' => 'close_no_sale', 'label' => 'Clôturer sans vente'];
-            $out[] = ['code' => 'server_shortage', 'label' => 'Mettre en manquant (à charge agent)'];
+        $existingSaleId = null;
+        if ($restaurantId > 0 && $rid > 0) {
+            $existingSaleId = Container::getInstance()->get('salesService')->latestSaleIdLinkedToServerRequest($restaurantId, $rid);
         }
-        $out[] = ['code' => 'reject_cancel', 'label' => 'Rejeter ou annuler'];
 
-        return $out;
+        $servedDisabled = false;
+        $servedReason = '';
+        if ($sup <= 0.0001 && $existingSaleId === null) {
+            $servedDisabled = true;
+            $servedReason = 'Sans fourniture cuisine ni vente existante — utilisez « Clôturer sans vente » ou « Mettre en manquant ».';
+        }
+
+        $blockedBySale = $existingSaleId !== null;
+        $blockReason = $blockedBySale
+            ? 'Une vente est déjà liée — utilisez « Valider comme servie » pour aligner sans nouvelle vente.'
+            : '';
+
+        return [
+            [
+                'code' => 'served_sale',
+                'label' => 'Valider comme servie',
+                'disabled' => $servedDisabled,
+                'disabled_reason' => $servedReason,
+            ],
+            [
+                'code' => 'close_no_sale',
+                'label' => 'Clôturer sans vente',
+                'disabled' => $blockedBySale,
+                'disabled_reason' => $blockReason,
+            ],
+            [
+                'code' => 'server_shortage',
+                'label' => 'Mettre en manquant (à charge agent)',
+                'disabled' => $blockedBySale,
+                'disabled_reason' => $blockReason,
+            ],
+            [
+                'code' => 'reject_cancel',
+                'label' => 'Rejeter ou annuler',
+                'disabled' => false,
+                'disabled_reason' => '',
+            ],
+        ];
     }
 
     /**

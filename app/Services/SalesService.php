@@ -984,6 +984,7 @@ final class SalesService
                    AND server_id = :sid
                    AND status = "REMIS_SERVEUR"
                    AND total_supplied_amount > 0
+                   AND COALESCE(responsible_outcome_code, "") = ""
                    AND COALESCE(received_at, supplied_at, updated_at, created_at) < :today_start'
             );
             $st->execute(['rid' => $restaurantId, 'sid' => $restrictToServerUserId, 'today_start' => $todayStart]);
@@ -1012,6 +1013,7 @@ final class SalesService
              WHERE restaurant_id = :rid
                AND status = "REMIS_SERVEUR"
                AND total_supplied_amount > 0
+               AND COALESCE(responsible_outcome_code, "") = ""
                AND COALESCE(received_at, supplied_at, updated_at, created_at) < :today_start'
         );
         $st->execute(['rid' => $restaurantId, 'today_start' => $todayStart]);
@@ -1307,6 +1309,270 @@ final class SalesService
     }
 
     /**
+     * Clôture définitive sans fourniture cuisine : aucune vente créée, aucun mouvement de stock supplémentaire.
+     *
+     * @param 'close_no_sale'|'server_shortage' $terminalMode
+     */
+    private function managerResponsibleTerminalCloseZeroSupply(
+        int $restaurantId,
+        int $requestId,
+        string $terminalMode,
+        string $reason,
+        array $actor,
+    ): void {
+        if (!in_array($terminalMode, ['close_no_sale', 'server_shortage'], true)) {
+            throw new \RuntimeException('Mode terminal inconnu.');
+        }
+        $items = $this->listServerRequestItemsByRequest($requestId, $restaurantId);
+        if ($items === []) {
+            throw new \RuntimeException('Aucun article a conclure.');
+        }
+        $pdo = $this->database->pdo();
+        $pdo->beginTransaction();
+        try {
+            $updateItem = $pdo->prepare(
+                'UPDATE server_request_items
+                 SET sold_quantity = :sold_quantity,
+                     returned_quantity = :returned_quantity,
+                     returned_quantity_validated = :returned_quantity_validated,
+                     sold_total = :sold_total,
+                     returned_total = :returned_total,
+                     server_loss_total = :server_loss_total,
+                     total_requested_amount = requested_total,
+                     total_supplied_amount = supplied_total,
+                     total_sold_amount = :sold_total_amount,
+                     status = :status,
+                     decided_by = :decided_by,
+                     updated_at = NOW()
+                 WHERE id = :id'
+            );
+            $totalReturned = 0.0;
+            $totalLoss = 0.0;
+            foreach ($items as $item) {
+                $soldQuantity = 0.0;
+                $returnedQuantity = 0.0;
+                $soldTotal = 0.0;
+                $returnedTotal = 0.0;
+                $serverLossTotal = 0.0;
+                $updateItem->execute([
+                    'sold_quantity' => $soldQuantity,
+                    'returned_quantity' => $returnedQuantity,
+                    'returned_quantity_validated' => $returnedQuantity,
+                    'sold_total' => $soldTotal,
+                    'returned_total' => $returnedTotal,
+                    'server_loss_total' => $serverLossTotal,
+                    'sold_total_amount' => $soldTotal,
+                    'status' => 'CLOTURE',
+                    'decided_by' => $actor['id'] ?? null,
+                    'id' => (int) $item['id'],
+                ]);
+                $totalReturned += $returnedTotal;
+                $totalLoss += $serverLossTotal;
+            }
+
+            $pdo->prepare(
+                'UPDATE server_requests
+                 SET status = "CLOTURE",
+                     total_sold_amount = 0,
+                     total_returned_amount = :total_returned_amount,
+                     total_server_loss_amount = :total_server_loss_amount,
+                     decided_by = :decided_by,
+                     resolution_note = :resolution_note,
+                     resolution_by = :resolution_by,
+                     resolution_at = NOW(),
+                     updated_at = NOW(),
+                     closed_at = NOW()
+                 WHERE id = :id AND restaurant_id = :restaurant_id'
+            )->execute([
+                'total_returned_amount' => $totalReturned,
+                'total_server_loss_amount' => $totalLoss,
+                'decided_by' => $actor['id'] ?? null,
+                'resolution_note' => '[Responsable — sans fourniture] ' . $reason,
+                'resolution_by' => $actor['id'] ?? null,
+                'id' => $requestId,
+                'restaurant_id' => $restaurantId,
+            ]);
+
+            $pdo->commit();
+        } catch (\Throwable $e) {
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+            throw $e;
+        }
+
+        $auditAction = $terminalMode === 'server_shortage'
+            ? 'server_request_closed_manager_shortage'
+            : 'server_request_closed_manager_no_sale';
+        $auditJust = $terminalMode === 'server_shortage'
+            ? 'Clôture responsable avec manquant (aucune fourniture cuisine)'
+            : 'Clôture responsable sans vente (aucune fourniture cuisine)';
+        Container::getInstance()->get('audit')->log([
+            'restaurant_id' => $restaurantId,
+            'user_id' => $actor['id'] ?? null,
+            'actor_name' => $actor['full_name'] ?? '',
+            'actor_role_code' => $actor['role_code'] ?? '',
+            'module_name' => 'sales',
+            'action_name' => $auditAction,
+            'entity_type' => 'server_requests',
+            'entity_id' => (string) $requestId,
+            'new_values' => [
+                'terminal_zero_supply' => true,
+                'operation' => $this->buildServerRequestOperationSnapshot(
+                    $this->findServerRequest($requestId, $restaurantId) ?? [],
+                    $this->serverRequestLineRowsForAudit($restaurantId, $requestId)
+                ),
+            ],
+            'justification' => $auditJust . ($reason !== '' ? ' — ' . $reason : ''),
+        ]);
+    }
+
+    /**
+     * Aligne la demande serveur sur une vente déjà existante : pas de createSale, pas de nouvelle consommation stock.
+     */
+    private function syncServerRequestClosureFromExistingSale(int $restaurantId, int $requestId, int $saleId, array $actor): void
+    {
+        $pdo = $this->database->pdo();
+        $saleSt = $pdo->prepare(
+            'SELECT id, restaurant_id, origin_type, origin_id, total_amount
+             FROM sales
+             WHERE id = :id AND restaurant_id = :rid
+             LIMIT 1'
+        );
+        $saleSt->execute(['id' => $saleId, 'rid' => $restaurantId]);
+        $saleRow = $saleSt->fetch(PDO::FETCH_ASSOC);
+        if ($saleRow === false) {
+            throw new \RuntimeException('Vente liee introuvable.');
+        }
+        if ((string) ($saleRow['origin_type'] ?? '') !== 'server_request'
+            || (int) ($saleRow['origin_id'] ?? 0) !== $requestId) {
+            throw new \RuntimeException('La vente existante ne correspond pas a cette commande.');
+        }
+
+        $aggSt = $pdo->prepare(
+            'SELECT menu_item_id, SUM(quantity) AS qty_sum
+             FROM sale_items
+             WHERE sale_id = :sid AND status = "SERVI"
+             GROUP BY menu_item_id'
+        );
+        $aggSt->execute(['sid' => $saleId]);
+        /** @var array<int, float> $remainingByMenu */
+        $remainingByMenu = [];
+        foreach ($aggSt->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $mid = (int) ($r['menu_item_id'] ?? 0);
+            if ($mid <= 0) {
+                continue;
+            }
+            $remainingByMenu[$mid] = (float) ($r['qty_sum'] ?? 0);
+        }
+
+        $items = $this->listServerRequestItemsByRequest($requestId, $restaurantId);
+        if ($items === []) {
+            throw new \RuntimeException('Aucun article a conclure.');
+        }
+
+        $pdo->beginTransaction();
+        try {
+            $updateItem = $pdo->prepare(
+                'UPDATE server_request_items
+                 SET sold_quantity = :sold_quantity,
+                     returned_quantity = :returned_quantity,
+                     returned_quantity_validated = :returned_quantity_validated,
+                     sold_total = :sold_total,
+                     returned_total = :returned_total,
+                     server_loss_total = :server_loss_total,
+                     total_requested_amount = requested_total,
+                     total_supplied_amount = supplied_total,
+                     total_sold_amount = :sold_total_amount,
+                     status = :status,
+                     decided_by = :decided_by,
+                     updated_at = NOW()
+                 WHERE id = :id'
+            );
+
+            $totalSold = 0.0;
+            $totalReturned = 0.0;
+            $totalServerLoss = 0.0;
+
+            foreach ($items as $item) {
+                $mid = (int) ($item['menu_item_id'] ?? 0);
+                $suppliedQuantity = (float) ($item['supplied_quantity'] ?? 0);
+                $unitPrice = (float) ($item['unit_price'] ?? 0);
+                $avail = $remainingByMenu[$mid] ?? 0.0;
+                $soldQuantity = min($suppliedQuantity, max(0.0, $avail));
+                $remainingByMenu[$mid] = max(0.0, $avail - $soldQuantity);
+                $unsoldSupplied = max(0.0, $suppliedQuantity - $soldQuantity);
+                $returnedQuantity = 0.0;
+                $serverLossTotal = $unsoldSupplied * $unitPrice;
+                $soldTotal = $soldQuantity * $unitPrice;
+                $returnedTotal = $returnedQuantity * $unitPrice;
+
+                $updateItem->execute([
+                    'sold_quantity' => $soldQuantity,
+                    'returned_quantity' => $returnedQuantity,
+                    'returned_quantity_validated' => $returnedQuantity,
+                    'sold_total' => $soldTotal,
+                    'returned_total' => $returnedTotal,
+                    'server_loss_total' => $serverLossTotal,
+                    'sold_total_amount' => $soldTotal,
+                    'status' => 'CLOTURE',
+                    'decided_by' => $actor['id'] ?? null,
+                    'id' => (int) $item['id'],
+                ]);
+
+                $totalSold += $soldTotal;
+                $totalReturned += $returnedTotal;
+                $totalServerLoss += $serverLossTotal;
+            }
+
+            $pdo->prepare(
+                'UPDATE server_requests
+                 SET status = "CLOTURE",
+                     total_sold_amount = :total_sold_amount,
+                     total_returned_amount = :total_returned_amount,
+                     total_server_loss_amount = :total_server_loss_amount,
+                     decided_by = :decided_by,
+                     updated_at = NOW(),
+                     closed_at = NOW()
+                 WHERE id = :id AND restaurant_id = :restaurant_id'
+            )->execute([
+                'total_sold_amount' => $totalSold,
+                'total_returned_amount' => $totalReturned,
+                'total_server_loss_amount' => $totalServerLoss,
+                'decided_by' => $actor['id'] ?? null,
+                'id' => $requestId,
+                'restaurant_id' => $restaurantId,
+            ]);
+
+            $pdo->commit();
+        } catch (\Throwable $e) {
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+            throw $e;
+        }
+
+        Container::getInstance()->get('audit')->log([
+            'restaurant_id' => $restaurantId,
+            'user_id' => $actor['id'] ?? null,
+            'actor_name' => $actor['full_name'] ?? '',
+            'actor_role_code' => $actor['role_code'] ?? '',
+            'module_name' => 'sales',
+            'action_name' => 'server_request_synced_from_existing_sale',
+            'entity_type' => 'server_requests',
+            'entity_id' => (string) $requestId,
+            'new_values' => [
+                'sale_id' => $saleId,
+                'operation' => $this->buildServerRequestOperationSnapshot(
+                    $this->findServerRequest($requestId, $restaurantId) ?? [],
+                    $this->serverRequestLineRowsForAudit($restaurantId, $requestId)
+                ),
+            ],
+            'justification' => 'Alignement responsable sur vente existante (pas de nouvelle vente ni stock)',
+        ]);
+    }
+
+    /**
      * @param array<string, mixed> $extra
      */
     public function managerResolveServerRequest(int $restaurantId, int $requestId, string $mode, string $reason, array $actor, array $extra = []): void
@@ -1346,15 +1612,151 @@ final class SalesService
 
             return;
         }
-        if ((float) ($request['total_supplied_amount'] ?? 0) <= 0.0001) {
-            throw new \RuntimeException('Aucune fourniture validee sur cette demande.');
+
+        $supHeader = (float) ($request['total_supplied_amount'] ?? 0);
+        $existingSaleId = $this->findLatestSaleIdByServerRequestOrigin($restaurantId, $requestId);
+
+        if ($mode === 'served_sale' && $supHeader <= 0.0001 && $existingSaleId === null) {
+            throw new \RuntimeException(
+                'Sans fourniture cuisine validee ni vente existante : utilisez « Cloturer sans vente » ou « Mettre en manquant ».'
+            );
         }
-        if (in_array($st, ['PRET_A_SERVIR', 'FOURNI_PARTIEL', 'FOURNI_TOTAL'], true)) {
+
+        if (($mode === 'close_no_sale' || $mode === 'server_shortage') && $supHeader <= 0.0001) {
+            if ($existingSaleId !== null) {
+                throw new \RuntimeException(
+                    'Une vente est deja liee a cette commande : choisissez « Valider comme servie » pour aligner les statuts sans nouvelle vente.'
+                );
+            }
+            $this->managerResponsibleTerminalCloseZeroSupply($restaurantId, $requestId, $mode, $reason, $actor);
+            $afterReq = $this->findServerRequest($requestId, $restaurantId) ?? [];
+            $operationSnapshot = $this->buildServerRequestOperationSnapshot(
+                $afterReq,
+                $this->serverRequestLineRowsForAudit($restaurantId, $requestId)
+            );
+            $outcome = $mode === 'server_shortage'
+                ? ManagerResolutionService::OUTCOME_MANQUANT_GERANT
+                : ManagerResolutionService::OUTCOME_CLOTURE_GERANT;
+            $auditJust = $mode === 'server_shortage'
+                ? 'Cloture responsable avec manquant (aucune fourniture cuisine)'
+                : 'Cloture responsable sans vente (aucune fourniture cuisine)';
+            $mr->markServerRequestResponsibleOutcome(
+                $restaurantId,
+                $requestId,
+                $outcome,
+                $actor,
+                array_merge($beforeSnap, [
+                    'request_status_after' => (string) ($afterReq['status'] ?? 'CLOTURE'),
+                    'terminal_zero_supply' => true,
+                    'shortage_mode' => $mode === 'server_shortage',
+                ]),
+            );
+            Container::getInstance()->get('audit')->log([
+                'restaurant_id' => $restaurantId,
+                'user_id' => $actor['id'] ?? null,
+                'actor_name' => $actor['full_name'] ?? '',
+                'actor_role_code' => $actor['role_code'] ?? '',
+                'module_name' => 'manager_resolution',
+                'action_name' => 'server_request_responsible_terminal',
+                'entity_type' => 'server_requests',
+                'entity_id' => (string) $requestId,
+                'old_values' => $beforeSnap,
+                'new_values' => [
+                    'outcome' => $outcome,
+                    'terminal_zero_supply' => true,
+                ],
+                'justification' => $auditJust . ($reason !== '' ? ' — ' . $reason : ''),
+            ]);
+            if ($mode === 'server_shortage' && $serverUid > 0) {
+                $items = $this->listServerRequestItemsByRequest($requestId, $restaurantId);
+                $lossAmt = 0.0;
+                $arts = [];
+                foreach ($items as $item) {
+                    $sup = (float) $item['supplied_quantity'];
+                    $unit = (float) $item['unit_price'];
+                    $lossAmt += $sup * $unit;
+                    $arts[] = [
+                        'menu_item_id' => (int) ($item['menu_item_id'] ?? 0),
+                        'qty' => $sup,
+                        'line_total' => $sup * $unit,
+                    ];
+                }
+                if ($lossAmt > 0.0001) {
+                    Container::getInstance()->get('managerResolution')->recordServerPayrollShortage(
+                        $restaurantId,
+                        $serverUid,
+                        'server_request',
+                        $requestId,
+                        $lossAmt,
+                        Container::getInstance()->get('reportService')->todayForRestaurant($restaurantId),
+                        'server_shortage',
+                        $reason,
+                        isset($extra['imputation_basis']) && is_string($extra['imputation_basis']) ? $extra['imputation_basis'] : null,
+                        $arts,
+                        $actor,
+                    );
+                }
+            }
+            $this->applyManagerRequestDisciplineExtras($restaurantId, $serverUid, $actor, $extra, $operationSnapshot);
+
+            return;
+        }
+
+        $needsReceiptConfirm = false;
+        if ($mode === 'close_no_sale' || $mode === 'server_shortage') {
+            $needsReceiptConfirm = true;
+        } elseif ($mode === 'served_sale') {
+            $needsReceiptConfirm = $existingSaleId === null || $supHeader > 0.0001;
+        }
+        if ($needsReceiptConfirm && in_array($st, ['PRET_A_SERVIR', 'FOURNI_PARTIEL', 'FOURNI_TOTAL'], true)) {
             $this->confirmServerRequestReceipt($restaurantId, $requestId, $actor);
         }
-        $requestAfter = $this->findServerRequest($requestId, $restaurantId) ?? [];
+
+        $requestAfterReceipt = $this->findServerRequest($requestId, $restaurantId) ?? [];
+
+        if ($mode === 'served_sale' && $existingSaleId !== null) {
+            $this->syncServerRequestClosureFromExistingSale($restaurantId, $requestId, $existingSaleId, $actor);
+            $requestFinal = $this->findServerRequest($requestId, $restaurantId) ?? [];
+            $operationSnapshot = $this->buildServerRequestOperationSnapshot(
+                $requestFinal,
+                $this->serverRequestLineRowsForAudit($restaurantId, $requestId)
+            );
+            $mr->markServerRequestResponsibleOutcome(
+                $restaurantId,
+                $requestId,
+                ManagerResolutionService::OUTCOME_VALIDE_GERANT,
+                $actor,
+                array_merge($beforeSnap, [
+                    'request_status_after' => 'CLOTURE',
+                    'sale_id' => $existingSaleId,
+                    'sync_from_existing_sale' => true,
+                    'clemency_requested' => ($extra['grant_clemency'] ?? '') === '1' || ($extra['grant_clemency'] ?? '') === 'on',
+                ]),
+            );
+            Container::getInstance()->get('audit')->log([
+                'restaurant_id' => $restaurantId,
+                'user_id' => $actor['id'] ?? null,
+                'actor_name' => $actor['full_name'] ?? '',
+                'actor_role_code' => $actor['role_code'] ?? '',
+                'module_name' => 'manager_resolution',
+                'action_name' => 'server_request_responsible_terminal',
+                'entity_type' => 'server_requests',
+                'entity_id' => (string) $requestId,
+                'old_values' => $beforeSnap,
+                'new_values' => [
+                    'outcome' => ManagerResolutionService::OUTCOME_VALIDE_GERANT,
+                    'sale_id' => $existingSaleId,
+                    'sync_from_existing_sale' => true,
+                ],
+                'justification' => $reason !== '' ? $reason : 'Validee comme servie (vente existante)',
+            ]);
+            $this->applyManagerRequestDisciplineExtras($restaurantId, $serverUid, $actor, $extra, $operationSnapshot);
+
+            return;
+        }
+
         $operationSnapshot = $this->buildServerRequestOperationSnapshot(
-            $requestAfter,
+            $requestAfterReceipt,
             $this->serverRequestLineRowsForAudit($restaurantId, $requestId)
         );
         if ($mode === 'served_sale') {
@@ -1460,19 +1862,21 @@ final class SalesService
                     'line_total' => $sup * $unit,
                 ];
             }
-            Container::getInstance()->get('managerResolution')->recordServerPayrollShortage(
-                $restaurantId,
-                $serverUid,
-                'server_request',
-                $requestId,
-                $lossAmt,
-                Container::getInstance()->get('reportService')->todayForRestaurant($restaurantId),
-                'server_shortage',
-                $reason,
-                isset($extra['imputation_basis']) && is_string($extra['imputation_basis']) ? $extra['imputation_basis'] : null,
-                $arts,
-                $actor,
-            );
+            if ($lossAmt > 0.0001) {
+                Container::getInstance()->get('managerResolution')->recordServerPayrollShortage(
+                    $restaurantId,
+                    $serverUid,
+                    'server_request',
+                    $requestId,
+                    $lossAmt,
+                    Container::getInstance()->get('reportService')->todayForRestaurant($restaurantId),
+                    'server_shortage',
+                    $reason,
+                    isset($extra['imputation_basis']) && is_string($extra['imputation_basis']) ? $extra['imputation_basis'] : null,
+                    $arts,
+                    $actor,
+                );
+            }
         }
         $this->applyManagerRequestDisciplineExtras($restaurantId, $serverUid, $actor, $extra, $operationSnapshot);
     }
@@ -1555,7 +1959,8 @@ final class SalesService
                      resolution_note = :resolution_note,
                      resolution_by = :resolution_by,
                      resolution_at = NOW(),
-                     updated_at = NOW()
+                     updated_at = NOW(),
+                     closed_at = NOW()
                  WHERE id = :id AND restaurant_id = :restaurant_id'
             )->execute([
                 'resolution_note' => '[Responsable] ' . $reason,
@@ -1596,6 +2001,14 @@ final class SalesService
                 'motif' => $reason,
             ],
         );
+    }
+
+    /**
+     * Vente déjà créée pour cette commande serveur (garde-fou anti double vente / double stock).
+     */
+    public function latestSaleIdLinkedToServerRequest(int $restaurantId, int $requestId): ?int
+    {
+        return $this->findLatestSaleIdByServerRequestOrigin($restaurantId, $requestId);
     }
 
     private function findLatestSaleIdByServerRequestOrigin(int $restaurantId, int $requestId): ?int

@@ -172,6 +172,7 @@ final class RegularizationGateService
              INNER JOIN users u ON u.id = sr.server_id
              WHERE sr.restaurant_id = :rid
                AND sr.status NOT IN ("ANNULE", "REFUSE_CUISINE", "CLOTURE", "VENDU_TOTAL", "VENDU_PARTIEL")
+               AND COALESCE(sr.responsible_outcome_code, "") = ""
                AND sr.created_at < :cutoff
              ORDER BY sr.created_at ASC
              LIMIT 25'
@@ -210,6 +211,7 @@ final class RegularizationGateService
              WHERE ct.restaurant_id = :rid
                AND ct.source_type = "sale"
                AND ct.status = "REMIS_A_CAISSE"
+               AND COALESCE(ct.responsible_outcome_code, "") = ""
                AND COALESCE(ct.requested_at, ct.created_at) < :cutoff
              ORDER BY ct.id ASC
              LIMIT 20'
@@ -244,6 +246,7 @@ final class RegularizationGateService
              INNER JOIN menu_items mi ON mi.id = sri.menu_item_id
              INNER JOIN users u ON u.id = sr.server_id
              WHERE sr.restaurant_id = :rid
+               AND COALESCE(sr.responsible_outcome_code, "") = ""
                AND sri.status IN ("DEMANDE", "EN_PREPARATION", "FOURNI_PARTIEL", "FOURNI_TOTAL", "PRET_A_SERVIR")
                AND COALESCE(sr.created_at, sr.updated_at) < :cutoff
              ORDER BY sr.created_at ASC
@@ -313,6 +316,7 @@ final class RegularizationGateService
              LEFT JOIN users u ON u.id = ct.from_user_id
              WHERE ct.restaurant_id = :rid
                AND ct.status IN ("REMIS_A_GERANT", "REMIS_A_PROPRIETAIRE")
+               AND COALESCE(ct.responsible_outcome_code, "") = ""
                AND COALESCE(ct.requested_at, ct.created_at) < :cutoff
              ORDER BY ct.id ASC
              LIMIT 15'
@@ -513,6 +517,7 @@ final class RegularizationGateService
             'SELECT COUNT(*) FROM server_requests
              WHERE restaurant_id = :rid AND server_id = :uid
                AND status NOT IN ("ANNULE", "REFUSE_CUISINE", "CLOTURE", "VENDU_TOTAL", "VENDU_PARTIEL")
+               AND COALESCE(responsible_outcome_code, "") = ""
                AND created_at < :today_start'
         );
         $st->execute(['rid' => $restaurantId, 'uid' => $serverUserId, 'today_start' => $todayStart]);
@@ -528,6 +533,7 @@ final class RegularizationGateService
             'SELECT COUNT(*) FROM server_request_items sri
              INNER JOIN server_requests sr ON sr.id = sri.request_id
              WHERE sr.restaurant_id = :rid
+               AND COALESCE(sr.responsible_outcome_code, "") = ""
                AND sri.status IN ("DEMANDE", "EN_PREPARATION", "FOURNI_PARTIEL", "FOURNI_TOTAL", "PRET_A_SERVIR")
                AND COALESCE(sr.created_at, sr.updated_at) < :today_start'
         );

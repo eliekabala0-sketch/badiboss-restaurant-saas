@@ -68,6 +68,12 @@ $eid = (int) ($mr['entity_id'] ?? 0);
     <?php endif; ?>
     <p style="margin:0 0 12px; font-size:0.92rem; color:var(--muted);"><em><?= e((string) ($mr['penalty_message_default'] ?? 'Régularisé par responsable — pénalité conservée')) ?></em></p>
 
+    <?php if ($kind === 'server_request' && !empty($mr['responsible_stock_notice'])): ?>
+        <p class="muted" style="margin:0 0 14px; padding:10px 12px; background:rgba(234,179,8,0.12); border-radius:6px; font-size:0.92rem; line-height:1.45;">
+            <?= e((string) $mr['responsible_stock_notice']) ?>
+        </p>
+    <?php endif; ?>
+
     <?php if ($kind === 'server_request'):
         $focusReturn = 'focus=' . rawurlencode('server_request:' . (string) $eid); ?>
         <form method="post" action="/ventes/resolution-responsable" style="padding-top:12px; border-top:1px solid var(--line);">
@@ -76,8 +82,11 @@ $eid = (int) ($mr['entity_id'] ?? 0);
             <input type="hidden" name="return_focus" value="<?= e($focusReturn) ?>">
             <label>Votre décision</label>
             <select name="decision" required>
-                <?php foreach ($decisions as $d): ?>
-                    <option value="<?= e((string) ($d['code'] ?? '')) ?>"><?= e((string) ($d['label'] ?? '')) ?></option>
+                <?php foreach ($decisions as $d):
+                    $dis = !empty($d['disabled']);
+                    $why = trim((string) ($d['disabled_reason'] ?? ''));
+                    ?>
+                    <option value="<?= e((string) ($d['code'] ?? '')) ?>"<?= $dis ? ' disabled' : '' ?><?= ($dis && $why !== '') ? ' title="' . e($why) . '"' : '' ?>><?= e((string) ($d['label'] ?? '')) ?><?= $dis ? ' — ' . e($why !== '' ? $why : 'Indisponible') : '' ?></option>
                 <?php endforeach; ?>
             </select>
             <label>Motif (obligatoire sauf « servie ») — vous pouvez garder le texte proposé</label>
