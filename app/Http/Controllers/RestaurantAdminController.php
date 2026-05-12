@@ -222,6 +222,22 @@ final class RestaurantAdminController
         redirect('/owner');
     }
 
+    public function updateDisciplineSchedule(Request $request): void
+    {
+        $restaurantId = current_restaurant_id();
+        try {
+            Container::getInstance()->get('restaurantAdmin')->updateDisciplineWorkSchedule($restaurantId, [
+                'work_start' => (string) $request->input('work_start', ''),
+                'arrival_grace_minutes' => $request->input('arrival_grace_minutes', 15),
+                'cash_deadline' => (string) $request->input('cash_deadline', ''),
+            ], is_array($_SESSION['user'] ?? null) ? $_SESSION['user'] : []);
+            flash('success', 'Paramètres horaires discipline enregistrés.');
+        } catch (\Throwable $e) {
+            flash('error', ui_safe_message($e->getMessage()));
+        }
+        redirect('/owner');
+    }
+
     public function activateSubscription(Request $request): void
     {
         $restaurantId = (int) $request->route('id');

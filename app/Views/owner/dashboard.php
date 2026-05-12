@@ -41,6 +41,38 @@ $day_start_hold = $day_start_hold ?? ['blocked' => false, 'reasons' => [], 'item
 ?>
 <?php require base_path('app/Views/partials/regularization_hold_banner.php'); ?>
 <?php require base_path('app/Views/partials/operational_period_tabs.php'); ?>
+<?php if (can_access('staff.team_gauges.view')): ?>
+<section class="card no-print" style="padding:16px 18px; margin-bottom:18px;">
+    <h3 style="margin:0 0 8px; font-size:1.05rem;">Paramètres horaires discipline</h3>
+    <?php $dws = is_array($discipline_work_schedule ?? null) ? $discipline_work_schedule : []; ?>
+    <?php if (!empty($dws['notice_unset'])): ?>
+        <p class="muted" style="margin:0 0 10px; font-size:0.88rem;">Paramètres non définis en base — valeurs par défaut affichées (08:00, 15 min, versement 22:00).</p>
+    <?php endif; ?>
+    <form method="post" action="/owner/settings/discipline-schedule" class="grid" style="gap:12px; align-items:end;">
+        <label>Début travail (HH:MM)
+            <input type="text" name="work_start" value="<?= e((string) ($dws['work_start'] ?? '08:00')) ?>" pattern="\d{1,2}:\d{2}" required>
+        </label>
+        <label>Tolérance arrivée (minutes)
+            <input type="number" name="arrival_grace_minutes" min="0" max="120" value="<?= e((string) ($dws['arrival_grace_minutes'] ?? '15')) ?>">
+        </label>
+        <label>Limite versement caisse (HH:MM)
+            <input type="text" name="cash_deadline" value="<?= e((string) ($dws['cash_deadline'] ?? '22:00')) ?>" pattern="\d{1,2}:\d{2}" required>
+        </label>
+        <button type="submit">Enregistrer</button>
+    </form>
+    <p class="muted" style="margin:10px 0 0; font-size:0.82rem;">Utilisé pour la pénalité « retard léger » (1re action audit) et affichage cohérent avec les rapports.</p>
+</section>
+<?php endif; ?>
+<?php
+$disciplinary_alerts = $disciplinary_alerts ?? [];
+$discipline_work_schedule = $discipline_work_schedule ?? null;
+?>
+<?php if (can_access('staff.team_gauges.view') && $disciplinary_alerts !== []): ?>
+<details class="card no-print" style="padding:12px 16px; margin-bottom:18px;" data-autoclose-details>
+    <summary style="font-weight:600; cursor:pointer;">Alertes disciplinaires</summary>
+    <?php require base_path('app/Views/partials/disciplinary_alerts_foldable.php'); ?>
+</details>
+<?php endif; ?>
 <section class="card brand-visual" style="margin-bottom:24px; background-image:url('<?= e($restaurantCover) ?>');">
     <div class="brand-visual-body">
         <img src="<?= e($restaurantLogo) ?>" alt="Logo restaurant" class="brand-visual-logo">

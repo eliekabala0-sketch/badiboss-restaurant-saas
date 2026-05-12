@@ -18,6 +18,9 @@ final class StaffDisciplineService
     /** @var array<string, ?string> */
     private array $userFirstActivityYmdCache = [];
 
+    /** @var array<string, true> */
+    private array $absenceEscalationSynced = [];
+
     public function __construct(private readonly Database $database)
     {
     }
@@ -139,10 +142,10 @@ final class StaffDisciplineService
         }
         $this->ensureSchema();
         $labelMap = [
-            'server_shortfall_today' => ['delta' => -15, 'label' => 'Manquant caisse (ventes du jour non couvertes).'],
-            'server_shortfall_legacy' => ['delta' => -15, 'label' => 'Arriéré de remise caisse (jours précédents).'],
-            'server_remittance_rejected' => ['delta' => -10, 'label' => 'Remise caisse rejetée : montant toujours à charge jusqu’à nouvelle remise valide.'],
-            'server_stale_requests' => ['delta' => -10, 'label' => 'Commandes service non clôturées depuis la veille.'],
+            'server_shortfall_today' => ['delta' => -32, 'label' => 'Manquant caisse (ventes du jour non couvertes) — gravité élevée.'],
+            'server_shortfall_legacy' => ['delta' => -32, 'label' => 'Arriéré de remise caisse (jours précédents) — gravité élevée.'],
+            'server_remittance_rejected' => ['delta' => -22, 'label' => 'Remise caisse rejetée : montant toujours à charge jusqu’à nouvelle remise valide.'],
+            'server_stale_requests' => ['delta' => -12, 'label' => 'Commandes service non clôturées depuis la veille.'],
             'cashier_pending_remis' => ['delta' => -10, 'label' => 'Remises serveur en attente de décision caisse (héritées).'],
             'kitchen_pending' => ['delta' => -10, 'label' => 'Lignes cuisine / service à traiter depuis la veille.'],
             'stock_kitchen_requests_pending' => ['delta' => -10, 'label' => 'Demandes magasin cuisine non finalisées.'],
@@ -274,6 +277,9 @@ final class StaffDisciplineService
     public function gaugesForUser(int $restaurantId, int $userId, string $todayYmd): array
     {
         $this->ensureSchema();
+        if ($userId > 0 && !$this->isOwnerDisciplineRole($this->resolveRoleCodeForUser($restaurantId, $userId))) {
+            $this->syncAbsenceEscalationsForUser($restaurantId, $userId);
+        }
         $tz = Container::getInstance()->get('reportService')->timezoneForRestaurantReports($restaurantId);
         $daily = $this->scoreForDayOrNull($restaurantId, $userId, $todayYmd, $tz);
         $weekly = $this->averageLastDaysNullable($restaurantId, $userId, $todayYmd, 7, $tz);
@@ -422,6 +428,10 @@ final class StaffDisciplineService
         }
         $anchor = $anchorYmd !== '' && preg_match('/^\d{4}-\d{2}-\d{2}$/', $anchorYmd) ? $anchorYmd : $todayY;
 
+        if (!$this->isOwnerDisciplineRole($this->resolveRoleCodeForUser($restaurantId, $userId))) {
+            $this->syncAbsenceEscalationsForUser($restaurantId, $userId);
+        }
+
         if ($this->isOwnerDisciplineRole($this->resolveRoleCodeForUser($restaurantId, $userId))) {
             return [
                 'daily' => null,
@@ -549,6 +559,444 @@ final class StaffDisciplineService
         $this->sortOperationalGaugeSnapshotRows($out);
 
         return $out;
+    }
+
+    /**
+     * Règles horaires pour retard / remise caisse (paramètres restaurant, défauts raisonnables).
+     *
+     * @return array{work_start:string, arrival_grace_minutes:int, cash_deadline:string, notice_unset:bool}
+     */
+    public function disciplineWorkScheduleForRestaurant(int $restaurantId): array
+    {
+        $defaults = [
+            'work_start' => '08:00',
+            'arrival_grace_minutes' => 15,
+            'cash_deadline' => '22:00',
+            'notice_unset' => false,
+        ];
+        $map = Container::getInstance()->get('restaurantAdmin')->listSettings($restaurantId);
+        $wk = trim((string) ($map['discipline.work_start_time'] ?? ''));
+        $gr = trim((string) ($map['discipline.arrival_grace_minutes'] ?? ''));
+        $cd = trim((string) ($map['discipline.cash_remittance_deadline_time'] ?? ''));
+        $unset = false;
+        if ($wk === '' || !preg_match('/^\d{1,2}:\d{2}$/', $wk)) {
+            $wk = $defaults['work_start'];
+            $unset = true;
+        }
+        if ($gr === '' || !ctype_digit($gr)) {
+            $gr = (string) $defaults['arrival_grace_minutes'];
+            $unset = true;
+        }
+        if ($cd === '' || !preg_match('/^\d{1,2}:\d{2}$/', $cd)) {
+            $cd = $defaults['cash_deadline'];
+            $unset = true;
+        }
+
+        return [
+            'work_start' => $wk,
+            'arrival_grace_minutes' => max(0, min(120, (int) $gr)),
+            'cash_deadline' => $cd,
+            'notice_unset' => $unset,
+        ];
+    }
+
+    /**
+     * Alertes discipline immédiates (lecture synthétique + liens actions).
+     *
+     * @return list<array<string, mixed>>
+     */
+    public function listDisciplinaryAlerts(int $restaurantId): array
+    {
+        $this->ensureSchema();
+        $tz = Container::getInstance()->get('reportService')->timezoneForRestaurantReports($restaurantId);
+        $todayY = Container::getInstance()->get('reportService')->todayForRestaurant($restaurantId);
+        $alerts = [];
+        $pdo = $this->database->pdo();
+
+        foreach (Container::getInstance()->get('roleAdmin')->listUsersForRestaurant($restaurantId) as $u) {
+            $uid = (int) ($u['id'] ?? 0);
+            $role = (string) ($u['role_code'] ?? '');
+            if ($uid <= 0 || $this->isOwnerDisciplineRole($role)) {
+                continue;
+            }
+            $name = (string) ($u['full_name'] ?? '');
+            $score = $this->gaugesForUser($restaurantId, $uid, $todayY);
+            $monthly = $score['monthly_avg'];
+
+            $unjWeek = 0;
+            $unjDays = [];
+            try {
+                $mon = (new DateTimeImmutable($todayY . ' 00:00:00', $tz))->modify('monday this week');
+            } catch (\Throwable) {
+                $mon = new DateTimeImmutable($todayY . ' 00:00:00', $tz);
+            }
+            for ($i = 0; $i < 7; $i++) {
+                $d = $mon->modify('+' . $i . ' days')->format('Y-m-d');
+                if ($d > $todayY) {
+                    break;
+                }
+                $ev = $this->evaluateCalendarDay($restaurantId, $uid, $role, $d, $tz);
+                if (($ev['evaluation_kind'] ?? '') === 'absence_unjustified' && !empty($ev['evaluated'])) {
+                    $unjWeek++;
+                    $unjDays[] = $d;
+                }
+            }
+            if ($unjWeek >= 2) {
+                $alerts[] = [
+                    'kind' => 'absence_week',
+                    'severity' => $unjWeek >= 3 ? 'critique' : 'elevee',
+                    'user_id' => $uid,
+                    'agent' => $name,
+                    'role' => $role,
+                    'message' => $name . ' : ' . $unjWeek . ' absence(s) / inactivité non justifiée(s) cette semaine',
+                    'dates' => array_reverse($unjDays),
+                    'score_hint' => $monthly,
+                    'proposition' => $unjWeek >= 3
+                        ? 'Sanction grave + entretien gérant obligatoire'
+                        : 'Alerter et demander justification écrite',
+                ];
+            }
+
+            $streak = $this->countTrailingUnjustifiedStreak($restaurantId, $uid, $role, $todayY, $tz, 10);
+            if ($streak >= 2) {
+                $alerts[] = [
+                    'kind' => 'absence_streak',
+                    'severity' => $streak >= 3 ? 'critique' : 'elevee',
+                    'user_id' => $uid,
+                    'agent' => $name,
+                    'role' => $role,
+                    'message' => $name . ' : ' . $streak . ' jour(s) consécutif(s) sans activité justifiée',
+                    'dates' => [],
+                    'score_hint' => $monthly,
+                    'proposition' => $streak >= 3
+                        ? 'Sanction lourde + validation gérant'
+                        : 'Alerte disciplinaire immédiate',
+                ];
+            }
+
+            if ($role === 'cashier_server') {
+                $stSf = $pdo->prepare(
+                    'SELECT COUNT(*) FROM staff_score_ledger
+                     WHERE restaurant_id = :rid AND user_id = :uid
+                       AND reason_code IN ("server_shortfall_today","server_shortfall_legacy")
+                       AND day_ymd >= DATE_SUB(:today, INTERVAL 14 DAY)'
+                );
+                $stSf->execute(['rid' => $restaurantId, 'uid' => $uid, 'today' => $todayY]);
+                $sf = (int) $stSf->fetchColumn();
+                if ($sf > 0) {
+                    $alerts[] = [
+                        'kind' => 'cash_shortfall',
+                        'severity' => 'elevee',
+                        'user_id' => $uid,
+                        'agent' => $name,
+                        'role' => $role,
+                        'message' => $name . ' : manquant caisse signalé (14 j.)',
+                        'dates' => [],
+                        'score_hint' => $monthly,
+                        'proposition' => 'Régulariser remise ou décision gérant sur arriérés',
+                    ];
+                }
+                $stLt = $pdo->prepare(
+                    'SELECT COUNT(*) FROM cash_transfers
+                     WHERE restaurant_id = :rid AND from_user_id = :uid AND source_type = "sale"
+                       AND sale_day_ymd IS NOT NULL AND remittance_day_ymd IS NOT NULL
+                       AND sale_day_ymd <> remittance_day_ymd
+                       AND COALESCE(requested_at, created_at) >= DATE_SUB(:today, INTERVAL 30 DAY)'
+                );
+                $stLt->execute(['rid' => $restaurantId, 'uid' => $uid, 'today' => $todayY]);
+                $lt = (int) $stLt->fetchColumn();
+                if ($lt >= 3) {
+                    $alerts[] = [
+                        'kind' => 'late_remittance_pattern',
+                        'severity' => 'elevee',
+                        'user_id' => $uid,
+                        'agent' => $name,
+                        'role' => $role,
+                        'message' => $name . ' : ' . $lt . ' remise(s) tardive(s) (30 j.)',
+                        'dates' => [],
+                        'score_hint' => $monthly,
+                        'proposition' => 'Sanction discipline + suivi caisse quotidien',
+                    ];
+                }
+            }
+
+            if ($role === 'kitchen') {
+                $stA = $pdo->prepare(
+                    'SELECT MAX(created_at) FROM audit_logs
+                     WHERE restaurant_id = :rid AND user_id = :uid
+                       AND module_name IN ("kitchen","sales","stock")'
+                );
+                $stA->execute(['rid' => $restaurantId, 'uid' => $uid]);
+                $last = $stA->fetchColumn();
+                if (is_string($last) && $last !== '') {
+                    try {
+                        $lastDt = new DateTimeImmutable($last, new DateTimeZone('UTC'));
+                        $daysSince = $lastDt->diff(new DateTimeImmutable('now', new DateTimeZone('UTC')))->days;
+                        if ($daysSince >= 2) {
+                            $alerts[] = [
+                                'kind' => 'kitchen_inactive',
+                                'severity' => 'moyenne',
+                                'user_id' => $uid,
+                                'agent' => $name,
+                                'role' => $role,
+                                'message' => $name . ' : aucune activité cuisine enregistrée depuis ' . $daysSince . ' jour(s)',
+                                'dates' => [],
+                                'score_hint' => $monthly,
+                                'proposition' => 'Vérifier planning ou absence non déclarée',
+                            ];
+                        }
+                    } catch (\Throwable) {
+                    }
+                }
+            }
+        }
+
+        usort($alerts, static function (array $a, array $b): int {
+            $order = ['critique' => 0, 'elevee' => 1, 'moyenne' => 2];
+            $sa = $order[(string) ($a['severity'] ?? '')] ?? 9;
+            $sb = $order[(string) ($b['severity'] ?? '')] ?? 9;
+
+            return $sa <=> $sb;
+        });
+
+        return array_slice($alerts, 0, 40);
+    }
+
+    public function recordDisciplinaryAlertFollowUp(
+        int $restaurantId,
+        int $targetUserId,
+        string $actionCode,
+        string $note,
+        array $actor,
+    ): void {
+        $note = trim($note);
+        $allowed = ['warn', 'justify', 'sanction', 'clemency', 'watch'];
+        if (!in_array($actionCode, $allowed, true)) {
+            throw new \RuntimeException('Action alerte invalide.');
+        }
+        if ($note === '' && $actionCode !== 'watch') {
+            throw new \RuntimeException('Note obligatoire pour cette action.');
+        }
+        $this->ensureSchema();
+        $tz = Container::getInstance()->get('reportService')->timezoneForRestaurantReports($restaurantId);
+        $dayYmd = (new DateTimeImmutable('now', $tz))->format('Y-m-d');
+        $label = match ($actionCode) {
+            'warn' => 'Suite alerte discipline : avertissement enregistré',
+            'justify' => 'Suite alerte discipline : justification demandée',
+            'sanction' => 'Suite alerte discipline : sanction appliquée (voir note)',
+            'clemency' => 'Suite alerte discipline : clémence / mesure d’apaisement',
+            default => 'Suite alerte discipline : agent placé sous surveillance renforcée',
+        };
+        $delta = match ($actionCode) {
+            'sanction' => -12,
+            'clemency' => 8,
+            default => 0,
+        };
+        $ins = $this->database->pdo()->prepare(
+            'INSERT INTO staff_score_ledger
+            (restaurant_id, user_id, day_ymd, reason_code, delta_points, label, ref_json)
+             VALUES (:rid, :uid, :d, :code, :delta, :label, :ref)'
+        );
+        $ins->execute([
+            'rid' => $restaurantId,
+            'uid' => $targetUserId,
+            'd' => $dayYmd,
+            'code' => 'disc_alert_followup_' . $actionCode,
+            'delta' => $delta,
+            'label' => $label,
+            'ref' => json_encode([
+                'by' => $actor['id'] ?? null,
+                'note' => $note,
+                'action' => $actionCode,
+            ], JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR),
+        ]);
+        Container::getInstance()->get('audit')->log([
+            'restaurant_id' => $restaurantId,
+            'user_id' => $actor['id'] ?? null,
+            'actor_name' => $actor['full_name'] ?? '',
+            'actor_role_code' => $actor['role_code'] ?? '',
+            'module_name' => 'staff_discipline',
+            'action_name' => 'disciplinary_alert_followup',
+            'entity_type' => 'users',
+            'entity_id' => (string) $targetUserId,
+            'new_values' => ['action' => $actionCode, 'note' => $note],
+            'justification' => 'Suivi alerte discipline',
+        ]);
+    }
+
+    private function countTrailingUnjustifiedStreak(
+        int $restaurantId,
+        int $userId,
+        string $roleCode,
+        string $todayY,
+        DateTimeZone $tz,
+        int $maxDays,
+    ): int {
+        $streak = 0;
+        for ($i = 0; $i < $maxDays; $i++) {
+            $d = (new DateTimeImmutable($todayY . ' 00:00:00', $tz))->modify('-' . $i . ' days')->format('Y-m-d');
+            $ev = $this->evaluateCalendarDay($restaurantId, $userId, $roleCode, $d, $tz);
+            if (($ev['evaluation_kind'] ?? '') === 'absence_unjustified' && !empty($ev['evaluated'])) {
+                $streak++;
+            } else {
+                break;
+            }
+        }
+
+        return $streak;
+    }
+
+    private function syncAbsenceEscalationsForUser(int $restaurantId, int $userId): void
+    {
+        $role = $this->resolveRoleCodeForUser($restaurantId, $userId);
+        if ($this->isOwnerDisciplineRole($role)) {
+            return;
+        }
+        $rs = Container::getInstance()->get('reportService');
+        $tz = $rs->timezoneForRestaurantReports($restaurantId);
+        $todayY = $rs->todayForRestaurant($restaurantId);
+        $k = $restaurantId . ':' . $userId . ':' . $todayY;
+        if (isset($this->absenceEscalationSynced[$k])) {
+            return;
+        }
+        $this->absenceEscalationSynced[$k] = true;
+
+        $pdo = $this->database->pdo();
+        $weekBuckets = [];
+        $daysFlags = [];
+        for ($i = 0; $i < 21; $i++) {
+            $d = (new DateTimeImmutable($todayY . ' 00:00:00', $tz))->modify('-' . $i . ' days')->format('Y-m-d');
+            $ev = $this->evaluateCalendarDay($restaurantId, $userId, $role, $d, $tz);
+            $isUnj = ($ev['evaluation_kind'] ?? '') === 'absence_unjustified' && !empty($ev['evaluated']);
+            $daysFlags[$d] = $isUnj;
+            if ($isUnj) {
+                try {
+                    $mon = (new DateTimeImmutable($d . ' 00:00:00', $tz))->modify('monday this week')->format('Y-m-d');
+                } catch (\Throwable) {
+                    $mon = substr($d, 0, 7) . '-01';
+                }
+                $weekBuckets[$mon] = ($weekBuckets[$mon] ?? 0) + 1;
+            }
+        }
+
+        $streak = 0;
+        for ($i = 0; $i < 21; $i++) {
+            $d = (new DateTimeImmutable($todayY . ' 00:00:00', $tz))->modify('-' . $i . ' days')->format('Y-m-d');
+            if (!empty($daysFlags[$d])) {
+                $streak++;
+            } else {
+                break;
+            }
+        }
+
+        if ($streak >= 3) {
+            $anchor = (new DateTimeImmutable($todayY . ' 00:00:00', $tz))->format('Y-m-d');
+            $this->insertEscalationLedgerOnce(
+                $pdo,
+                $restaurantId,
+                $userId,
+                $anchor,
+                'disc_abs_streak_3plus',
+                -55,
+                'Absences successives (3 j. ou plus) — sanction lourde (automatique).',
+                ['streak' => $streak, 'anchor' => $anchor],
+            );
+        } elseif ($streak === 2) {
+            $anchor = (new DateTimeImmutable($todayY . ' 00:00:00', $tz))->format('Y-m-d');
+            $this->insertEscalationLedgerOnce(
+                $pdo,
+                $restaurantId,
+                $userId,
+                $anchor,
+                'disc_abs_streak_2',
+                -28,
+                'Absences successives (2 j.) — alerte disciplinaire renforcée.',
+                ['streak' => 2, 'anchor' => $anchor],
+            );
+        }
+
+        foreach ($weekBuckets as $weekMon => $cnt) {
+            if ($cnt >= 3) {
+                $this->insertEscalationLedgerOnce(
+                    $pdo,
+                    $restaurantId,
+                    $userId,
+                    $weekMon,
+                    'disc_abs_week_3_' . $weekMon,
+                    -40,
+                    $cnt . ' absences / inactivité non justifiée(s) sur la même semaine — sanction grave.',
+                    ['week_start' => $weekMon, 'count' => $cnt],
+                );
+            } elseif ($cnt >= 2) {
+                $this->insertEscalationLedgerOnce(
+                    $pdo,
+                    $restaurantId,
+                    $userId,
+                    $weekMon,
+                    'disc_abs_week_2_' . $weekMon,
+                    -35,
+                    $cnt . ' absences / inactivité non justifiée(s) sur la même semaine — alerte + pénalité.',
+                    ['week_start' => $weekMon, 'count' => $cnt],
+                );
+            }
+        }
+    }
+
+    /**
+     * @param array<string, mixed> $ref
+     */
+    private function insertEscalationLedgerOnce(
+        PDO $pdo,
+        int $restaurantId,
+        int $userId,
+        string $dayYmd,
+        string $reasonCode,
+        int $delta,
+        string $label,
+        array $ref,
+    ): void {
+        $st = $pdo->prepare(
+            'SELECT id FROM staff_score_ledger
+             WHERE restaurant_id = :rid AND user_id = :uid AND day_ymd = :d AND reason_code = :code
+             LIMIT 1'
+        );
+        $st->execute(['rid' => $restaurantId, 'uid' => $userId, 'd' => $dayYmd, 'code' => $reasonCode]);
+        if ($st->fetchColumn() !== false) {
+            return;
+        }
+        $ins = $pdo->prepare(
+            'INSERT INTO staff_score_ledger
+            (restaurant_id, user_id, day_ymd, reason_code, delta_points, label, ref_json)
+             VALUES (:rid, :uid, :d, :code, :delta, :label, :ref)'
+        );
+        $ins->execute([
+            'rid' => $restaurantId,
+            'uid' => $userId,
+            'd' => $dayYmd,
+            'code' => $reasonCode,
+            'delta' => $delta,
+            'label' => $label,
+            'ref' => json_encode($ref, JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR),
+        ]);
+    }
+
+    private function firstAuditInWindow(int $restaurantId, int $userId, string $s, string $e, PDO $pdo): ?DateTimeImmutable
+    {
+        $st = $pdo->prepare(
+            'SELECT MIN(created_at) AS t FROM audit_logs
+             WHERE restaurant_id = :rid AND user_id = :uid
+               AND created_at >= :s AND created_at < :e'
+        );
+        $st->execute(['rid' => $restaurantId, 'uid' => $userId, 's' => $s, 'e' => $e]);
+        $t = $st->fetchColumn();
+        if (!is_string($t) || $t === '') {
+            return null;
+        }
+        try {
+            return new DateTimeImmutable($t, new DateTimeZone('UTC'));
+        } catch (\Throwable) {
+            return null;
+        }
     }
 
     public function proposedSalaryRetentionPercent(?float $monthlyScoreAvg): float
@@ -1717,9 +2165,9 @@ final class StaffDisciplineService
             return $this->finalizeEvaluatedDay(0, $bd, $ledgerDelta, $ledgerLines, [], 'absence_illness', -14);
         }
 
-        $bd = [['label' => 'Aucune activité mesurée (jour ouvré) · absence / inactivité', 'count' => 0]];
+        $bd = [['label' => 'Aucune activité mesurée (jour ouvré) · absence / inactivité non justifiée', 'count' => 0]];
 
-        return $this->finalizeEvaluatedDay(0, $bd, $ledgerDelta, $ledgerLines, [], 'absence_unjustified', -35);
+        return $this->finalizeEvaluatedDay(0, $bd, $ledgerDelta, $ledgerLines, [], 'absence_unjustified', -22);
     }
 
     /**
@@ -1750,7 +2198,7 @@ final class StaffDisciplineService
                 $st->execute(['rid' => $restaurantId, 'uid' => $userId, 's' => $s, 'e' => $e]);
                 $rej = (int) $st->fetchColumn();
                 if ($rej > 0) {
-                    $pts = max(-18, -8 * min(2, $rej));
+                    $pts = max(-28, -14 * min(2, $rej));
                     $out[] = ['label' => 'Remises rejetées (période)', 'points' => $pts];
                 }
             }
@@ -1765,8 +2213,8 @@ final class StaffDisciplineService
             $st2->execute(['rid' => $restaurantId, 'uid' => $userId, 's' => $s, 'e' => $e]);
             $late = (int) $st2->fetchColumn();
             if ($late > 0) {
-                $pts = max(-15, -5 * min(3, $late));
-                $out[] = ['label' => 'Remises tardives (jour de vente ≠ jour de remise)', 'points' => $pts];
+                $pts = max(-36, -12 * min(3, $late));
+                $out[] = ['label' => 'Remises tardives (jour de vente ≠ jour de remise) — gravité élevée', 'points' => $pts];
             }
         }
         if ($roleCode === 'kitchen') {
@@ -1827,6 +2275,34 @@ final class StaffDisciplineService
             $ecartN = (int) $stE->fetchColumn();
             if ($ecartN > 0) {
                 $out[] = ['label' => 'Écarts signalés à la réception', 'points' => max(-12, -6 * min(2, $ecartN))];
+            }
+        }
+
+        if (in_array($roleCode, ['cashier_server', 'kitchen', 'stock_manager', 'cashier_accountant'], true)) {
+            $sched = $this->disciplineWorkScheduleForRestaurant($restaurantId);
+            $tzLocal = Container::getInstance()->get('reportService')->timezoneForRestaurantReports($restaurantId);
+            $first = $this->firstAuditInWindow($restaurantId, $userId, $s, $e, $pdo);
+            if ($first !== null) {
+                try {
+                    $dayStart = new DateTimeImmutable($dayYmd . ' 00:00:00', $tzLocal);
+                    $parts = explode(':', $sched['work_start']);
+                    $h = (int) ($parts[0] ?? 8);
+                    $mi = (int) ($parts[1] ?? 0);
+                    $deadline = $dayStart->setTime(max(0, min(23, $h)), max(0, min(59, $mi)))
+                        ->modify('+' . (int) $sched['arrival_grace_minutes'] . ' minutes');
+                    $localFirst = $first->setTimezone($tzLocal);
+                    if ($localFirst > $deadline) {
+                        $minsLate = (int) max(0, floor(($localFirst->getTimestamp() - $deadline->getTimestamp()) / 60));
+                        $suffix = $sched['notice_unset'] ? ' (paramètres par défaut)' : '';
+                        $pts = $minsLate <= 20 ? -5 : ($minsLate <= 60 ? -8 : -12);
+                        $out[] = [
+                            'label' => 'Retard léger · 1re action après ' . $sched['work_start']
+                                . ' + ' . $sched['arrival_grace_minutes'] . ' min' . $suffix . ' (+' . $minsLate . ' min)',
+                            'points' => $pts,
+                        ];
+                    }
+                } catch (\Throwable) {
+                }
             }
         }
 

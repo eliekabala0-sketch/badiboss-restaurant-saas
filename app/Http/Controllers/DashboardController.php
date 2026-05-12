@@ -229,6 +229,10 @@ final class DashboardController
         $dash = $this->ownerOperationalDashboardBundle($request, $restaurantId);
         $wideTasks = Container::getInstance()->get('regularizationGate')->listRestaurantWideTasks($restaurantId, 30);
         $hold = Container::getInstance()->get('regularizationGate')->assessForUser($restaurantId, current_user() ?? []);
+        $disciplineSchedule = $staffDisc->disciplineWorkScheduleForRestaurant($restaurantId);
+        $disciplinaryAlerts = can_access('staff.team_gauges.view')
+            ? $staffDisc->listDisciplinaryAlerts($restaurantId)
+            : [];
 
         view('owner/dashboard', array_merge($dash, [
             'title' => 'Tableau de bord restaurant',
@@ -258,6 +262,8 @@ final class DashboardController
             'regularization_backlog' => Container::getInstance()->get('salesService')->regularizationBacklogCounts($restaurantId),
             'restaurant_reg_tasks' => $wideTasks,
             'day_start_hold' => $hold,
+            'discipline_work_schedule' => $disciplineSchedule,
+            'disciplinary_alerts' => $disciplinaryAlerts,
             'staff_gauges_overview' => can_access('staff.team_gauges.view')
                 ? $staffDisc->gaugesSnapshotRestaurantOperational(
                     $restaurantId,
@@ -270,6 +276,29 @@ final class DashboardController
         ]));
 
         audit_access('dashboard', $restaurantId, 'screens', 'owner-dashboard', 'Consultation tableau de bord restaurant');
+    }
+
+    public function postDisciplinaryAlertAction(Request $request): void
+    {
+        authorize_access('tenant.dashboard.view');
+        if (!can_access('staff.team_gauges.view')) {
+            flash('error', 'Action reservee au pilotage discipline (gerant / proprietaire).');
+            redirect('/owner');
+        }
+        $restaurantId = current_restaurant_id();
+        try {
+            Container::getInstance()->get('staffDiscipline')->recordDisciplinaryAlertFollowUp(
+                $restaurantId,
+                (int) $request->input('target_user_id', 0),
+                (string) $request->input('action', ''),
+                (string) $request->input('note', ''),
+                is_array($_SESSION['user'] ?? null) ? $_SESSION['user'] : [],
+            );
+            flash('success', 'Suivi alerte enregistre (journal discipline + audit).');
+        } catch (\Throwable $e) {
+            flash('error', ui_safe_message($e->getMessage()));
+        }
+        redirect('/owner');
     }
 
     public function preparePayroll(Request $request): void

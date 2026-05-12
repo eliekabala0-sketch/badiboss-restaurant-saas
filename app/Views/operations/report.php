@@ -147,6 +147,25 @@ window.addEventListener('beforeprint', function () {
 <?php require base_path('app/Views/partials/regularization_hold_banner.php'); ?>
 <?php require base_path('app/Views/partials/operational_period_tabs.php'); ?>
 
+<?php if (can_access('staff.team_gauges.view')): ?>
+<?php
+$dSchedRep = is_array($discipline_work_schedule ?? null) ? $discipline_work_schedule : [];
+$disciplinary_alerts = $disciplinary_alerts ?? [];
+?>
+<details class="card no-print" style="padding:12px 16px; margin-top:16px;" data-autoclose-details>
+    <summary style="font-weight:600;">Alertes disciplinaires & horaires</summary>
+    <p class="muted" style="margin:8px 0 10px; font-size:0.88rem;">
+        Début <?= e((string) ($dSchedRep['work_start'] ?? '08:00')) ?> · tolérance <?= e((string) ($dSchedRep['arrival_grace_minutes'] ?? '15')) ?> min · versement max <?= e((string) ($dSchedRep['cash_deadline'] ?? '22:00')) ?>
+        <?php if (!empty($dSchedRep['notice_unset'])): ?> <em>(défauts)</em><?php endif; ?>
+    </p>
+    <?php if ($disciplinary_alerts !== []): ?>
+        <?php require base_path('app/Views/partials/disciplinary_alerts_foldable.php'); ?>
+    <?php else: ?>
+        <p class="muted" style="margin:0; font-size:0.88rem;">Aucune alerte disciplinaire active pour le moment.</p>
+    <?php endif; ?>
+</details>
+<?php endif; ?>
+
 <?php if (!empty($cashTodaySnap)): ?>
 <section class="card" style="padding:22px; margin-top:24px;">
     <div class="topbar" style="margin-bottom:14px;">

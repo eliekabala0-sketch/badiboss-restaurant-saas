@@ -62,6 +62,8 @@ $router->get('/owner', [DashboardController::class, 'owner'], [AuthMiddleware::c
 $router->get('/owner/paie/preparer', [DashboardController::class, 'preparePayroll'], [AuthMiddleware::class, OwnerAreaMiddleware::class]);
 $router->post('/owner/subscription/pay', [RestaurantAdminController::class, 'declarePayment'], [AuthMiddleware::class, OwnerAreaMiddleware::class]);
 $router->post('/owner/settings/currency', [RestaurantAdminController::class, 'updateOwnerCurrency'], [AuthMiddleware::class, OwnerOrManagerMiddleware::class]);
+$router->post('/owner/settings/discipline-schedule', [RestaurantAdminController::class, 'updateDisciplineSchedule'], [AuthMiddleware::class, OwnerOrManagerMiddleware::class]);
+$router->post('/owner/discipline/alert-action', [DashboardController::class, 'postDisciplinaryAlertAction'], [AuthMiddleware::class, OwnerOrManagerMiddleware::class]);
 $router->get('/owner/menu', [MenuAdminController::class, 'ownerIndex'], [AuthMiddleware::class, OwnerAreaMiddleware::class]);
 $router->post('/owner/menu/categories', [MenuAdminController::class, 'storeOwnerCategory'], [AuthMiddleware::class, OwnerOrManagerMiddleware::class]);
 $router->post('/owner/menu/items', [MenuAdminController::class, 'storeOwnerItem'], [AuthMiddleware::class, OwnerOrManagerMiddleware::class]);

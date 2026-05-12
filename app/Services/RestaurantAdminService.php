@@ -343,6 +343,52 @@ final class RestaurantAdminService
         return $settings;
     }
 
+    /**
+     * @param array{work_start?:string, arrival_grace_minutes?:int|string, cash_deadline?:string} $input
+     */
+    public function updateDisciplineWorkSchedule(int $restaurantId, array $input, array $actor): void
+    {
+        $ws = trim((string) ($input['work_start'] ?? '08:00'));
+        if (!preg_match('/^\d{1,2}:\d{2}$/', $ws)) {
+            throw new \RuntimeException('Heure de debut invalide (format HH:MM).');
+        }
+        $p = explode(':', $ws);
+        $ws = sprintf('%02d:%02d', max(0, min(23, (int) $p[0])), max(0, min(59, (int) ($p[1] ?? 0))));
+        $grace = (int) ($input['arrival_grace_minutes'] ?? 15);
+        $grace = max(0, min(120, $grace));
+        $cd = trim((string) ($input['cash_deadline'] ?? '22:00'));
+        if (!preg_match('/^\d{1,2}:\d{2}$/', $cd)) {
+            throw new \RuntimeException('Heure limite versement caisse invalide (HH:MM).');
+        }
+        $p2 = explode(':', $cd);
+        $cd = sprintf('%02d:%02d', max(0, min(23, (int) $p2[0])), max(0, min(59, (int) ($p2[1] ?? 0))));
+        $before = $this->listSettings($restaurantId);
+        $this->upsertSetting($restaurantId, 'discipline.work_start_time', $ws, 'string');
+        $this->upsertSetting($restaurantId, 'discipline.arrival_grace_minutes', (string) $grace, 'integer');
+        $this->upsertSetting($restaurantId, 'discipline.cash_remittance_deadline_time', $cd, 'string');
+        Container::getInstance()->get('audit')->log([
+            'restaurant_id' => $restaurantId,
+            'user_id' => $actor['id'] ?? null,
+            'actor_name' => $actor['full_name'] ?? '',
+            'actor_role_code' => $actor['role_code'] ?? '',
+            'module_name' => 'settings',
+            'action_name' => 'discipline_work_schedule_updated',
+            'entity_type' => 'settings',
+            'entity_id' => (string) $restaurantId,
+            'old_values' => [
+                'discipline.work_start_time' => $before['discipline.work_start_time'] ?? null,
+                'discipline.arrival_grace_minutes' => $before['discipline.arrival_grace_minutes'] ?? null,
+                'discipline.cash_remittance_deadline_time' => $before['discipline.cash_remittance_deadline_time'] ?? null,
+            ],
+            'new_values' => [
+                'discipline.work_start_time' => $ws,
+                'discipline.arrival_grace_minutes' => $grace,
+                'discipline.cash_remittance_deadline_time' => $cd,
+            ],
+            'justification' => 'Parametrage horaires discipline (travail / retard / caisse)',
+        ]);
+    }
+
     public function declareSubscriptionPayment(int $restaurantId, array $actor): void
     {
         Container::getInstance()->get('subscriptionService')->declarePayment($restaurantId, $actor);

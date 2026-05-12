@@ -1401,6 +1401,13 @@ final class OperationsController
             $stockControlBundle = Container::getInstance()->get('stockControlReport')->buildBundle($restaurantId, $date, $period);
         }
 
+        $staffDisc = Container::getInstance()->get('staffDiscipline');
+        $staffDisc->ensureSchema();
+        $disciplineSchedule = $staffDisc->disciplineWorkScheduleForRestaurant($restaurantId);
+        $disciplinaryAlerts = (!$isServerReporter && can_access('staff.team_gauges.view'))
+            ? $staffDisc->listDisciplinaryAlerts($restaurantId)
+            : [];
+
         view('operations/report', array_merge($dash, [
             'title' => $title,
             'restaurant' => Container::getInstance()->get('restaurantAdmin')->findRestaurant($restaurantId),
@@ -1429,6 +1436,8 @@ final class OperationsController
             'stock_control_bundle' => $stockControlBundle,
             'stock_control_return_to' => 'report',
             'stock_control_stock_query' => '',
+            'discipline_work_schedule' => $disciplineSchedule,
+            'disciplinary_alerts' => $disciplinaryAlerts,
         ]));
 
         audit_access('reports', $restaurantId, 'screens', 'daily-report', 'Consultation rapport journalier');
