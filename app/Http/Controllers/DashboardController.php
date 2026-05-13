@@ -270,6 +270,24 @@ final class DashboardController
         redirect('/super-admin');
     }
 
+    public function backdateSandboxRemisYesterday(Request $request): void
+    {
+        authorize_access('platform.admin.view');
+        $restaurantId = (int) $request->input('restaurant_id', 0);
+        $serverRequestId = (int) $request->input('server_request_id', 0);
+        if ($restaurantId <= 0 || $serverRequestId <= 0) {
+            throw new \RuntimeException('restaurant_id et server_request_id requis.');
+        }
+
+        Container::getInstance()->get('salesService')->backdateSandboxRemittedRequestActivityYesterday(
+            $restaurantId,
+            $serverRequestId,
+            current_user() ?? []
+        );
+        flash('success', 'Sandbox : horodatage REMIS_SERVEUR reculé à hier (tests runner minuit).');
+        redirect('/super-admin');
+    }
+
     public function owner(Request $request): void
     {
         authorize_access('tenant.dashboard.view');

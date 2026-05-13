@@ -402,6 +402,85 @@ final class SalesService
         ];
     }
 
+    /**
+     * Sandbox uniquement : recule les horodatages d'activité d'une demande déjà REMIS_SERVEUR
+     * (pour tester le runner minuit sans attendre le lendemain). Ne change pas le statut ni les montants.
+     */
+    public function backdateSandboxRemittedRequestActivityYesterday(int $restaurantId, int $serverRequestId, array $actor): void
+    {
+        $restaurant = Container::getInstance()->get('restaurantAdmin')->findRestaurant($restaurantId);
+        if ($restaurant === null) {
+            throw new \RuntimeException('Restaurant introuvable.');
+        }
+        $restaurantCode = (string) ($restaurant['restaurant_code'] ?? '');
+        if (!is_sandbox_restaurant_code($restaurantCode)) {
+            throw new \RuntimeException('Action réservée au restaurant sandbox.');
+        }
+
+        $request = $this->findServerRequest($serverRequestId, $restaurantId);
+        if ($request === null) {
+            throw new \RuntimeException('Demande serveur introuvable.');
+        }
+        if ((string) ($request['status'] ?? '') !== 'REMIS_SERVEUR') {
+            throw new \RuntimeException('La demande doit être en statut REMIS_SERVEUR.');
+        }
+
+        $tz = $this->restaurantTimezone($restaurantId);
+        $stamp = (new DateTimeImmutable('now', $tz))->modify('-1 day')->setTime(15, 0, 0)->format('Y-m-d H:i:s');
+
+        $pdo = $this->database->pdo();
+        $pdo->beginTransaction();
+        try {
+            $uItems = $pdo->prepare(
+                'UPDATE server_request_items
+                 SET prepared_at = :ts,
+                     received_at = :ts,
+                     updated_at = NOW()
+                 WHERE request_id = :request_id'
+            );
+            $uItems->execute([
+                'ts' => $stamp,
+                'request_id' => $serverRequestId,
+            ]);
+
+            $uReq = $pdo->prepare(
+                'UPDATE server_requests
+                 SET supplied_at = COALESCE(supplied_at, :ts),
+                     received_at = :ts,
+                     updated_at = NOW()
+                 WHERE id = :id AND restaurant_id = :restaurant_id'
+            );
+            $uReq->execute([
+                'ts' => $stamp,
+                'id' => $serverRequestId,
+                'restaurant_id' => $restaurantId,
+            ]);
+
+            $pdo->commit();
+        } catch (\Throwable $e) {
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+            throw $e;
+        }
+
+        Container::getInstance()->get('audit')->log([
+            'restaurant_id' => $restaurantId,
+            'user_id' => $actor['id'] ?? null,
+            'actor_name' => $actor['full_name'] ?? 'system',
+            'actor_role_code' => $actor['role_code'] ?? 'system',
+            'module_name' => 'sales',
+            'action_name' => 'sandbox_backdate_remis_activity',
+            'entity_type' => 'server_requests',
+            'entity_id' => (string) $serverRequestId,
+            'new_values' => [
+                'restaurant_code' => $restaurantCode,
+                'activity_at' => $stamp,
+            ],
+            'justification' => 'Recul date activité (sandbox, tests runner minuit)',
+        ]);
+    }
+
     public function cancelServerRequestByServer(int $restaurantId, int $requestId, string $reason, array $actor): void
     {
         $reason = trim($reason);
