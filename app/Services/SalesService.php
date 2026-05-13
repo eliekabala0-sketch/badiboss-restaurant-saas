@@ -12,6 +12,8 @@ use PDO;
 
 final class SalesService
 {
+    private ?bool $serverRequestResponsibleOutcomeColumn = null;
+
     public function __construct(private readonly Database $database)
     {
     }
@@ -150,14 +152,157 @@ final class SalesService
         $timezone = $this->restaurantTimezone($restaurantId);
         $todayStart = (new DateTimeImmutable('now', $timezone))->setTime(0, 0, 0);
         $todayEnd = $todayStart->modify('+1 day');
+        $servedWithoutSale = $this->listServedRequestsWithoutSaleForPeriod($restaurantId, $todayStart, $todayEnd, $serverId);
+        $servedWithoutSaleTotal = 0.0;
+        foreach ($servedWithoutSale as $row) {
+            $servedWithoutSaleTotal += (float) ($row['total_virtual_sold_amount'] ?? 0);
+        }
 
         return [
             'today_total_sold' => $this->salesTotalForPeriod($restaurantId, $todayStart, $todayEnd, $serverId),
             'today_sales_count' => $this->salesCountForPeriod($restaurantId, $todayStart, $todayEnd, $serverId),
             'active_requests_count' => $this->serverRequestCountByStatuses($restaurantId, ['DEMANDE', 'EN_PREPARATION', 'PRET_A_SERVIR', 'FOURNI_PARTIEL', 'FOURNI_TOTAL'], $serverId),
             'remitted_requests_count' => $this->serverRequestCountByStatuses($restaurantId, ['REMIS_SERVEUR'], $serverId),
+            'served_without_sale_count' => count($servedWithoutSale),
+            'served_without_sale_total' => round($servedWithoutSaleTotal, 2),
             'today_label' => $todayStart->format('Y-m-d'),
         ];
+    }
+
+    /**
+     * Lecture métier: demandes réellement servies / remises au serveur, sans vente liée.
+     * Aucune écriture, aucun stock, aucune vente créée.
+     *
+     * @return list<array<string, mixed>>
+     */
+    public function listServedRequestsWithoutSaleForPeriod(
+        int $restaurantId,
+        DateTimeImmutable $startAt,
+        DateTimeImmutable $endAt,
+        ?int $serverId = null,
+    ): array {
+        $params = [
+            'restaurant_id' => $restaurantId,
+            'start_at' => $startAt->format('Y-m-d H:i:s'),
+            'end_at' => $endAt->format('Y-m-d H:i:s'),
+        ];
+        $serverFilter = '';
+        if ($serverId !== null) {
+            $serverFilter = ' AND sr.server_id = :server_id';
+            $params['server_id'] = $serverId;
+        }
+        $responsibleFilter = $this->serverRequestHasResponsibleOutcomeColumn()
+            ? ' AND COALESCE(sr.responsible_outcome_code, "") = ""'
+            : '';
+
+        $statement = $this->database->pdo()->prepare(
+            'SELECT sr.id AS request_id,
+                    sr.restaurant_id,
+                    sr.server_id,
+                    sr.service_reference,
+                    sr.status,
+                    COALESCE(sr.received_at, sr.supplied_at, sr.ready_at, sr.created_at) AS activity_at,
+                    u.full_name AS server_name,
+                    COALESCE(r.code, "") AS server_role_code,
+                    sri.id AS request_item_id,
+                    sri.menu_item_id,
+                    mi.name AS menu_item_name,
+                    COALESCE(sri.supplied_quantity, 0) AS supplied_quantity,
+                    COALESCE(sri.returned_quantity_validated, sri.returned_quantity, 0) AS returned_quantity_validated,
+                    COALESCE(sri.unit_price, 0) AS unit_price
+             FROM server_requests sr
+             INNER JOIN server_request_items sri ON sri.request_id = sr.id
+             INNER JOIN menu_items mi ON mi.id = sri.menu_item_id
+             INNER JOIN users u ON u.id = sr.server_id
+             LEFT JOIN roles r ON r.id = u.role_id
+             WHERE sr.restaurant_id = :restaurant_id
+               AND sr.status NOT IN ("ANNULE", "REFUSE_CUISINE")
+               AND (sr.received_at IS NOT NULL OR sr.status = "REMIS_SERVEUR")
+               AND COALESCE(sr.received_at, sr.supplied_at, sr.ready_at, sr.created_at) >= :start_at
+               AND COALESCE(sr.received_at, sr.supplied_at, sr.ready_at, sr.created_at) < :end_at
+               AND NOT EXISTS (
+                    SELECT 1
+                    FROM sales s
+                    WHERE s.restaurant_id = sr.restaurant_id
+                      AND s.origin_type = "server_request"
+                      AND s.origin_id = sr.id
+               )' . $responsibleFilter . $serverFilter . '
+             ORDER BY COALESCE(sr.received_at, sr.supplied_at, sr.ready_at, sr.created_at) DESC, sr.id DESC, sri.id ASC'
+        );
+        $statement->execute($params);
+        $rows = $statement->fetchAll(PDO::FETCH_ASSOC);
+
+        $grouped = [];
+        foreach ($rows as $row) {
+            $requestId = (int) ($row['request_id'] ?? 0);
+            if ($requestId <= 0) {
+                continue;
+            }
+            if (!isset($grouped[$requestId])) {
+                $activityAt = (string) ($row['activity_at'] ?? '');
+                $grouped[$requestId] = [
+                    'request_id' => $requestId,
+                    'service_reference' => (string) ($row['service_reference'] ?? ''),
+                    'status' => (string) ($row['status'] ?? ''),
+                    'server_user_id' => (int) ($row['server_id'] ?? 0),
+                    'server_name' => (string) ($row['server_name'] ?? ''),
+                    'server_role_code' => (string) ($row['server_role_code'] ?? ''),
+                    'activity_at' => $activityAt,
+                    'activity_day_ymd' => $activityAt !== '' ? substr($activityAt, 0, 10) : '',
+                    'total_virtual_sold_amount' => 0.0,
+                    'total_virtual_returned_amount' => 0.0,
+                    'has_validated_return' => false,
+                    'lines' => [],
+                ];
+            }
+
+            $suppliedQuantity = max(0.0, (float) ($row['supplied_quantity'] ?? 0));
+            $returnedQuantity = max(0.0, (float) ($row['returned_quantity_validated'] ?? 0));
+            $soldQuantity = max(0.0, $suppliedQuantity - $returnedQuantity);
+            $unitPrice = max(0.0, (float) ($row['unit_price'] ?? 0));
+            $lineTotal = $soldQuantity * $unitPrice;
+            $returnedTotal = $returnedQuantity * $unitPrice;
+
+            if ($returnedQuantity > 0.0001) {
+                $grouped[$requestId]['has_validated_return'] = true;
+                $grouped[$requestId]['total_virtual_returned_amount'] += $returnedTotal;
+            }
+            if ($soldQuantity <= 0.0001 || $lineTotal <= 0.0001) {
+                continue;
+            }
+
+            $grouped[$requestId]['total_virtual_sold_amount'] += $lineTotal;
+            $grouped[$requestId]['lines'][] = [
+                'request_item_id' => (int) ($row['request_item_id'] ?? 0),
+                'menu_item_id' => (int) ($row['menu_item_id'] ?? 0),
+                'menu_item_name' => (string) ($row['menu_item_name'] ?? ''),
+                'sold_quantity' => $soldQuantity,
+                'returned_quantity' => $returnedQuantity,
+                'unit_price' => $unitPrice,
+                'line_total' => $lineTotal,
+            ];
+        }
+
+        $result = [];
+        foreach ($grouped as $requestId => $request) {
+            if ((float) ($request['total_virtual_sold_amount'] ?? 0) <= 0.0001) {
+                continue;
+            }
+            $request['total_virtual_sold_amount'] = round((float) $request['total_virtual_sold_amount'], 2);
+            $request['total_virtual_returned_amount'] = round((float) $request['total_virtual_returned_amount'], 2);
+            $result[] = $request;
+        }
+
+        usort($result, static function (array $left, array $right): int {
+            $cmp = strcmp((string) ($right['activity_at'] ?? ''), (string) ($left['activity_at'] ?? ''));
+            if ($cmp !== 0) {
+                return $cmp;
+            }
+
+            return (int) ($right['request_id'] ?? 0) <=> (int) ($left['request_id'] ?? 0);
+        });
+
+        return $result;
     }
 
     public function salesTotalsByServerForPeriods(int $restaurantId): array
@@ -2181,6 +2326,30 @@ final class SalesService
         $v = $statement->fetchColumn();
 
         return is_numeric($v) ? (int) $v : null;
+    }
+
+    private function serverRequestHasResponsibleOutcomeColumn(): bool
+    {
+        if ($this->serverRequestResponsibleOutcomeColumn !== null) {
+            return $this->serverRequestResponsibleOutcomeColumn;
+        }
+        $databaseName = (string) ($this->database->config()['database'] ?? '');
+        if ($databaseName === '') {
+            $this->serverRequestResponsibleOutcomeColumn = false;
+
+            return false;
+        }
+        $statement = $this->database->pdo()->prepare(
+            'SELECT COUNT(*)
+             FROM information_schema.COLUMNS
+             WHERE TABLE_SCHEMA = :database_name
+               AND TABLE_NAME = "server_requests"
+               AND COLUMN_NAME = "responsible_outcome_code"'
+        );
+        $statement->execute(['database_name' => $databaseName]);
+        $this->serverRequestResponsibleOutcomeColumn = ((int) $statement->fetchColumn()) > 0;
+
+        return $this->serverRequestResponsibleOutcomeColumn;
     }
 
     /**

@@ -638,6 +638,17 @@ final class OperationsController
         $agentCash = $serverScopeId !== null
             ? Container::getInstance()->get('reportService')->agentServerCashAccountReadModel($restaurantId, $serverScopeId)
             : null;
+        $salesPeriodWindow = Container::getInstance()->get('reportService')->operationalPeriodWindow(
+            $restaurantId,
+            (string) ($dash['dash_preset'] ?? 'today'),
+            (string) ($dash['dash_date'] ?? Container::getInstance()->get('reportService')->todayForRestaurant($restaurantId)),
+        );
+        $servedWithoutSalePeriod = Container::getInstance()->get('salesService')->listServedRequestsWithoutSaleForPeriod(
+            $restaurantId,
+            $salesPeriodWindow['start'],
+            $salesPeriodWindow['end'],
+            $serverScopeId,
+        );
 
         view('operations/sales', array_merge($dash, $selfDisc, [
             'title' => 'Ventes',
@@ -652,6 +663,7 @@ final class OperationsController
             'menu_items' => Container::getInstance()->get('menuAdmin')->listPublicItems($restaurantId),
             'productions' => Container::getInstance()->get('kitchenService')->listProductions($restaurantId),
             'sales_overview' => Container::getInstance()->get('salesService')->serverSalesOverview($restaurantId, $this->salesActorIdFilter()),
+            'served_requests_without_sale_period' => $servedWithoutSalePeriod,
             'agent_server_cash' => $agentCash,
             'incident_types' => $incidentCatalog['incident_types'],
             'day_start_hold' => Container::getInstance()->get('regularizationGate')->assessForUser($restaurantId, current_user() ?? []),

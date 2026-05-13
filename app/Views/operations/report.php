@@ -56,6 +56,14 @@ $dash_tab_extra_qs .= '&period=' . rawurlencode((string) ($period ?? 'daily'));
 $regularizationBacklog = $regularization_backlog ?? [];
 $module_today_pulse = $module_today_pulse ?? [];
 $reportAgentFilterLocked = !empty($report_agent_filter_locked);
+$activityDaySalesSnap = $report['activity_day_sales_snapshot'] ?? [
+    'recorded_sales_count' => 0,
+    'recorded_sales_total' => 0,
+    'served_without_sale_count' => 0,
+    'served_without_sale_total' => 0,
+    'combined_activity_total' => 0,
+];
+$servedRequestsWithoutSale = $report['served_requests_without_sale'] ?? [];
 ?>
 <style>
 @media print {
@@ -176,6 +184,8 @@ $disciplinary_alerts = $disciplinary_alerts ?? [];
     </div>
     <div class="grid stats">
         <article class="card stat"><span>Vendu clôturé</span><strong><?= e(format_money((float) ($cashTodaySnap['total_sold_closed'] ?? 0), $restaurantCurrency)) ?></strong></article>
+        <article class="card stat"><span>Servi non clôturé</span><strong><?= e(format_money((float) ($cashTodaySnap['served_without_sale_total_today'] ?? 0), $restaurantCurrency)) ?></strong></article>
+        <article class="card stat"><span>Lecture activité</span><strong><?= e(format_money((float) ($cashTodaySnap['activity_day_sales_total_today'] ?? 0), $restaurantCurrency)) ?></strong></article>
         <article class="card stat"><span>Remis à caisse</span><strong><?= e(format_money((float) ($cashTodaySnap['remitted_to_cash_physical'] ?? 0), $restaurantCurrency)) ?></strong></article>
         <article class="card stat"><span>Reçu caisse</span><strong><?= e(format_money((float) ($cashTodaySnap['cashier_received_today'] ?? 0), $restaurantCurrency)) ?></strong></article>
         <article class="card stat"><span>Manquant</span><strong><?= e(format_money((float) ($cashTodaySnap['shortfall_today_total'] ?? 0), $restaurantCurrency)) ?></strong></article>
@@ -209,6 +219,34 @@ $disciplinary_alerts = $disciplinary_alerts ?? [];
 </section>
 <?php endif; ?>
 
+<?php if (!empty($activityDaySalesSnap['served_without_sale_count'])): ?>
+<section class="card" style="padding:18px; margin-top:16px;">
+    <h3 style="margin:0 0 8px;">Lecture métier · ventes du jour d’activité</h3>
+    <p class="muted" style="margin:0 0 14px;">Option A retenue: on montre les demandes réellement servies sans vente liée à côté des ventes enregistrées, sans créer de vente comptable automatiquement et sans redéduire le stock.</p>
+    <div class="grid stats">
+        <article class="card stat"><span>Ventes enregistrées</span><strong><?= e(format_money((float) ($activityDaySalesSnap['recorded_sales_total'] ?? 0), $restaurantCurrency)) ?></strong></article>
+        <article class="card stat"><span>Servi sans vente liée</span><strong><?= e(format_money((float) ($activityDaySalesSnap['served_without_sale_total'] ?? 0), $restaurantCurrency)) ?></strong></article>
+        <article class="card stat"><span>Total lecture activité</span><strong><?= e(format_money((float) ($activityDaySalesSnap['combined_activity_total'] ?? 0), $restaurantCurrency)) ?></strong></article>
+    </div>
+    <details class="compact-card" style="margin-top:14px;" data-autoclose-details>
+        <summary><strong>Dossiers servis sans vente liée</strong> · <?= e((string) (int) ($activityDaySalesSnap['served_without_sale_count'] ?? 0)) ?></summary>
+        <?php foreach ($servedRequestsWithoutSale as $row): ?>
+            <article class="card" style="padding:12px; margin-top:10px;" data-operation-focus="server_request:<?= e((string) ($row['request_id'] ?? '0')) ?>">
+                <strong>Demande #<?= e((string) ($row['request_id'] ?? '')) ?></strong>
+                <?php if (!empty($row['service_reference'])): ?> · <?= e((string) $row['service_reference']) ?><?php endif; ?>
+                <span class="muted"> · <?= e(named_actor_label($row['server_name'] ?? null, 'cashier_server')) ?></span>
+                <p class="muted" style="margin:6px 0 0;">Activité <?= e(format_date_fr($row['activity_at'] ?? null, $reportTimezone)) ?> · Statut <?= e(service_flow_status_label((string) ($row['status'] ?? ''))) ?> · Montant lecture <?= e(format_money((float) ($row['total_virtual_sold_amount'] ?? 0), $restaurantCurrency)) ?></p>
+                <ul style="margin:8px 0 0; padding-left:18px;">
+                    <?php foreach (($row['lines'] ?? []) as $ln): ?>
+                        <li><?= e((string) ($ln['menu_item_name'] ?? '')) ?> × <?= e((string) ($ln['sold_quantity'] ?? '0')) ?> : <?= e(format_money((float) ($ln['line_total'] ?? 0), $restaurantCurrency)) ?></li>
+                    <?php endforeach; ?>
+                </ul>
+            </article>
+        <?php endforeach; ?>
+    </details>
+</section>
+<?php endif; ?>
+
 <?php
 $rbSum = (int) (($regularizationBacklog['overdue_server_remis_serveur'] ?? 0) + ($regularizationBacklog['overdue_remis_a_caisse'] ?? 0) + ($regularizationBacklog['overdue_kitchen_production_returns'] ?? 0));
 $mPulse = $module_today_pulse ?? [];
@@ -233,6 +271,7 @@ $mPulse = $module_today_pulse ?? [];
         <?php if (empty($mPulse['hide_sales_closure_kpis'])): ?>
         <article class="card stat"><span>Ventes clôturées</span><strong><?= e((string) (int) ($mPulse['sales_closed_count_today'] ?? 0)) ?></strong></article>
         <?php endif; ?>
+        <article class="card stat"><span>Servi non clôturé</span><strong><?= e(format_money((float) ($mPulse['served_without_sale_total_today'] ?? 0), $restaurantCurrency)) ?></strong></article>
         <article class="card stat"><span>Stock (mouv.)</span><strong><?= e((string) (int) ($mPulse['stock_movements_count_today'] ?? 0)) ?></strong></article>
         <article class="card stat"><span>Cuisine (prod.)</span><strong><?= e((string) (int) ($mPulse['kitchen_production_count_today'] ?? 0)) ?></strong></article>
         <article class="card stat"><span>Service (file)</span><strong><?= e((string) (int) ($mPulse['open_service_requests'] ?? 0)) ?></strong></article>

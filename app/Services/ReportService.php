@@ -106,6 +106,12 @@ final class ReportService
         );
         $soldStmt->execute(['rid' => $restaurantId, 's' => $s, 'e' => $e]);
         $totalSoldClosed = (float) ($soldStmt->fetch(PDO::FETCH_ASSOC)['t'] ?? 0);
+        $servedWithoutSaleRows = Container::getInstance()->get('salesService')->listServedRequestsWithoutSaleForPeriod(
+            $restaurantId,
+            $startAt,
+            $endAt,
+        );
+        $servedWithoutSaleSummary = $this->summarizeServedRequestsWithoutSale($servedWithoutSaleRows);
 
         $remisStmt = $this->database->pdo()->prepare(
             'SELECT COALESCE(SUM(ct.amount), 0) AS t
@@ -173,6 +179,9 @@ final class ReportService
             'date_ymd' => $todayYmd,
             'period_label' => $label,
             'total_sold_closed' => round($totalSoldClosed, 2),
+            'served_without_sale_total_today' => (float) ($servedWithoutSaleSummary['total_amount'] ?? 0),
+            'served_without_sale_count_today' => (int) ($servedWithoutSaleSummary['count'] ?? 0),
+            'activity_day_sales_total_today' => round($totalSoldClosed + (float) ($servedWithoutSaleSummary['total_amount'] ?? 0), 2),
             'remitted_to_cash_physical' => round($remisAuCaisse, 2),
             'cashier_received_today' => round($recuCaisse, 2),
             'rejected_remittances_today' => round($rejetes, 2),
@@ -285,6 +294,13 @@ final class ReportService
             $salesStmt->execute(['rid' => $restaurantId, 's' => $s, 'e' => $e]);
             $salesRow = $salesStmt->fetch(PDO::FETCH_ASSOC) ?: ['c' => 0, 't' => 0];
         }
+        $servedWithoutSaleRows = Container::getInstance()->get('salesService')->listServedRequestsWithoutSaleForPeriod(
+            $restaurantId,
+            $startAt,
+            $endAt,
+            $restrictToServerUserId !== null && $restrictToServerUserId > 0 ? $restrictToServerUserId : null,
+        );
+        $servedWithoutSaleSummary = $this->summarizeServedRequestsWithoutSale($servedWithoutSaleRows);
 
         $stockMovementsToday = 0;
         $kitchenProductionToday = 0;
@@ -362,6 +378,9 @@ final class ReportService
             'hide_sales_closure_kpis' => $hideRestaurantSalesClosureKpis && $restrictToServerUserId === null,
             'sales_closed_count_today' => (int) ($salesRow['c'] ?? 0),
             'sales_closed_total_today' => round((float) ($salesRow['t'] ?? 0), 2),
+            'served_without_sale_count_today' => (int) ($servedWithoutSaleSummary['count'] ?? 0),
+            'served_without_sale_total_today' => (float) ($servedWithoutSaleSummary['total_amount'] ?? 0),
+            'activity_day_sales_total_today' => round((float) ($salesRow['t'] ?? 0) + (float) ($servedWithoutSaleSummary['total_amount'] ?? 0), 2),
             'stock_movements_count_today' => $stockMovementsToday,
             'kitchen_production_count_today' => $kitchenProductionToday,
             'open_service_requests' => $openServiceRequests,
@@ -887,8 +906,19 @@ final class ReportService
         $reportActivityIndex = $this->activityIndex($restaurantId, $startAt, $endAt, $viewFilters);
         $reportSalesDetailByServer = $this->salesDetailByServerProduct($restaurantId, $startAt, $endAt, $closedOnly, $userId, $viewFilters);
         $reportExecutiveSummary = $this->executiveSummaryRollup($restaurantId, $startAt, $endAt, $label, $viewFilters, $reportSalesDetailByServer, $reportActivityIndex);
+        $servedWithoutSale = $this->servedRequestsWithoutSaleForReport($restaurantId, $startAt, $endAt, $viewFilters);
+        $servedWithoutSaleSummary = $this->summarizeServedRequestsWithoutSale($servedWithoutSale);
         $summary = ['period' => $period, 'period_label' => $label, 'selected_date' => $selectedDate->format('Y-m-d'), 'timezone' => $timezone->getName(), 'range_start' => $startAt->format('Y-m-d H:i:s'), 'range_end' => $displayEndAt->format('Y-m-d H:i:s'), 'opening_stock_total' => $this->openingStock($restaurantId, $startAt, $currentStock), 'current_stock_total' => $currentStock, 'kitchen_outputs' => $this->sumMovement($restaurantId, $startAt, $endAt, 'SORTIE_CUISINE'), 'stock_returns' => $this->sumMovement($restaurantId, $startAt, $endAt, 'RETOUR_STOCK'), 'kitchen_production' => $this->sumProduction($restaurantId, $startAt, $endAt), 'stock_report' => $this->stockReport($restaurantId, $startAt, $endAt), 'kitchen_report' => $this->kitchenReport($restaurantId, $startAt, $endAt), 'server_report' => $this->serverReport($restaurantId, $startAt, $endAt), 'financial_report' => $this->financialReport($restaurantId, $startAt, $endAt, $displayEndAt, $financeScope), 'product_margins' => $this->productMargins($restaurantId, $startAt, $endAt), 'sales_by_server' => $salesByServer, 'sales_by_type' => $this->salesByType($restaurantId, $startAt, $endAt), 'material_losses' => $this->sumLosses($restaurantId, $startAt, $endAt, 'MATIERE_PREMIERE'), 'financial_losses' => $this->sumLosses($restaurantId, $startAt, $endAt, 'ARGENT'), 'dish_yields' => $this->dishYields($restaurantId, $startAt, $endAt), 'product_issues' => $this->productIssues($restaurantId, $startAt, $endAt), 'incident_statuses' => $this->incidentsByField($restaurantId, $startAt, $endAt, 'status'), 'incident_qualifications' => $this->incidentsByField($restaurantId, $startAt, $endAt, 'final_qualification'), 'incident_responsibilities' => $this->incidentsByField($restaurantId, $startAt, $endAt, 'responsibility_scope'), 'incident_cases' => $this->incidentCases($restaurantId, $startAt, $endAt), 'fraud_alerts' => $this->fraudAlerts($restaurantId, $startAt, $endAt), 'view_filters' => $viewFilters, 'people_overview' => $this->peopleOverview($restaurantId, $startAt, $endAt, $userId, $salesByServer, $viewFilters), 'activity_index' => $reportActivityIndex, 'nominative_timeline' => $this->nominativeTimeline($restaurantId, $startAt, $endAt, $viewFilters), 'sales_detail_by_server' => $reportSalesDetailByServer, 'executive_summary' => $reportExecutiveSummary, 'kitchen_detail_by_cook' => $this->kitchenDetailByCook($restaurantId, $startAt, $endAt, $userId, $viewFilters), 'stock_detail_by_person' => $this->stockDetailByPerson($restaurantId, $startAt, $endAt, $userId, $viewFilters)];
         $salesTotal = 0.0; foreach ($summary['sales_by_type'] as $row) { $salesTotal += (float) $row['total_amount']; }
+        $salesCount = 0; foreach ($summary['sales_by_type'] as $row) { $salesCount += (int) ($row['sales_count'] ?? 0); }
+        $summary['served_requests_without_sale'] = $servedWithoutSale;
+        $summary['activity_day_sales_snapshot'] = [
+            'recorded_sales_count' => $salesCount,
+            'recorded_sales_total' => round($salesTotal, 2),
+            'served_without_sale_count' => (int) ($servedWithoutSaleSummary['count'] ?? 0),
+            'served_without_sale_total' => (float) ($servedWithoutSaleSummary['total_amount'] ?? 0),
+            'combined_activity_total' => round($salesTotal + (float) ($servedWithoutSaleSummary['total_amount'] ?? 0), 2),
+        ];
         $summary['general_report'] = ['total_product_value' => (float) $summary['kitchen_report']['value_produced'], 'total_sold_value' => $salesTotal, 'real_material_cost_value' => (float) $summary['kitchen_report']['real_material_cost_of_sales'], 'total_losses_value' => (float) $summary['stock_report']['stock_losses_value'] + (float) $summary['kitchen_report']['kitchen_losses_value'] + (float) $summary['server_report']['server_loss_value'] + (float) $summary['financial_losses'], 'stock_loss_value' => (float) $summary['stock_report']['stock_losses_value'], 'kitchen_loss_value' => (float) $summary['kitchen_report']['kitchen_losses_value'], 'server_loss_value' => (float) $summary['server_report']['server_loss_value']];
         $summary['estimated_profit'] = $salesTotal - (float) $summary['kitchen_report']['real_material_cost_of_sales'] - (float) $summary['stock_report']['stock_losses_value'] - (float) $summary['kitchen_report']['kitchen_losses_value'] - (float) $summary['server_report']['server_loss_value'] - (float) $summary['financial_losses'];
         $summary['general_report']['estimated_gross_profit'] = (float) $summary['estimated_profit'];
@@ -913,6 +943,85 @@ final class ReportService
         }
 
         return $summary;
+    }
+
+    /**
+     * @param array<string, mixed> $viewFilters
+     *
+     * @return list<array<string, mixed>>
+     */
+    private function servedRequestsWithoutSaleForReport(
+        int $restaurantId,
+        DateTimeImmutable $startAt,
+        DateTimeImmutable $endAt,
+        array $viewFilters,
+    ): array {
+        $filterUserId = (int) ($viewFilters['user_id'] ?? 0);
+        $roleCode = trim((string) ($viewFilters['role_code'] ?? ''));
+        $menuItemId = (int) ($viewFilters['menu_item_id'] ?? 0);
+        $needleArt = mb_strtolower(trim((string) ($viewFilters['article_search'] ?? '')), 'UTF-8');
+
+        $rows = Container::getInstance()->get('salesService')->listServedRequestsWithoutSaleForPeriod(
+            $restaurantId,
+            $startAt,
+            $endAt,
+            $filterUserId > 0 ? $filterUserId : null,
+        );
+
+        if ($roleCode === '' && $menuItemId <= 0 && $needleArt === '') {
+            return $rows;
+        }
+
+        $filtered = [];
+        foreach ($rows as $row) {
+            if ($roleCode !== '' && (string) ($row['server_role_code'] ?? '') !== $roleCode) {
+                continue;
+            }
+            $lines = [];
+            $soldTotal = 0.0;
+            $returnedTotal = 0.0;
+            foreach (($row['lines'] ?? []) as $line) {
+                $lineMenuItemId = (int) ($line['menu_item_id'] ?? 0);
+                $lineName = (string) ($line['menu_item_name'] ?? '');
+                if ($menuItemId > 0 && $lineMenuItemId !== $menuItemId) {
+                    continue;
+                }
+                if ($needleArt !== '' && !str_contains(mb_strtolower($lineName, 'UTF-8'), $needleArt)) {
+                    continue;
+                }
+                $lines[] = $line;
+                $soldTotal += (float) ($line['line_total'] ?? 0);
+                $returnedTotal += (float) ($line['returned_quantity'] ?? 0) * (float) ($line['unit_price'] ?? 0);
+            }
+            if ($lines === [] || $soldTotal <= 0.0001) {
+                continue;
+            }
+            $row['lines'] = $lines;
+            $row['total_virtual_sold_amount'] = round($soldTotal, 2);
+            $row['total_virtual_returned_amount'] = round($returnedTotal, 2);
+            $row['has_validated_return'] = $returnedTotal > 0.0001;
+            $filtered[] = $row;
+        }
+
+        return $filtered;
+    }
+
+    /**
+     * @param list<array<string, mixed>> $rows
+     *
+     * @return array{count:int,total_amount:float}
+     */
+    private function summarizeServedRequestsWithoutSale(array $rows): array
+    {
+        $total = 0.0;
+        foreach ($rows as $row) {
+            $total += (float) ($row['total_virtual_sold_amount'] ?? 0);
+        }
+
+        return [
+            'count' => count($rows),
+            'total_amount' => round($total, 2),
+        ];
     }
 
     /**

@@ -26,6 +26,11 @@ $serverCashiers = $server_cashiers ?? [];
 $pendingCashRemittances = $pending_cash_remittances ?? [];
 $saleRemittanceTracking = $sale_remittance_tracking ?? [];
 $salesViewScope = $sales_view_scope ?? 'full';
+$servedWithoutSalePeriod = $served_requests_without_sale_period ?? [];
+$servedWithoutSalePeriodTotal = 0.0;
+foreach ($servedWithoutSalePeriod as $servedWithoutSaleRow) {
+    $servedWithoutSalePeriodTotal += (float) ($servedWithoutSaleRow['total_virtual_sold_amount'] ?? 0);
+}
 
 $serviceBadgeClass = static function (?string $status): string {
     return match ((string) $status) {
@@ -254,6 +259,7 @@ foreach ($historyEntries as $entry) {
     <div class="grid stats">
         <article class="card stat"><span><?= $salesViewScope === 'self' ? 'Mes ventes clôturées' : 'Ventes clôturées' ?></span><strong><?= e((string) (int) ($modulePulse['sales_closed_count_today'] ?? 0)) ?></strong></article>
         <article class="card stat"><span><?= $salesViewScope === 'self' ? 'Montant clôturé (mes ventes)' : 'Montant clôturé' ?></span><strong><?= e(format_money((float) ($modulePulse['sales_closed_total_today'] ?? 0), $restaurantCurrency)) ?></strong></article>
+        <article class="card stat"><span><?= $salesViewScope === 'self' ? 'Servi sans vente liée' : 'Servi non clôturé' ?></span><strong><?= e(format_money((float) ($modulePulse['served_without_sale_total_today'] ?? 0), $restaurantCurrency)) ?></strong></article>
         <article class="card stat"><span><?= $salesViewScope === 'self' ? 'Ma file service' : 'Service (file)' ?></span><strong><?= e((string) (int) ($modulePulse['open_service_requests'] ?? 0)) ?></strong></article>
         <?php if ($salesViewScope !== 'self'): ?>
         <article class="card stat"><span>Mouvements magasin (restaurant)</span><strong><?= e((string) (int) ($modulePulse['stock_movements_count_today'] ?? 0)) ?></strong></article>
@@ -270,6 +276,7 @@ foreach ($historyEntries as $entry) {
     <h2 style="margin:0 0 10px;">Caisse · synthèse du jour (équipe)</h2>
     <div class="grid stats">
         <article class="card stat"><span>Vendu clôturé</span><strong><?= e(format_money((float) ($cashSnapAll['total_sold_closed'] ?? 0), $restaurantCurrency)) ?></strong></article>
+        <article class="card stat"><span>Servi non clôturé</span><strong><?= e(format_money((float) ($cashSnapAll['served_without_sale_total_today'] ?? 0), $restaurantCurrency)) ?></strong></article>
         <article class="card stat"><span>Reçu caisse</span><strong><?= e(format_money((float) ($cashSnapAll['cashier_received_today'] ?? 0), $restaurantCurrency)) ?></strong></article>
         <article class="card stat"><span>Écart vendu − reçu</span><strong><?= e(format_money((float) ($cashSnapAll['real_gap_sold_closed_minus_received'] ?? 0), $restaurantCurrency)) ?></strong></article>
         <article class="card stat"><span>Rejet caisse/jour</span><strong><?= e(format_money((float) ($cashSnapAll['rejected_remittances_today'] ?? 0), $restaurantCurrency)) ?></strong></article>
@@ -373,8 +380,16 @@ $todayShort = (float) ($todayAgentCash['shortfall'] ?? 0);
         <strong><?= e(format_money($salesOverview['today_total_sold'] ?? 0, $restaurantCurrency)) ?></strong>
     </article>
     <article class="card stat">
+        <span>Servi sans vente liée</span>
+        <strong><?= e(format_money($salesOverview['served_without_sale_total'] ?? 0, $restaurantCurrency)) ?></strong>
+    </article>
+    <article class="card stat">
         <span>Ventes validees du jour</span>
         <strong><?= e((string) ($salesOverview['today_sales_count'] ?? 0)) ?></strong>
+    </article>
+    <article class="card stat">
+        <span>Dossiers service à lire comme vendus</span>
+        <strong><?= e((string) ($salesOverview['served_without_sale_count'] ?? 0)) ?></strong>
     </article>
     <article class="card stat">
         <span>Demandes actives</span>
@@ -385,6 +400,38 @@ $todayShort = (float) ($todayAgentCash['shortfall'] ?? 0);
         <strong><?= e((string) ($salesOverview['remitted_requests_count'] ?? 0)) ?></strong>
     </article>
 </section>
+
+<?php if ($servedWithoutSalePeriod !== []): ?>
+<section class="card" style="padding:18px; margin:24px 0;">
+    <h2 style="margin:0 0 8px;">Lecture métier · servi au jour d’activité</h2>
+    <p class="muted" style="margin:0 0 14px;">Option A retenue: ces demandes servies apparaissent comme activité vendue du jour sans créer de vente ni toucher au stock. La remise caisse reste séparée.</p>
+    <div class="grid stats" style="margin-bottom:14px;">
+        <article class="card stat"><span>Montant servi sans vente liée</span><strong><?= e(format_money($servedWithoutSalePeriodTotal, $restaurantCurrency)) ?></strong></article>
+        <article class="card stat"><span>Dossiers concernés</span><strong><?= e((string) count($servedWithoutSalePeriod)) ?></strong></article>
+    </div>
+    <details class="compact-card" open data-autoclose-details>
+        <summary><strong>Détail période</strong></summary>
+        <?php foreach ($servedWithoutSalePeriod as $row): ?>
+            <article class="remittance-card" style="margin-top:12px;" data-operation-focus="server_request:<?= e((string) ($row['request_id'] ?? '0')) ?>">
+                <strong>Demande #<?= e((string) ($row['request_id'] ?? '')) ?></strong>
+                <?php if (!empty($row['service_reference'])): ?> · <?= e((string) $row['service_reference']) ?><?php endif; ?>
+                <span class="muted"> · <?= e(named_actor_label($row['server_name'] ?? null, 'cashier_server')) ?></span>
+                <p class="muted" style="margin:6px 0 0;">
+                    Activité <?= e(format_date_fr($row['activity_at'] ?? null, $historyTimezone)) ?> ·
+                    Statut <?= e(service_flow_status_label((string) ($row['status'] ?? ''))) ?> ·
+                    Lecture métier <?= e(format_money((float) ($row['total_virtual_sold_amount'] ?? 0), $restaurantCurrency)) ?>
+                    <?php if (!empty($row['has_validated_return'])): ?> · retour partiel validé pris en compte<?php endif; ?>
+                </p>
+                <ul style="margin:8px 0 0; padding-left:18px; line-height:1.65;">
+                    <?php foreach (($row['lines'] ?? []) as $ln): ?>
+                        <li><?= e((string) ($ln['menu_item_name'] ?? '')) ?> × <?= e((string) ($ln['sold_quantity'] ?? '0')) ?> : <?= e(format_money((float) ($ln['line_total'] ?? 0), $restaurantCurrency)) ?></li>
+                    <?php endforeach; ?>
+                </ul>
+            </article>
+        <?php endforeach; ?>
+    </details>
+</section>
+<?php endif; ?>
 
 <section class="split">
     <article class="card" style="padding:22px;">
