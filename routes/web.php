@@ -122,6 +122,7 @@ $router->post('/caisse/transferts/{id}/reception-caisse', [OperationsController:
 $router->post('/caisse/transferts/{id}/rejet-remise', [OperationsController::class, 'rejectSaleRemittanceAtCashier'], [AuthMiddleware::class]);
 $router->post('/caisse/transferts/{id}/soumission-gerant', [OperationsController::class, 'submitSaleRemittanceToManagerFromCashier'], [AuthMiddleware::class]);
 $router->post('/caisse/mouvements', [OperationsController::class, 'createCashMovement'], [AuthMiddleware::class]);
+$router->post('/caisse/mouvements/{id}/reclassement-gerant', [OperationsController::class, 'reclassifyCashMovementManager'], [AuthMiddleware::class]);
 $router->post('/caisse/remises-gerant', [OperationsController::class, 'transferCashToManager'], [AuthMiddleware::class]);
 $router->post('/caisse/transferts/{id}/reception-gerant', [OperationsController::class, 'receiveCashAtManager'], [AuthMiddleware::class]);
 $router->post('/caisse/remises-proprietaire', [OperationsController::class, 'transferCashToOwner'], [AuthMiddleware::class]);

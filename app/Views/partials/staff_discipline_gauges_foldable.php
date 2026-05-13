@@ -44,10 +44,21 @@ if ($periodHint === '') {
 <details class="compact-card no-print" style="margin-bottom:20px;" data-autoclose-details>
     <summary><strong><?= e($panelTitle) ?></strong> · <?= e($periodHint) ?></summary>
     <div class="grid stats" style="margin-top:14px;">
-        <article class="card stat"><span>Jour (réf.)</span><strong><?= $g['daily'] === null ? 'Non évalué' : e((string) $g['daily']) . ' %' ?></strong></article>
-        <article class="card stat"><span>Moy. 7 j.</span><strong><?= $g['weekly_avg'] === null ? 'Non évalué' : e((string) $g['weekly_avg']) . ' %' ?></strong></article>
-        <article class="card stat"><span>Mois (cumul)</span><strong><?= $g['monthly_avg'] === null ? 'Non évalué' : e((string) $g['monthly_avg']) . ' %' ?></strong></article>
-        <article class="card stat"><span>Zone mois</span><strong><?= e($formatZone($g['zone'] ?? '')) ?></strong></article>
+        <?php
+        $zMo = (string) ($g['zone'] ?? 'non_evalue');
+        $zMoLbl = $formatZone($zMo);
+        $zMoPill = match ($zMo) {
+            'vert' => 'badge-closed',
+            'jaune' => 'badge-ready',
+            'orange' => 'badge-progress',
+            'rouge', 'rouge_critique' => 'badge-bad',
+            default => 'badge-neutral',
+        };
+        ?>
+        <article class="card stat"><span>Mention mois</span><strong><span class="pill <?= e($zMoPill) ?>"><?= e($zMoLbl) ?></span></strong></article>
+        <article class="card stat"><span>Score jour (réf.)</span><strong><?= $g['daily'] === null ? 'Non évalué' : e((string) $g['daily']) . ' %' ?></strong></article>
+        <article class="card stat"><span>Moy. 7 j. (réf.)</span><strong><?= $g['weekly_avg'] === null ? 'Non évalué' : e((string) $g['weekly_avg']) . ' %' ?></strong></article>
+        <article class="card stat"><span>Moy. mois (réf. paie)</span><strong><?= $g['monthly_avg'] === null ? 'Non évalué' : e((string) $g['monthly_avg']) . ' %' ?></strong></article>
     </div>
     <?php if ($ap !== []): ?>
         <article class="card" style="padding:14px 16px; margin-top:14px;">

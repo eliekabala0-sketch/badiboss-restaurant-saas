@@ -944,6 +944,49 @@ final class CashService
         return $movementId;
     }
 
+    /**
+     * Reclassement d’un mouvement de caisse déjà enregistré (pas de suppression) — audit obligatoire.
+     *
+     * @param array{movement_type:string, reason?:string} $payload
+     */
+    public function managerReclassifyMovement(int $restaurantId, int $movementId, array $payload, array $actor): void
+    {
+        $this->ensureSchema();
+        $newType = strtoupper(trim((string) ($payload['movement_type'] ?? '')));
+        if (!in_array($newType, ['ENTREE', 'SORTIE', 'DEPENSE', 'AJUSTEMENT'], true)) {
+            throw new \RuntimeException('Type de mouvement cible invalide.');
+        }
+        $reason = trim((string) ($payload['reason'] ?? ''));
+        if ($reason === '') {
+            throw new \RuntimeException('Motif de reclassement obligatoire (traçabilité).');
+        }
+        $st = $this->database->pdo()->prepare(
+            'SELECT * FROM cash_movements WHERE id = :id AND restaurant_id = :rid LIMIT 1'
+        );
+        $st->execute(['id' => $movementId, 'rid' => $restaurantId]);
+        $row = $st->fetch(PDO::FETCH_ASSOC);
+        if ($row === false) {
+            throw new \RuntimeException('Mouvement introuvable.');
+        }
+        $oldType = (string) ($row['movement_type'] ?? '');
+        if ($oldType === $newType) {
+            throw new \RuntimeException('Le type est déjà identique : aucun reclassement.');
+        }
+        $oldNote = (string) ($row['note'] ?? '');
+        $tag = '[Reclassement responsable ' . date('Y-m-d H:i') . ' : ' . $oldType . ' → ' . $newType . ' — ' . $reason . ']';
+        $newNote = trim($oldNote . ' ' . $tag);
+        $upd = $this->database->pdo()->prepare(
+            'UPDATE cash_movements SET movement_type = :mt, note = :note, updated_at = NOW()
+             WHERE id = :id AND restaurant_id = :rid'
+        );
+        $upd->execute(['mt' => $newType, 'note' => $newNote !== '' ? $newNote : null, 'id' => $movementId, 'rid' => $restaurantId]);
+        $this->audit($restaurantId, $actor, 'cash_movement_reclassified', 'cash_movements', $movementId, [
+            'previous_movement_type' => $oldType,
+            'new_movement_type' => $newType,
+            'reason' => $reason,
+        ], 'Reclassement mouvement caisse (responsable)');
+    }
+
     public function transferToManager(int $restaurantId, array $payload, array $actor): int
     {
         return $this->createChainTransfer($restaurantId, $actor, (int) ($payload['to_user_id'] ?? 0), 'REMISE_GERANT', 'REMIS_A_GERANT', $payload);

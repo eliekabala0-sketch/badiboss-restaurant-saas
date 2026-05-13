@@ -487,6 +487,7 @@ function report_audit_action_label(?string $actionName): string
         'cash_server_remitted' => 'Remise serveur → caisse',
         'cash_cashier_received' => 'Réception caisse',
         'cash_movement_created' => 'Mouvement de caisse',
+        'cash_movement_reclassified' => 'Reclassement mouvement caisse (responsable)',
         'cash_transfer_created' => 'Transfert enregistré',
         default => ucfirst(str_replace('_', ' ', (string) $actionName)),
     };

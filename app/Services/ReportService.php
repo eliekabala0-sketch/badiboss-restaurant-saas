@@ -489,6 +489,16 @@ final class ReportService
             if ($c > 0) {
                 $lines[] = ['label' => 'Lignes préparées cuisine (activité agents)', 'count' => $c];
             }
+            $stKp = $pdo->prepare(
+                'SELECT COUNT(*) FROM kitchen_production kp
+                 WHERE kp.restaurant_id = :rid AND kp.created_by = :uid
+                   AND kp.created_at >= :s AND kp.created_at < :e'
+            );
+            $stKp->execute(['rid' => $restaurantId, 'uid' => $userId, 's' => $s, 'e' => $e]);
+            $ckp = (int) $stKp->fetchColumn();
+            if ($ckp > 0) {
+                $lines[] = ['label' => 'Productions cuisine enregistrées (activité agents)', 'count' => $ckp];
+            }
 
             return $lines;
         }

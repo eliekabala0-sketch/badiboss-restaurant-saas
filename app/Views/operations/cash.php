@@ -11,6 +11,7 @@ $cashTodaySnapC = $cash_today_snapshot ?? null;
 $dayHoldCash = $day_start_hold ?? ['blocked' => false, 'reasons' => []];
 $cashPulse = $module_today_pulse ?? [];
 $cashRegBack = $regularization_backlog ?? [];
+$canReclassifyCash = in_array((string) (current_user()['role_code'] ?? ''), ['owner', 'manager'], true);
 ?>
 
 <section class="topbar">
@@ -313,15 +314,31 @@ $rbCash = (int) (($cashRegBack['overdue_remis_a_caisse'] ?? 0) + ($cashRegBack['
     <h2 style="margin-top:14px;">Historique des mouvements caisse</h2>
     <div class="table-wrap">
         <table>
-            <thead><tr><th>Type</th><th>Montant</th><th>Acteur</th><th>Note</th><th>Date</th></tr></thead>
+            <thead><tr><th>Id</th><th>Type</th><th>Montant</th><th>Acteur</th><th>Note</th><th>Date</th><?php if ($canReclassifyCash): ?><th>Correction</th><?php endif; ?></tr></thead>
             <tbody>
             <?php foreach ($movements as $movement): ?>
                 <tr>
+                    <td><?= e((string) (int) ($movement['id'] ?? 0)) ?></td>
                     <td><?= e((string) ($movement['movement_type'] ?? '-')) ?></td>
                     <td><?= e(format_money($movement['amount'] ?? 0, $restaurantCurrency)) ?></td>
                     <td><?= e(named_actor_label($movement['created_by_name'] ?? null)) ?></td>
                     <td><?= e((string) ($movement['note'] ?? '-')) ?></td>
                     <td><?= e(format_date_fr($movement['created_at'] ?? null)) ?></td>
+                    <?php if ($canReclassifyCash): ?>
+                        <td>
+                            <form method="post" action="/caisse/mouvements/<?= e((string) (int) ($movement['id'] ?? 0)) ?>/reclassement-gerant" class="grid" style="gap:6px; min-width:220px;">
+                                <select name="movement_type" required style="font-size:0.9rem;">
+                                    <option value="">→ type correct</option>
+                                    <option value="ENTREE">ENTREE</option>
+                                    <option value="SORTIE">SORTIE</option>
+                                    <option value="DEPENSE">DEPENSE</option>
+                                    <option value="AJUSTEMENT">AJUSTEMENT</option>
+                                </select>
+                                <input type="text" name="reason" maxlength="240" required placeholder="Motif (audit)" style="font-size:0.9rem;">
+                                <button type="submit" class="button-muted" style="font-size:0.85rem;">Reclasser</button>
+                            </form>
+                        </td>
+                    <?php endif; ?>
                 </tr>
             <?php endforeach; ?>
             </tbody>

@@ -8,6 +8,28 @@ $gaugeRows = is_array($gauge_rows ?? null) ? $gauge_rows : [];
 $staffUsers = is_array($staff_users ?? null) ? $staff_users : [];
 $payrollProfiles = is_array($payroll_profiles ?? null) ? $payroll_profiles : [];
 $cur = $restaurant['currency'] ?? 'USD';
+$disciplineZoneLabel = static function (?string $z): string {
+    $s = (string) $z;
+
+    return match ($s) {
+        'non_evalue', '' => 'Non évalué',
+        'vert' => 'Excellent',
+        'jaune' => 'Bon',
+        'orange' => 'Moyen',
+        'rouge' => 'Problématique',
+        'rouge_critique' => 'Très problématique',
+        default => $s,
+    };
+};
+$disciplineZonePill = static function (string $z): string {
+    return match ($z) {
+        'vert' => 'badge-closed',
+        'jaune' => 'badge-ready',
+        'orange' => 'badge-progress',
+        'rouge', 'rouge_critique' => 'badge-bad',
+        default => 'badge-neutral',
+    };
+};
 ?>
 <section class="topbar">
     <div class="brand">
@@ -26,17 +48,18 @@ $cur = $restaurant['currency'] ?? 'USD';
     </section>
 <?php endif; ?>
 
-<details class="card no-print" style="padding:14px 16px; margin-bottom:16px;" open data-autoclose-details>
+<details class="card no-print" style="padding:14px 16px; margin-bottom:16px;" data-autoclose-details>
     <summary style="font-weight:600; cursor:pointer;">Jauges agents (aujourd’hui)</summary>
+    <p class="muted" style="margin:10px 0 0; font-size:0.9rem;">Les mentions (Excellent à très problématique) pilotent surtout la retenue paie ; les pourcentages ci-dessous sont une référence technique.</p>
     <div style="overflow:auto; margin-top:12px;">
         <table>
             <thead>
             <tr>
                 <th>Agent</th>
                 <th>Rôle</th>
-                <th>Jour</th>
-                <th>7 j.</th>
-                <th>Mois</th>
+                <th>Mention jour</th>
+                <th>Mention mois</th>
+                <th class="muted">% réf. (jour · 7 j. · mois)</th>
             </tr>
             </thead>
             <tbody>
@@ -45,12 +68,34 @@ $cur = $restaurant['currency'] ?? 'USD';
                     continue;
                 } ?>
                 <?php $g = is_array($row['gauges'] ?? null) ? $row['gauges'] : []; ?>
+                <?php
+                $ap = is_array($g['active_period'] ?? null) ? $g['active_period'] : [];
+                $zDay = (string) ($ap['zone'] ?? 'non_evalue');
+                $zMo = (string) ($g['zone'] ?? 'non_evalue');
+                $pctBits = [];
+                if (($g['daily'] ?? null) !== null) {
+                    $pctBits[] = (string) $g['daily'] . ' %';
+                } else {
+                    $pctBits[] = '—';
+                }
+                if (($g['weekly_avg'] ?? null) !== null) {
+                    $pctBits[] = (string) $g['weekly_avg'] . ' %';
+                } else {
+                    $pctBits[] = '—';
+                }
+                if (($g['monthly_avg'] ?? null) !== null) {
+                    $pctBits[] = (string) $g['monthly_avg'] . ' %';
+                } else {
+                    $pctBits[] = '—';
+                }
+                $pctLine = implode(' · ', $pctBits);
+                ?>
                 <tr>
                     <td><?= e((string) ($row['full_name'] ?? '')) ?></td>
                     <td><?= e(restaurant_role_label($row['role_code'] ?? null)) ?></td>
-                    <td><?= ($g['daily'] ?? null) === null ? '—' : e((string) $g['daily']) . ' %' ?></td>
-                    <td><?= ($g['weekly_avg'] ?? null) === null ? '—' : e((string) $g['weekly_avg']) . ' %' ?></td>
-                    <td><?= ($g['monthly_avg'] ?? null) === null ? '—' : e((string) $g['monthly_avg']) . ' %' ?></td>
+                    <td><span class="pill <?= e($disciplineZonePill($zDay)) ?>"><?= e($disciplineZoneLabel($zDay)) ?></span></td>
+                    <td><span class="pill <?= e($disciplineZonePill($zMo)) ?>"><?= e($disciplineZoneLabel($zMo)) ?></span></td>
+                    <td class="muted" style="font-size:0.88rem;"><?= e($pctLine) ?></td>
                 </tr>
             <?php endforeach; ?>
             </tbody>
@@ -59,7 +104,8 @@ $cur = $restaurant['currency'] ?? 'USD';
 </details>
 
 <details class="card no-print" style="padding:14px 16px; margin-bottom:16px;" data-autoclose-details>
-    <summary style="font-weight:600; cursor:pointer;">Présence / jour (gérant)</summary>
+    <summary style="font-weight:600; cursor:pointer;">Exceptions présence (gérant)</summary>
+    <p class="muted" style="margin:10px 0 14px;">La présence « normale » suit l’activité (ventes, cuisine, stock, caisse). Saisissez ici uniquement repos, maladie, absence autorisée, exonération, retard justifié — ou effacez une saisie pour revenir au mode automatique.</p>
     <form method="post" action="/owner/discipline/attendance" class="grid" style="gap:12px; margin-top:14px; max-width:720px;">
         <label>Agent
             <select name="target_user_id" required>
@@ -74,15 +120,15 @@ $cur = $restaurant['currency'] ?? 'USD';
         <label>Date
             <input type="date" name="day_ymd" value="<?= e($todayYmd) ?>" required>
         </label>
-        <label>Statut
+        <label>Exception
             <select name="planned_status" required>
-                <option value="TRAVAIL">Travail (défaut)</option>
+                <option value="AUTO">Effacer la saisie (activité automatique)</option>
                 <option value="REPOS">Repos</option>
                 <option value="EXONERE">Exonéré</option>
-                <option value="PRESENT">Présence confirmée</option>
                 <option value="RETARD_JUSTIFIE">Retard justifié</option>
                 <option value="ABSENCE_AUTORISEE">Absence autorisée</option>
                 <option value="MALADIE">Maladie</option>
+                <option value="TRAVAIL">Forcer « travail attendu » sans activité mesurée (sanction si répété)</option>
             </select>
         </label>
         <label style="grid-column:1/-1;">Note (facultatif)

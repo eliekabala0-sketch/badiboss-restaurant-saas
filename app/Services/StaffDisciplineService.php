@@ -235,6 +235,20 @@ final class StaffDisciplineService
         if ($targetUserId <= 0 || !preg_match('/^\d{4}-\d{2}-\d{2}$/', $dayYmd)) {
             throw new \RuntimeException('Données présence invalides.');
         }
+        $rawU = strtoupper(str_replace([' ', '-'], '_', trim($plannedStatusRaw)));
+        if (in_array($rawU, ['AUTO', 'CLEAR', 'RETOUR_ACTIVITE', 'ACTIVITE_AUTO'], true)) {
+            $del = $this->database->pdo()->prepare(
+                'DELETE FROM staff_attendance_day WHERE restaurant_id = :rid AND user_id = :uid AND day_ymd = :d'
+            );
+            $del->execute(['rid' => $restaurantId, 'uid' => $targetUserId, 'd' => $dayYmd]);
+            foreach (array_keys($this->engagementStartYmdCache) as $ck) {
+                if (str_starts_with($ck, $restaurantId . ':' . $targetUserId . ':')) {
+                    unset($this->engagementStartYmdCache[$ck]);
+                }
+            }
+
+            return;
+        }
         $status = $this->normalizeAttendanceStatus($plannedStatusRaw);
         $note = $managerNote !== null ? trim($managerNote) : '';
         $note = $note === '' ? null : $note;
@@ -647,13 +661,9 @@ final class StaffDisciplineService
 
     public function restaurantActivityStartYmd(int $restaurantId): string
     {
-        $st = $this->database->pdo()->prepare(
-            'SELECT MIN(DATE(created_at)) FROM audit_logs WHERE restaurant_id = :rid'
-        );
-        $st->execute(['rid' => $restaurantId]);
-        $d = $st->fetchColumn();
-        if (is_string($d) && $d !== '' && str_starts_with($d, '0000') === false) {
-            return $d;
+        $firstOp = $this->firstRestaurantCommercialActivityYmd($restaurantId);
+        if ($firstOp !== null && $firstOp !== '' && !str_starts_with($firstOp, '0000')) {
+            return $firstOp;
         }
         $r = Container::getInstance()->get('restaurantAdmin')->findRestaurant($restaurantId);
         $created = (string) ($r['created_at'] ?? '');
@@ -662,6 +672,55 @@ final class StaffDisciplineService
         }
 
         return Container::getInstance()->get('reportService')->todayForRestaurant($restaurantId);
+    }
+
+    /**
+     * Premier jour où une activité commerciale / opérationnelle réelle apparaît (lecture seule).
+     * Évite de prendre le tout premier audit (onboarding, tests) comme « début discipline ».
+     */
+    private function firstRestaurantCommercialActivityYmd(int $restaurantId): ?string
+    {
+        $pdo = $this->database->pdo();
+        $sql = 'SELECT MIN(d) AS mind FROM (
+            SELECT MIN(DATE(s.validated_at)) AS d
+            FROM sales s
+            WHERE s.restaurant_id = :rid1 AND s.validated_at IS NOT NULL
+            UNION ALL
+            SELECT MIN(DATE(sr.created_at)) AS d
+            FROM server_requests sr
+            WHERE sr.restaurant_id = :rid2 AND sr.status NOT IN ("ANNULE","REFUSE_CUISINE")
+            UNION ALL
+            SELECT MIN(DATE(sri.prepared_at)) AS d
+            FROM server_request_items sri
+            INNER JOIN server_requests sr3 ON sr3.id = sri.request_id
+            WHERE sr3.restaurant_id = :rid3 AND sri.prepared_at IS NOT NULL
+            UNION ALL
+            SELECT MIN(DATE(sm.created_at)) AS d
+            FROM stock_movements sm
+            WHERE sm.restaurant_id = :rid4 AND sm.status = "VALIDE"
+            UNION ALL
+            SELECT MIN(DATE(kp.created_at)) AS d
+            FROM kitchen_production kp
+            WHERE kp.restaurant_id = :rid5
+        ) t WHERE d IS NOT NULL AND d > "1970-01-02"';
+        try {
+            $st = $pdo->prepare($sql);
+            $st->execute([
+                'rid1' => $restaurantId,
+                'rid2' => $restaurantId,
+                'rid3' => $restaurantId,
+                'rid4' => $restaurantId,
+                'rid5' => $restaurantId,
+            ]);
+            $d = $st->fetchColumn();
+        } catch (\Throwable) {
+            return null;
+        }
+        if (!is_string($d) || $d === '' || str_starts_with($d, '0000')) {
+            return null;
+        }
+
+        return $d;
     }
 
     public function lastOperationalResetDayYmd(int $restaurantId): ?string
@@ -2144,6 +2203,19 @@ final class StaffDisciplineService
         return $this->normalizeAttendanceStatus($raw);
     }
 
+    private function hasExplicitAttendanceRow(int $restaurantId, int $userId, string $dayYmd): bool
+    {
+        $this->ensureSchema();
+        $st = $this->database->pdo()->prepare(
+            'SELECT 1 FROM staff_attendance_day
+             WHERE restaurant_id = :rid AND user_id = :uid AND day_ymd = :d
+             LIMIT 1'
+        );
+        $st->execute(['rid' => $restaurantId, 'uid' => $userId, 'd' => $dayYmd]);
+
+        return $st->fetchColumn() !== false;
+    }
+
     private function normalizeAttendanceStatus(string $raw): string
     {
         $u = strtoupper(str_replace([' ', '-'], '_', trim($raw)));
@@ -2427,6 +2499,24 @@ final class StaffDisciplineService
             return $this->finalizeEvaluatedDay(0, $bd, $ledgerDelta, $ledgerLines, [], 'neutral_exempt', 0);
         }
 
+        if (!$this->hasExplicitAttendanceRow($restaurantId, $userId, $dayYmd)) {
+            return [
+                'evaluated' => false,
+                'score' => null,
+                'action_count' => 0,
+                'activity_breakdown' => [],
+                'ledger_delta' => $ledgerDelta,
+                'ledger_lines' => $ledgerLines,
+                'extra_penalties' => [],
+                'base_score' => 100,
+                'evaluation_kind' => 'implicit_neutral_no_override',
+                'synthetic_adjustment' => 0,
+                'peer_activity_ratio' => null,
+                'role_activity_mean' => null,
+                'activite_pct_vs_role' => null,
+            ];
+        }
+
         $planned = $this->attendancePlannedStatusForDay($restaurantId, $userId, $dayYmd);
         if ($planned === 'REPOS') {
             $bd = [['label' => 'Jour de repos (planning) · neutre', 'count' => 0]];
@@ -2459,9 +2549,52 @@ final class StaffDisciplineService
             return $this->finalizeEvaluatedDay(0, $bd, $ledgerDelta, $ledgerLines, [], 'absence_illness', -14);
         }
 
-        $bd = [['label' => 'Aucune activité mesurée (jour ouvré) · absence / inactivité non justifiée', 'count' => 0]];
+        $streakTravailSansActivite = $this->consecutiveExplicitTravailZeroActivityStreak(
+            $restaurantId,
+            $userId,
+            $roleCode,
+            $dayYmd,
+            $tz,
+            14,
+        );
+        $penAbs = $streakTravailSansActivite >= 3 ? -28 : ($streakTravailSansActivite >= 2 ? -18 : -12);
+        $bd = [['label' => 'Saisie responsable « travail » sans activité métier mesurée (pénalité renforcée si répétée)', 'count' => 0]];
 
-        return $this->finalizeEvaluatedDay(0, $bd, $ledgerDelta, $ledgerLines, [], 'absence_unjustified', -22);
+        return $this->finalizeEvaluatedDay(0, $bd, $ledgerDelta, $ledgerLines, [], 'absence_unjustified', $penAbs);
+    }
+
+    /**
+     * Nombre de jours calendaires consécutifs se terminant à {@see $endYmd} avec ligne de présence « travail »
+     * et aucune activité domaine / audit comptée (pour graduer la sanction uniquement sur l’absence répétée explicite).
+     */
+    private function consecutiveExplicitTravailZeroActivityStreak(
+        int $restaurantId,
+        int $userId,
+        string $roleCode,
+        string $endYmd,
+        DateTimeZone $tz,
+        int $maxDays,
+    ): int {
+        $streak = 0;
+        for ($i = 0; $i < $maxDays; $i++) {
+            try {
+                $d = (new DateTimeImmutable($endYmd . ' 00:00:00', $tz))->modify('-' . $i . ' days')->format('Y-m-d');
+            } catch (\Throwable) {
+                break;
+            }
+            if (!$this->hasExplicitAttendanceRow($restaurantId, $userId, $d)) {
+                break;
+            }
+            if ($this->attendancePlannedStatusForDay($restaurantId, $userId, $d) !== 'TRAVAIL') {
+                break;
+            }
+            if ($this->measureActivityVolumeForDay($restaurantId, $userId, $roleCode, $d, $tz)['action_count'] > 0) {
+                break;
+            }
+            $streak++;
+        }
+
+        return $streak;
     }
 
     /**
@@ -2824,6 +2957,7 @@ final class StaffDisciplineService
                 'pre_reset' => 'Non évalué — période avant donnée exploitable après réinitialisation.',
                 'account_inactive' => 'Compte inactif, suspendu ou archivé : pas de cotation discipline.',
                 'unknown_user' => 'Utilisateur introuvable pour ce restaurant.',
+                'implicit_neutral_no_override' => 'Non coté : aucune saisie responsable (repos / maladie / exonération) et aucune activité métier mesurée — la présence suit l’activité réelle.',
                 default => 'Non évalué.',
             };
 

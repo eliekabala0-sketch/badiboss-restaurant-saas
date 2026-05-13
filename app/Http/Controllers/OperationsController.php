@@ -1227,6 +1227,35 @@ final class OperationsController
         redirect($this->moduleUrl('/caisse', $restaurantId));
     }
 
+    public function reclassifyCashMovementManager(Request $request): void
+    {
+        $restaurantId = $this->resolveRestaurantId($request);
+        $actor = current_user() ?? [];
+        $rc = (string) ($actor['role_code'] ?? '');
+        if (!in_array($rc, ['owner', 'manager'], true)) {
+            flash('error', 'Réserve aux comptes gérant ou propriétaire.');
+            redirect($this->moduleUrl('/caisse', $restaurantId));
+        }
+        authorize_access('cash.view');
+
+        try {
+            Container::getInstance()->get('cashService')->managerReclassifyMovement(
+                $restaurantId,
+                (int) $request->route('id'),
+                [
+                    'movement_type' => (string) $request->input('movement_type', ''),
+                    'reason' => (string) $request->input('reason', ''),
+                ],
+                $actor
+            );
+            flash('success', 'Mouvement reclasse (trace conservee, aucune suppression).');
+        } catch (\Throwable $e) {
+            flash('error', ui_safe_message($e->getMessage()));
+        }
+
+        redirect($this->moduleUrl('/caisse', $restaurantId));
+    }
+
     public function transferCashToManager(Request $request): void
     {
         $restaurantId = $this->resolveRestaurantId($request);
