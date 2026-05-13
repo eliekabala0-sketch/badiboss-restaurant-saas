@@ -6,6 +6,7 @@ namespace App\Http\Controllers;
 
 use App\Core\Container;
 use App\Core\Request;
+use App\Support\SandboxMidnightSalesE2eRunner;
 use PDO;
 
 final class DashboardController
@@ -286,6 +287,40 @@ final class DashboardController
         );
         flash('success', 'Sandbox : horodatage REMIS_SERVEUR reculé à hier (tests runner minuit).');
         redirect('/super-admin');
+    }
+
+    /**
+     * Temporaire : exécute l’E2E sandbox minuit (test-ventes-minuit uniquement), rapport texte.
+     */
+    public function runSandboxMidnightE2e(Request $request): void
+    {
+        authorize_access('platform.admin.view');
+        $actor = current_user() ?? [];
+        $result = SandboxMidnightSalesE2eRunner::execute('HTTP super-admin');
+
+        $rid = (int) ($result['metrics']['restaurant_id'] ?? 0);
+        Container::getInstance()->get('audit')->log([
+            'restaurant_id' => $rid > 0 ? $rid : null,
+            'user_id' => $actor['id'] ?? null,
+            'actor_name' => (string) ($actor['full_name'] ?? 'super_admin'),
+            'actor_role_code' => (string) ($actor['role_code'] ?? 'system'),
+            'module_name' => 'sandbox',
+            'action_name' => 'sandbox_midnight_e2e_run',
+            'entity_type' => 'restaurants',
+            'entity_id' => $rid > 0 ? (string) $rid : SandboxMidnightSalesE2eRunner::CODE,
+            'new_values' => [
+                'exit_code' => $result['exit_code'],
+                'checks' => $result['checks'],
+                'commit_short' => $result['metrics']['commit_short'] ?? '',
+                'error' => $result['metrics']['error'] ?? null,
+            ],
+            'justification' => 'E2E sandbox minuit (endpoint super-admin, restaurant allowlist uniquement)',
+        ]);
+
+        $code = $result['exit_code'] === 0 ? 200 : ($result['exit_code'] === 2 ? 422 : 500);
+        http_response_code($code);
+        header('Content-Type: text/plain; charset=utf-8');
+        echo implode("\n", $result['report_lines']) . "\n";
     }
 
     public function owner(Request $request): void

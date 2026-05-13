@@ -40,6 +40,7 @@ $router->post('/super-admin/operations/force', [DashboardController::class, 'sup
 $router->post('/super-admin/sandbox/setup-sales-midnight', [DashboardController::class, 'setupSalesSandbox'], [AuthMiddleware::class, SuperAdminMiddleware::class]);
 $router->post('/super-admin/sandbox/run-sales-midnight', [DashboardController::class, 'runSalesSandboxMidnight'], [AuthMiddleware::class, SuperAdminMiddleware::class]);
 $router->post('/super-admin/sandbox/backdate-remis-yesterday', [DashboardController::class, 'backdateSandboxRemisYesterday'], [AuthMiddleware::class, SuperAdminMiddleware::class]);
+$router->post('/super-admin/sandbox/run-midnight-e2e', [DashboardController::class, 'runSandboxMidnightE2e'], [AuthMiddleware::class, SuperAdminMiddleware::class]);
 $router->get('/super-admin/restaurants', [RestaurantAdminController::class, 'index'], [AuthMiddleware::class, SuperAdminMiddleware::class]);
 $router->post('/super-admin/restaurants', [RestaurantAdminController::class, 'store'], [AuthMiddleware::class, SuperAdminMiddleware::class]);
 $router->get('/super-admin/restaurants/{id}', [RestaurantAdminController::class, 'show'], [AuthMiddleware::class, SuperAdminMiddleware::class]);
