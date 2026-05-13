@@ -173,7 +173,7 @@ final class ReportService
 
         $cashSvc = Container::getInstance()->get('cashService');
         $clarity = $cashSvc->periodCashClarity($restaurantId, $todayYmd, $todayYmd);
-        $balanceFull = (float) ($cashSvc->dashboard($restaurantId, [])['summary']['cash_balance'] ?? 0);
+        $balanceFull = (float) ($cashSvc->summaryData($restaurantId, [])['cash_balance'] ?? 0);
 
         return [
             'date_ymd' => $todayYmd,
@@ -344,7 +344,16 @@ final class ReportService
             if ($restrictToServerUserId === null) {
                 $pendMagasin = $pdo->prepare(
                     'SELECT COUNT(*) FROM kitchen_stock_requests
-                     WHERE restaurant_id = :rid AND status NOT IN ("ANNULE","REFUSE_STOCK","CLOTURE")'
+                     WHERE restaurant_id = :rid
+                       AND status NOT IN ("ANNULE","REFUSE_STOCK","CLOTURE")
+                       AND NOT EXISTS (
+                           SELECT 1
+                           FROM operation_cases oc
+                           WHERE oc.restaurant_id = kitchen_stock_requests.restaurant_id
+                             AND oc.source_entity_type = "kitchen_stock_requests"
+                             AND oc.source_entity_id = kitchen_stock_requests.id
+                             AND oc.decided_at IS NOT NULL
+                       )'
                 );
                 $pendMagasin->execute(['rid' => $restaurantId]);
                 $openKitchenStockRequests = (int) $pendMagasin->fetchColumn();
@@ -691,6 +700,7 @@ final class ReportService
      */
     public function serverRemittanceShortfallBreakdown(int $restaurantId, DateTimeImmutable $startAt, DateTimeImmutable $endAt, int $filterUserId = 0): array
     {
+        Container::getInstance()->get('managerResolution')->ensureResponsibleOutcomeColumns();
         $s = $startAt->format('Y-m-d H:i:s');
         $e = $endAt->format('Y-m-d H:i:s');
         $closedIn = '"VALIDE","CLOTURE","VENDU_TOTAL","VENDU_PARTIEL"';
@@ -705,6 +715,7 @@ final class ReportService
                        ct.id AS transfer_id,
                        ct.status AS transfer_status,
                        ct.amount AS transfer_amount,
+                       ct.responsible_outcome_code,
                        ct.late_remittance_basis,
                        ' . sql_sale_activity_datetime_expr('s', 'sr') . ' AS sale_activity_at
                 FROM sales s
@@ -835,8 +846,15 @@ final class ReportService
         if ($tid <= 0) {
             return false;
         }
+        $outcomeCode = trim((string) ($row['responsible_outcome_code'] ?? ''));
+        if ($outcomeCode !== '') {
+            return true;
+        }
         $st = (string) ($row['transfer_status'] ?? '');
-        if (in_array($st, ['REMISE_REJETEE_CAISSE', 'REMISE_REJETEE_GERANT'], true)) {
+        if ($st === 'REMISE_REJETEE_GERANT') {
+            return true;
+        }
+        if ($st === 'REMISE_REJETEE_CAISSE') {
             return false;
         }
         if ((string) ($row['late_remittance_basis'] ?? '') === 'PENDING') {

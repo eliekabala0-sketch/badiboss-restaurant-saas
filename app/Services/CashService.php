@@ -33,6 +33,13 @@ final class CashService
         ];
     }
 
+    public function summaryData(int $restaurantId, array $filters = []): array
+    {
+        $this->ensureSchema();
+
+        return $this->summary($restaurantId, $filters);
+    }
+
     /**
      * Synthèse des flux caisse sur une plage de dates (inclus) : remises vente, réceptions, chaîne gérant/propriétaire, écarts.
      * Les montants suivent les enregistrements réels (entrées +, sorties - au niveau métier dans l’affichage).
@@ -154,12 +161,16 @@ final class CashService
                 $saleStatus = (string) ($row['sale_status'] ?? '');
                 $transferId = (int) ($row['transfer_id'] ?? 0);
                 $transferStatus = (string) ($row['transfer_status'] ?? '');
+                $responsibleOutcomeCode = trim((string) ($row['responsible_outcome_code'] ?? ''));
                 $amount = (float) ($row['sale_total_amount'] ?? 0);
                 if (!in_array($saleStatus, ['VALIDE', 'CLOTURE', 'VENDU_TOTAL', 'VENDU_PARTIEL'], true) || $amount <= 0) {
                     return false;
                 }
                 if ($transferId <= 0) {
                     return true;
+                }
+                if ($responsibleOutcomeCode !== '' || $transferStatus === 'REMISE_REJETEE_GERANT') {
+                    return false;
                 }
 
                 return !$this->isBlockingSaleRemittanceStatus($transferStatus);
@@ -169,6 +180,7 @@ final class CashService
 
     public function listSaleRemittanceTracking(int $restaurantId, ?int $serverId = null): array
     {
+        Container::getInstance()->get('managerResolution')->ensureResponsibleOutcomeColumns();
         $sql = 'SELECT s.id AS sale_id,
                        s.server_id,
                        s.total_amount AS sale_total_amount,
@@ -192,6 +204,10 @@ final class CashService
                        ct.sale_day_ymd,
                        ct.remittance_day_ymd,
                        ct.late_remittance_basis,
+                       ct.responsible_outcome_code,
+                       ct.responsible_outcome_at,
+                       ct.responsible_outcome_by,
+                       ct.responsible_outcome_detail,
                        ct.requested_at AS remitted_at,
                        ct.received_at AS cash_received_at,
                        tu.full_name AS cashier_name,

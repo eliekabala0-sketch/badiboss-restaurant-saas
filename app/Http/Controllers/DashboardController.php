@@ -327,6 +327,10 @@ final class DashboardController
     {
         authorize_access('tenant.dashboard.view');
         $restaurantId = current_restaurant_id();
+        $actor = current_user() ?? [];
+        $flashSuccess = flash('success');
+        $flashError = flash('error');
+        session_release_read_lock();
         $restaurant = Container::getInstance()->get('restaurantAdmin')->findRestaurant($restaurantId);
         $subscription = Container::getInstance()->get('subscriptionService')->summaryForRestaurant($restaurantId);
         $settings = Container::getInstance()->get('platformSettings')->listSystemSettings();
@@ -341,7 +345,7 @@ final class DashboardController
 
         $dash = $this->ownerOperationalDashboardBundle($request, $restaurantId);
         $wideTasks = Container::getInstance()->get('regularizationGate')->listRestaurantWideTasks($restaurantId, 30);
-        $hold = Container::getInstance()->get('regularizationGate')->assessForUser($restaurantId, current_user() ?? []);
+        $hold = Container::getInstance()->get('regularizationGate')->assessForUser($restaurantId, $actor);
         $disciplineSchedule = $staffDisc->disciplineWorkScheduleForRestaurant($restaurantId);
         $disciplinaryAlerts = can_access('staff.team_gauges.view')
             ? $staffDisc->listDisciplinaryAlerts($restaurantId)
@@ -349,7 +353,7 @@ final class DashboardController
 
         view('owner/dashboard', array_merge($dash, [
             'title' => 'Tableau de bord restaurant',
-            'user' => $_SESSION['user'],
+            'user' => $actor,
             'restaurant' => $restaurant,
             'subscription' => $subscription,
             'pending_manager_sale_remittances' => $cashSvc->listPendingManagerSaleRemittances($restaurantId),
@@ -384,8 +388,8 @@ final class DashboardController
                     (string) ($dash['dash_date'] ?? $todayY),
                 )
                 : [],
-            'flash_success' => flash('success'),
-            'flash_error' => flash('error'),
+            'flash_success' => $flashSuccess,
+            'flash_error' => $flashError,
         ]));
 
         audit_access('dashboard', $restaurantId, 'screens', 'owner-dashboard', 'Consultation tableau de bord restaurant');
@@ -418,6 +422,10 @@ final class DashboardController
     {
         authorize_access('payroll.prepare.view');
         $restaurantId = current_restaurant_id();
+        $actor = current_user() ?? [];
+        $flashSuccess = flash('success');
+        $flashError = flash('error');
+        session_release_read_lock();
         $restaurant = Container::getInstance()->get('restaurantAdmin')->findRestaurant($restaurantId);
         $staffDisc = Container::getInstance()->get('staffDiscipline');
         $staffDisc->ensureSchema();
@@ -430,12 +438,12 @@ final class DashboardController
 
         view('owner/prepare-payroll', [
             'title' => 'Préparer la paie',
-            'user' => $_SESSION['user'],
+            'user' => $actor,
             'restaurant' => $restaurant,
             'payroll_preview' => $preview,
             'month_query' => $preview['month'],
-            'flash_success' => flash('success'),
-            'flash_error' => flash('error'),
+            'flash_success' => $flashSuccess,
+            'flash_error' => $flashError,
         ]);
 
         audit_access('payroll', $restaurantId, 'screens', 'prepare-payroll', 'Consultation préparation paie');
@@ -445,6 +453,10 @@ final class DashboardController
     {
         authorize_access('staff.team_gauges.view');
         $restaurantId = current_restaurant_id();
+        $actor = current_user() ?? [];
+        $flashSuccess = flash('success');
+        $flashError = flash('error');
+        session_release_read_lock();
         $staffDisc = Container::getInstance()->get('staffDiscipline');
         $staffDisc->ensureSchema();
         $todayY = Container::getInstance()->get('reportService')->todayForRestaurant($restaurantId);
@@ -466,7 +478,7 @@ final class DashboardController
 
         view('owner/discipline-hub', [
             'title' => 'Discipline & présences',
-            'user' => $_SESSION['user'],
+            'user' => $actor,
             'restaurant' => Container::getInstance()->get('restaurantAdmin')->findRestaurant($restaurantId),
             'today_ymd' => $todayY,
             'discipline_schedule' => $staffDisc->disciplineWorkScheduleForRestaurant($restaurantId),
@@ -474,8 +486,8 @@ final class DashboardController
             'gauge_rows' => $staffDisc->gaugesSnapshotRestaurantOperational($restaurantId, 'today', $todayY),
             'staff_users' => $attUsers,
             'payroll_profiles' => $payrollProfiles,
-            'flash_success' => flash('success'),
-            'flash_error' => flash('error'),
+            'flash_success' => $flashSuccess,
+            'flash_error' => $flashError,
         ]);
 
         audit_access('discipline', $restaurantId, 'screens', 'discipline-hub', 'Consultation hub discipline');

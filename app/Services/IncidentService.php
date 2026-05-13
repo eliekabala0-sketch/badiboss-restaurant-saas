@@ -868,6 +868,10 @@ final class IncidentService
             return;
         }
 
+        if ($case['source_entity_type'] === 'kitchen_stock_requests') {
+            return;
+        }
+
         if ($case['source_module'] === 'stock' && $case['stock_item_id'] !== null) {
             $this->applyStockLossMovement($restaurantId, (int) $case['stock_item_id'], (float) $case['quantity_affected'], $actor['id'], $qualification);
             return;
@@ -890,6 +894,10 @@ final class IncidentService
 
     private function assertDecisionConsistency(int $restaurantId, array $case, string $qualification, float $materialLoss, float $cashLoss): void
     {
+        if ($case['source_entity_type'] === 'kitchen_stock_requests') {
+            return;
+        }
+
         if ($qualification !== 'retour_simple' && $materialLoss <= 0 && $cashLoss <= 0) {
             throw new \RuntimeException('Une perte validee doit comporter un impact matiere ou argent.');
         }

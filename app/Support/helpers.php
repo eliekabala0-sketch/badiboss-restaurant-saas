@@ -104,6 +104,13 @@ function current_user(): ?array
     return $_SESSION['user'] ?? null;
 }
 
+function session_release_read_lock(): void
+{
+    if (session_status() === PHP_SESSION_ACTIVE) {
+        session_write_close();
+    }
+}
+
 function current_restaurant_id(): int
 {
     $sessionRestaurantId = (int) ($_SESSION['restaurant_id'] ?? 0);

@@ -13,6 +13,10 @@ final class OperationsController
     {
         $restaurantId = $this->resolveRestaurantId($request);
         authorize_access('stock.view');
+        $actor = current_user();
+        $flashSuccess = flash('success');
+        $flashError = flash('error');
+        session_release_read_lock();
         $incidentCatalog = $this->incidentCatalog();
         $kitchenStockBlocks = Container::getInstance()->get('stockService')->listKitchenStockRequestBlocks($restaurantId);
         $items = Container::getInstance()->get('stockService')->listItems($restaurantId);
@@ -38,8 +42,8 @@ final class OperationsController
         $stockCategoryLabels = array_keys($stockCategoryLabels);
 
         $dash = $this->operationalDashboardBundle($request, $restaurantId, null, true);
-        $hold = Container::getInstance()->get('regularizationGate')->assessForUser($restaurantId, current_user() ?? []);
-        $disc = $this->staffDisciplineOperationalExtras($dash, $restaurantId, current_user(), ['stock_manager']);
+        $hold = Container::getInstance()->get('regularizationGate')->assessForUser($restaurantId, is_array($actor) ? $actor : []);
+        $disc = $this->staffDisciplineOperationalExtras($dash, $restaurantId, is_array($actor) ? $actor : null, ['stock_manager']);
 
         $scDate = trim((string) ($request->query['sc_date'] ?? ''));
         if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $scDate)) {
@@ -77,8 +81,8 @@ final class OperationsController
             'incident_types' => $incidentCatalog['incident_types'],
             'final_qualifications' => $incidentCatalog['final_qualifications'],
             'responsibility_targets' => $incidentCatalog['responsibility_targets'],
-            'flash_success' => flash('success'),
-            'flash_error' => flash('error'),
+            'flash_success' => $flashSuccess,
+            'flash_error' => $flashError,
             'day_start_hold' => $hold,
             'regularization_backlog' => Container::getInstance()->get('salesService')->regularizationBacklogCounts($restaurantId),
             'staff_gauges_panel_title' => 'Discipline · magasin',
@@ -381,14 +385,18 @@ final class OperationsController
     {
         $restaurantId = $this->resolveRestaurantId($request);
         authorize_access('kitchen.view');
+        $actor = current_user();
+        $flashSuccess = flash('success');
+        $flashError = flash('error');
+        session_release_read_lock();
         $incidentCatalog = $this->incidentCatalog();
         $kitchenStockBlocks = Container::getInstance()->get('stockService')->listKitchenStockRequestBlocks($restaurantId);
 
         $allCases = Container::getInstance()->get('incidentService')->listCases($restaurantId);
 
         $dash = $this->operationalDashboardBundle($request, $restaurantId, null, true);
-        $hold = Container::getInstance()->get('regularizationGate')->assessForUser($restaurantId, current_user() ?? []);
-        $disc = $this->staffDisciplineOperationalExtras($dash, $restaurantId, current_user(), ['kitchen']);
+        $hold = Container::getInstance()->get('regularizationGate')->assessForUser($restaurantId, is_array($actor) ? $actor : []);
+        $disc = $this->staffDisciplineOperationalExtras($dash, $restaurantId, is_array($actor) ? $actor : null, ['kitchen']);
 
         view('operations/kitchen', array_merge($dash, $disc, [
             'title' => 'Cuisine',
@@ -414,8 +422,8 @@ final class OperationsController
             'incident_types' => $incidentCatalog['incident_types'],
             'final_qualifications' => $incidentCatalog['final_qualifications'],
             'responsibility_targets' => $incidentCatalog['responsibility_targets'],
-            'flash_success' => flash('success'),
-            'flash_error' => flash('error'),
+            'flash_success' => $flashSuccess,
+            'flash_error' => $flashError,
             'day_start_hold' => $hold,
             'regularization_backlog' => Container::getInstance()->get('salesService')->regularizationBacklogCounts($restaurantId),
             'staff_gauges_panel_title' => 'Discipline · cuisine',
@@ -626,9 +634,12 @@ final class OperationsController
     {
         $restaurantId = $this->resolveRestaurantId($request);
         authorize_access('sales.view');
+        $flashSuccess = flash('success');
+        $flashError = flash('error');
         $incidentCatalog = $this->incidentCatalog();
 
         $actor = current_user();
+        session_release_read_lock();
         $serverScopeId = null;
         if (is_array($actor) && ($actor['role_code'] ?? null) === 'cashier_server' && (int) ($actor['id'] ?? 0) > 0) {
             $serverScopeId = (int) $actor['id'];
@@ -666,15 +677,15 @@ final class OperationsController
             'served_requests_without_sale_period' => $servedWithoutSalePeriod,
             'agent_server_cash' => $agentCash,
             'incident_types' => $incidentCatalog['incident_types'],
-            'day_start_hold' => Container::getInstance()->get('regularizationGate')->assessForUser($restaurantId, current_user() ?? []),
+            'day_start_hold' => Container::getInstance()->get('regularizationGate')->assessForUser($restaurantId, is_array($actor) ? $actor : []),
             'regularization_backlog' => Container::getInstance()->get('salesService')->regularizationBacklogCounts($restaurantId, $serverScopeId),
             'cash_today_snapshot' => $serverScopeId !== null
                 ? null
                 : Container::getInstance()->get('reportService')->cashTodayOperationalSnapshot($restaurantId),
             'sales_view_scope' => $serverScopeId !== null ? 'self' : 'full',
             'staff_gauges_panel_title' => 'Discipline · service et ventes',
-            'flash_success' => flash('success'),
-            'flash_error' => flash('error'),
+            'flash_success' => $flashSuccess,
+            'flash_error' => $flashError,
             'manager_resolution_panel' => $this->buildManagerResolutionPanelFromRequest($request, $restaurantId),
             'manager_recent_decisions' => \App\Services\ManagerResolutionService::actorCanResolve(is_array($actor) ? $actor : null)
                 ? Container::getInstance()->get('managerResolution')->listRecentResponsibleDecisions($restaurantId, 14)
@@ -688,6 +699,10 @@ final class OperationsController
     {
         $restaurantId = $this->resolveRestaurantId($request);
         authorize_access('cash.view');
+        $actor = current_user();
+        $flashSuccess = flash('success');
+        $flashError = flash('error');
+        session_release_read_lock();
 
         $filters = [
             'date_from' => (string) ($request->query['date_from'] ?? ''),
@@ -703,11 +718,11 @@ final class OperationsController
         $cashClarity = Container::getInstance()->get('cashService')->periodCashClarity($restaurantId, $clarityFrom, $clarityTo);
 
         $dash = $this->operationalDashboardBundle($request, $restaurantId);
-        $hold = Container::getInstance()->get('regularizationGate')->assessForUser($restaurantId, current_user() ?? []);
+        $hold = Container::getInstance()->get('regularizationGate')->assessForUser($restaurantId, is_array($actor) ? $actor : []);
         $disc = $this->staffDisciplineOperationalExtras(
             $dash,
             $restaurantId,
-            current_user(),
+            is_array($actor) ? $actor : null,
             ['cashier_accountant', 'manager', 'owner'],
         );
 
@@ -723,10 +738,10 @@ final class OperationsController
             'day_start_hold' => $hold,
             'regularization_backlog' => Container::getInstance()->get('salesService')->regularizationBacklogCounts($restaurantId),
             'staff_gauges_panel_title' => 'Discipline · caisse',
-            'flash_success' => flash('success'),
-            'flash_error' => flash('error'),
+            'flash_success' => $flashSuccess,
+            'flash_error' => $flashError,
             'manager_resolution_panel' => $this->buildManagerResolutionPanelFromRequest($request, $restaurantId),
-            'manager_recent_decisions' => \App\Services\ManagerResolutionService::actorCanResolve(current_user() ?? [])
+            'manager_recent_decisions' => \App\Services\ManagerResolutionService::actorCanResolve(is_array($actor) ? $actor : [])
                 ? Container::getInstance()->get('managerResolution')->listRecentResponsibleDecisions($restaurantId, 14)
                 : [],
         ]));
@@ -1348,6 +1363,8 @@ final class OperationsController
     {
         $restaurantId = $this->resolveRestaurantId($request);
         authorize_access('reports.view');
+        $actor = current_user() ?? [];
+        session_release_read_lock();
 
         $reportPreset = trim((string) ($request->query['report_preset'] ?? ''));
         $date = (string) ($request->query['date'] ?? Container::getInstance()->get('reportService')->todayForRestaurant($restaurantId));
@@ -1400,7 +1417,6 @@ final class OperationsController
             'timeline_limit' => (int) ($request->query['timeline_limit'] ?? 350),
         ];
 
-        $actor = current_user() ?? [];
         $isServerReporter = ($actor['role_code'] ?? '') === 'cashier_server' && (int) ($actor['id'] ?? 0) > 0;
         if ($isServerReporter) {
             $viewFilters['user_id'] = (int) $actor['id'];
@@ -1473,7 +1489,7 @@ final class OperationsController
                 $isServerReporter ? (int) $actor['id'] : null,
             ),
             'report_agent_filter_locked' => $isServerReporter,
-            'day_start_hold' => Container::getInstance()->get('regularizationGate')->assessForUser($restaurantId, current_user() ?? []),
+            'day_start_hold' => Container::getInstance()->get('regularizationGate')->assessForUser($restaurantId, $actor),
             'stock_control_bundle' => $stockControlBundle,
             'stock_control_return_to' => 'report',
             'stock_control_stock_query' => '',

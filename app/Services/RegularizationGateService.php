@@ -181,6 +181,7 @@ final class RegularizationGateService
      */
     private function gatherRawTasks(int $restaurantId, string $cutoff, int $limit): array
     {
+        Container::getInstance()->get('managerResolution')->ensureResponsibleOutcomeColumns();
         $restaurant = Container::getInstance()->get('restaurantAdmin')->findRestaurant($restaurantId);
         $currency = (string) ($restaurant['currency'] ?? '');
 
@@ -306,6 +307,14 @@ final class RegularizationGateService
              FROM kitchen_stock_requests ksr
              WHERE ksr.restaurant_id = :rid
                AND ksr.status NOT IN ("ANNULE", "REFUSE_STOCK", "CLOTURE")
+               AND NOT EXISTS (
+                   SELECT 1
+                   FROM operation_cases oc
+                   WHERE oc.restaurant_id = ksr.restaurant_id
+                     AND oc.source_entity_type = "kitchen_stock_requests"
+                     AND oc.source_entity_id = ksr.id
+                     AND oc.decided_at IS NOT NULL
+               )
                AND ksr.created_at < :cutoff
              ORDER BY ksr.created_at ASC
              LIMIT 20'
@@ -430,11 +439,14 @@ final class RegularizationGateService
         foreach ($userIds as $sid) {
             $cash = Container::getInstance()->get('cashService')->listSaleRemittanceTracking($restaurantId, $sid);
             foreach ($cash as $row) {
+                if (trim((string) ($row['responsible_outcome_code'] ?? '')) !== '') {
+                    continue;
+                }
                 $st = (string) ($row['transfer_status'] ?? '');
-                if ($st === 'REMISE_REJETEE_CAISSE' || $st === 'REMISE_REJETEE_GERANT') {
+                if ($st === 'REMISE_REJETEE_CAISSE') {
                     $saleId = (int) ($row['sale_id'] ?? 0);
                     $rawTs = (string) ($row['remitted_at'] ?? $row['cash_received_at'] ?? $row['validated_at'] ?? $row['sale_created_at'] ?? '');
-                    $gerantFinal = $st === 'REMISE_REJETEE_GERANT';
+                    $gerantFinal = false;
                     $svcYmd = $this->saleServiceDayYmdForHold($row, $restaurantId);
                     $tier = ($svcYmd !== '' && $svcYmd >= $todayYmd) ? 'today_soft' : 'blocking';
                     $tasks[] = [
@@ -564,8 +576,11 @@ final class RegularizationGateService
             if ((int) ($row['server_id'] ?? 0) !== $serverUserId) {
                 continue;
             }
+            if (trim((string) ($row['responsible_outcome_code'] ?? '')) !== '') {
+                continue;
+            }
             $st = (string) ($row['transfer_status'] ?? '');
-            if (!in_array($st, ['REMISE_REJETEE_CAISSE', 'REMISE_REJETEE_GERANT'], true)) {
+            if ($st !== 'REMISE_REJETEE_CAISSE') {
                 continue;
             }
             $saleYmd = $this->saleServiceDayYmdForHold($row, $restaurantId);
@@ -620,6 +635,14 @@ final class RegularizationGateService
             'SELECT COUNT(*) FROM kitchen_stock_requests
              WHERE restaurant_id = :rid
                AND status NOT IN ("ANNULE", "REFUSE_STOCK", "CLOTURE")
+               AND NOT EXISTS (
+                   SELECT 1
+                   FROM operation_cases oc
+                   WHERE oc.restaurant_id = kitchen_stock_requests.restaurant_id
+                     AND oc.source_entity_type = "kitchen_stock_requests"
+                     AND oc.source_entity_id = kitchen_stock_requests.id
+                     AND oc.decided_at IS NOT NULL
+               )
                AND created_at < :today_start'
         );
         $st->execute(['rid' => $restaurantId, 'today_start' => $todayStart]);

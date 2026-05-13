@@ -144,6 +144,14 @@ final class StockService
                 'SELECT COUNT(*) FROM kitchen_stock_request_items ksri
                  INNER JOIN kitchen_stock_requests ksr ON ksr.id = ksri.request_id
                  WHERE ksri.stock_item_id = :i AND ksr.restaurant_id = :r
+                   AND NOT EXISTS (
+                       SELECT 1
+                       FROM operation_cases oc
+                       WHERE oc.restaurant_id = ksr.restaurant_id
+                         AND oc.source_entity_type = "kitchen_stock_requests"
+                         AND oc.source_entity_id = ksr.id
+                         AND oc.decided_at IS NOT NULL
+                   )
                    AND ksr.status IN ("DEMANDE","EN_COURS_TRAITEMENT")'
             );
             $pStmt->execute(['r' => $restaurantId, 'i' => $stockItemId]);
@@ -155,6 +163,14 @@ final class StockService
             $lStmt = $this->database->pdo()->prepare(
                 'SELECT COUNT(*) FROM kitchen_stock_requests
                  WHERE restaurant_id = :r AND stock_item_id = :i
+                   AND NOT EXISTS (
+                       SELECT 1
+                       FROM operation_cases oc
+                       WHERE oc.restaurant_id = kitchen_stock_requests.restaurant_id
+                         AND oc.source_entity_type = "kitchen_stock_requests"
+                         AND oc.source_entity_id = kitchen_stock_requests.id
+                         AND oc.decided_at IS NOT NULL
+                   )
                    AND status IN ("DEMANDE","EN_COURS_TRAITEMENT")'
             );
             $lStmt->execute(['r' => $restaurantId, 'i' => $stockItemId]);
@@ -1040,6 +1056,12 @@ final class StockService
     public function listKitchenStockRequests(int $restaurantId): array
     {
         $this->ensureKitchenStockRequestItemsTable();
+        $resolutionBySelect = 'NULL AS resolution_by_name';
+        $resolutionByJoin = '';
+        if ($this->tableColumnExists('kitchen_stock_requests', 'resolution_by')) {
+            $resolutionBySelect = 'res_actor.full_name AS resolution_by_name';
+            $resolutionByJoin = ' LEFT JOIN users res_actor ON res_actor.id = ksr.resolution_by';
+        }
         $statement = $this->database->pdo()->prepare(
             'SELECT ksr.*,
                     si.name AS stock_item_name,
@@ -1047,13 +1069,21 @@ final class StockService
                     rq.full_name AS requested_by_name,
                     rp.full_name AS responded_by_name,
                     ru.full_name AS received_by_name,
-                    res_actor.full_name AS resolution_by_name
+                    ' . $resolutionBySelect . ',
+                    (
+                        SELECT MAX(oc.decided_at)
+                        FROM operation_cases oc
+                        WHERE oc.restaurant_id = ksr.restaurant_id
+                          AND oc.source_entity_type = "kitchen_stock_requests"
+                          AND oc.source_entity_id = ksr.id
+                          AND oc.decided_at IS NOT NULL
+                    ) AS manager_case_decided_at
              FROM kitchen_stock_requests ksr
              INNER JOIN stock_items si ON si.id = ksr.stock_item_id
              INNER JOIN users rq ON rq.id = ksr.requested_by
              LEFT JOIN users rp ON rp.id = ksr.responded_by
              LEFT JOIN users ru ON ru.id = ksr.received_by
-             LEFT JOIN users res_actor ON res_actor.id = ksr.resolution_by
+             ' . $resolutionByJoin . '
              WHERE ksr.restaurant_id = :restaurant_id
              ORDER BY ksr.id DESC'
         );
@@ -1082,6 +1112,12 @@ final class StockService
             $header['quantity_supplied_total'] = array_sum(array_map(static fn (array $item): float => (float) ($item['quantity_supplied'] ?? 0), $items));
             $header['unavailable_quantity_total'] = array_sum(array_map(static fn (array $item): float => (float) ($item['unavailable_quantity'] ?? 0), $items));
             $header['status'] = $this->resolveKitchenStockRequestStatus($items, (string) ($header['status'] ?? 'DEMANDE'));
+            if (!empty($header['manager_case_decided_at']) && !in_array((string) $header['status'], ['ANNULE', 'REFUSE_STOCK', 'CLOTURE'], true)) {
+                $header['status'] = 'CLOTURE';
+                $header['resolution_note'] = trim((string) ($header['resolution_note'] ?? '')) !== ''
+                    ? (string) $header['resolution_note']
+                    : 'Dossier tranche par responsable';
+            }
         }
         unset($header);
 
@@ -2984,6 +3020,14 @@ final class StockService
              FROM kitchen_stock_requests ksr
              WHERE ksr.restaurant_id = :restaurant_id
                AND ksr.status = "DEMANDE"
+               AND NOT EXISTS (
+                   SELECT 1
+                   FROM operation_cases oc
+                   WHERE oc.restaurant_id = ksr.restaurant_id
+                     AND oc.source_entity_type = "kitchen_stock_requests"
+                     AND oc.source_entity_id = ksr.id
+                     AND oc.decided_at IS NOT NULL
+               )
                AND ksr.created_at < :today_start
                AND NOT EXISTS (
                    SELECT 1 FROM kitchen_stock_request_items li
@@ -3098,6 +3142,14 @@ final class StockService
                AND received_at IS NULL
                AND responded_at IS NOT NULL
                AND responded_at < :today_start
+               AND NOT EXISTS (
+                   SELECT 1
+                   FROM operation_cases oc
+                   WHERE oc.restaurant_id = kitchen_stock_requests.restaurant_id
+                     AND oc.source_entity_type = "kitchen_stock_requests"
+                     AND oc.source_entity_id = kitchen_stock_requests.id
+                     AND oc.decided_at IS NOT NULL
+               )
                AND status IN ("FOURNI_TOTAL","FOURNI_PARTIEL","NON_FOURNI")'
         );
         $statement->execute(['restaurant_id' => $restaurantId, 'today_start' => $todayStart]);
