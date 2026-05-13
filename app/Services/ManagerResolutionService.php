@@ -561,8 +561,9 @@ final class ManagerResolutionService
         CashService $cash,
     ): ?array {
         $st = $this->database->pdo()->prepare(
-            'SELECT s.*, u.full_name AS server_name
+            'SELECT s.*, u.full_name AS server_name, ' . sql_sale_activity_datetime_expr('s', 'sr') . ' AS sale_activity_at
              FROM sales s
+             ' . sql_sale_activity_left_join_server_request('s', 'sr') . '
              LEFT JOIN users u ON u.id = s.server_id
              WHERE s.id = :id AND s.restaurant_id = :rid LIMIT 1'
         );
@@ -624,7 +625,7 @@ final class ManagerResolutionService
             'operation_label' => 'Vente n° ' . $saleId,
             'agent_label' => (string) ($sale['server_name'] ?? ''),
             'server_user_id' => $serverId,
-            'origin_at' => (string) ($sale['validated_at'] ?? $sale['created_at'] ?? ''),
+            'origin_at' => (string) ($sale['sale_activity_at'] ?? $sale['validated_at'] ?? $sale['created_at'] ?? ''),
             'amount_hint' => (float) ($sale['total_amount'] ?? 0),
             'status_label' => (string) ($sale['status'] ?? ''),
             'block_reason' => $blockReason,

@@ -682,9 +682,10 @@ final class StaffDisciplineService
     {
         $pdo = $this->database->pdo();
         $sql = 'SELECT MIN(d) AS mind FROM (
-            SELECT MIN(DATE(s.validated_at)) AS d
+            SELECT MIN(DATE(' . sql_sale_activity_datetime_expr('s', 'sr') . ')) AS d
             FROM sales s
-            WHERE s.restaurant_id = :rid1 AND s.validated_at IS NOT NULL
+            ' . sql_sale_activity_left_join_server_request('s', 'sr') . '
+            WHERE s.restaurant_id = :rid1 AND (' . sql_sale_activity_datetime_expr('s', 'sr') . ') IS NOT NULL
             UNION ALL
             SELECT MIN(DATE(sr.created_at)) AS d
             FROM server_requests sr
@@ -1963,9 +1964,11 @@ final class StaffDisciplineService
         $closedIn = '"VALIDE","CLOTURE","VENDU_TOTAL","VENDU_PARTIEL"';
         if ($roleCode === 'cashier_server') {
             $st = $pdo->prepare(
-                "SELECT COUNT(*) FROM sales WHERE restaurant_id = :rid AND server_id = :uid
-                 AND status IN ($closedIn)
-                 AND COALESCE(validated_at, created_at) >= :s AND COALESCE(validated_at, created_at) < :e"
+                "SELECT COUNT(*) FROM sales s
+                 " . sql_sale_activity_left_join_server_request('s', 'sr') . "
+                 WHERE s.restaurant_id = :rid AND s.server_id = :uid
+                 AND s.status IN ($closedIn)
+                 AND " . sql_sale_activity_datetime_expr('s', 'sr') . " >= :s AND " . sql_sale_activity_datetime_expr('s', 'sr') . " < :e"
             );
             $st->execute(['rid' => $restaurantId, 'uid' => $userId, 's' => $s, 'e' => $e]);
             $mySales = (int) $st->fetchColumn();

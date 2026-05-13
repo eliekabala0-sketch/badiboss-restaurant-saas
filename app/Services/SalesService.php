@@ -18,8 +18,9 @@ final class SalesService
 
     public function listSales(int $restaurantId, ?int $serverId = null): array
     {
-        $sql = 'SELECT s.*, u.full_name AS server_name
+        $sql = 'SELECT s.*, u.full_name AS server_name, ' . sql_sale_activity_datetime_expr('s', 'sr') . ' AS sale_activity_at
                 FROM sales s
+                ' . sql_sale_activity_left_join_server_request('s', 'sr') . '
                 LEFT JOIN users u ON u.id = s.server_id
                 WHERE s.restaurant_id = :restaurant_id';
         $params = ['restaurant_id' => $restaurantId];
@@ -1138,11 +1139,12 @@ final class SalesService
 
     private function salesTotalForPeriod(int $restaurantId, DateTimeImmutable $startAt, DateTimeImmutable $endAt, ?int $serverId = null): float
     {
-        $sql = 'SELECT COALESCE(SUM(total_amount), 0)
-                FROM sales
-                WHERE restaurant_id = :restaurant_id
-                  AND COALESCE(validated_at, created_at) >= :start_at
-                  AND COALESCE(validated_at, created_at) < :end_at';
+        $sql = 'SELECT COALESCE(SUM(s.total_amount), 0)
+                FROM sales s
+                ' . sql_sale_activity_left_join_server_request('s', 'sr') . '
+                WHERE s.restaurant_id = :restaurant_id
+                  AND ' . sql_sale_activity_datetime_expr('s', 'sr') . ' >= :start_at
+                  AND ' . sql_sale_activity_datetime_expr('s', 'sr') . ' < :end_at';
         $params = [
             'restaurant_id' => $restaurantId,
             'start_at' => $startAt->format('Y-m-d H:i:s'),
@@ -1150,7 +1152,7 @@ final class SalesService
         ];
 
         if ($serverId !== null) {
-            $sql .= ' AND server_id = :server_id';
+            $sql .= ' AND s.server_id = :server_id';
             $params['server_id'] = $serverId;
         }
 
@@ -1163,10 +1165,11 @@ final class SalesService
     private function salesCountForPeriod(int $restaurantId, DateTimeImmutable $startAt, DateTimeImmutable $endAt, ?int $serverId = null): int
     {
         $sql = 'SELECT COUNT(*)
-                FROM sales
-                WHERE restaurant_id = :restaurant_id
-                  AND COALESCE(validated_at, created_at) >= :start_at
-                  AND COALESCE(validated_at, created_at) < :end_at';
+                FROM sales s
+                ' . sql_sale_activity_left_join_server_request('s', 'sr') . '
+                WHERE s.restaurant_id = :restaurant_id
+                  AND ' . sql_sale_activity_datetime_expr('s', 'sr') . ' >= :start_at
+                  AND ' . sql_sale_activity_datetime_expr('s', 'sr') . ' < :end_at';
         $params = [
             'restaurant_id' => $restaurantId,
             'start_at' => $startAt->format('Y-m-d H:i:s'),
@@ -1174,7 +1177,7 @@ final class SalesService
         ];
 
         if ($serverId !== null) {
-            $sql .= ' AND server_id = :server_id';
+            $sql .= ' AND s.server_id = :server_id';
             $params['server_id'] = $serverId;
         }
 
@@ -1221,10 +1224,11 @@ final class SalesService
                     COUNT(s.id) AS sales_count,
                     COALESCE(SUM(s.total_amount), 0) AS total_amount
              FROM sales s
+             ' . sql_sale_activity_left_join_server_request('s', 'sr') . '
              LEFT JOIN users u ON u.id = s.server_id
              WHERE s.restaurant_id = :restaurant_id
-               AND COALESCE(s.validated_at, s.created_at) >= :start_at
-               AND COALESCE(s.validated_at, s.created_at) < :end_at
+               AND ' . sql_sale_activity_datetime_expr('s', 'sr') . ' >= :start_at
+               AND ' . sql_sale_activity_datetime_expr('s', 'sr') . ' < :end_at
              GROUP BY COALESCE(u.full_name, "Vente automatique")
              ORDER BY total_amount DESC, server_name ASC'
         );

@@ -1069,3 +1069,22 @@ function stock_item_ids_matching_category_filter(array $items, string $filter): 
 
     return null;
 }
+
+/**
+ * Horodatage métier « activité vente » (jour de service / remise au serveur), pas la date de remise caisse ni de clôture comptable tardive.
+ * Pour une vente issue d'une demande serveur : remise cuisine au serveur (received_at, puis supplied_at / ready_at), sinon validation / création vente.
+ *
+ * À utiliser avec {@see sql_sale_activity_left_join_server_request} sur le même alias de vente.
+ */
+function sql_sale_activity_datetime_expr(string $saleAlias = 's', string $serverRequestAlias = 'sr'): string
+{
+    return 'COALESCE(' . $serverRequestAlias . '.received_at, ' . $serverRequestAlias . '.supplied_at, '
+        . $serverRequestAlias . '.ready_at, ' . $saleAlias . '.validated_at, ' . $saleAlias . '.created_at)';
+}
+
+function sql_sale_activity_left_join_server_request(string $saleAlias = 's', string $serverRequestAlias = 'sr'): string
+{
+    return 'LEFT JOIN server_requests ' . $serverRequestAlias . ' ON '
+        . $saleAlias . '.origin_type = "server_request" AND ' . $serverRequestAlias . '.id = ' . $saleAlias . '.origin_id '
+        . 'AND ' . $serverRequestAlias . '.restaurant_id = ' . $saleAlias . '.restaurant_id';
+}

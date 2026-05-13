@@ -106,7 +106,7 @@ final class CashService
             ? (int) $sale['origin_id']
             : null;
 
-        $saleTs = (string) ($sale['validated_at'] ?? $sale['created_at'] ?? '');
+        $saleTs = (string) ($sale['sale_activity_at'] ?? $sale['validated_at'] ?? $sale['created_at'] ?? '');
         $saleDayYmd = $this->mysqlDateTimeToYmd($restaurantId, $saleTs) ?? '';
         $remitDayYmd = (new DateTimeImmutable('now', $this->reportTimezone($restaurantId)))->format('Y-m-d');
         $lateBasis = null;
@@ -195,10 +195,11 @@ final class CashService
                        ct.requested_at AS remitted_at,
                        ct.received_at AS cash_received_at,
                        tu.full_name AS cashier_name,
-                       ru.full_name AS cash_received_by_name
+                       ru.full_name AS cash_received_by_name,
+                       ' . sql_sale_activity_datetime_expr('s', 'sr') . ' AS sale_activity_at
                 FROM sales s
                 LEFT JOIN users su ON su.id = s.server_id
-                LEFT JOIN server_requests sr ON s.origin_type = "server_request" AND sr.id = s.origin_id
+                LEFT JOIN server_requests sr ON s.origin_type = "server_request" AND sr.id = s.origin_id AND sr.restaurant_id = s.restaurant_id
                 LEFT JOIN cash_transfers ct ON ct.id = (
                     SELECT latest.id
                     FROM cash_transfers latest
@@ -218,7 +219,7 @@ final class CashService
             $params['server_id'] = $serverId;
         }
 
-        $sql .= ' ORDER BY COALESCE(s.validated_at, s.created_at) DESC, s.id DESC';
+        $sql .= ' ORDER BY ' . sql_sale_activity_datetime_expr('s', 'sr') . ' DESC, s.id DESC';
         $statement = $this->database->pdo()->prepare($sql);
         $statement->execute($params);
 
@@ -249,7 +250,7 @@ final class CashService
              LEFT JOIN users fu ON fu.id = ct.from_user_id
              LEFT JOIN users tu ON tu.id = ct.to_user_id
              LEFT JOIN sales s ON ct.source_type = "sale" AND s.id = ct.source_id
-             LEFT JOIN server_requests sr ON s.origin_type = "server_request" AND sr.id = s.origin_id
+             LEFT JOIN server_requests sr ON s.origin_type = "server_request" AND sr.id = s.origin_id AND sr.restaurant_id = s.restaurant_id
              LEFT JOIN users su ON su.id = s.server_id
              WHERE ct.restaurant_id = :restaurant_id
                AND ct.source_type = "sale"
@@ -295,7 +296,7 @@ final class CashService
              LEFT JOIN users fu ON fu.id = ct.from_user_id
              LEFT JOIN users tu ON tu.id = ct.to_user_id
              LEFT JOIN sales s ON ct.source_type = "sale" AND s.id = ct.source_id
-             LEFT JOIN server_requests sr ON s.origin_type = "server_request" AND sr.id = s.origin_id
+             LEFT JOIN server_requests sr ON s.origin_type = "server_request" AND sr.id = s.origin_id AND sr.restaurant_id = s.restaurant_id
              LEFT JOIN users su ON su.id = s.server_id
              WHERE ct.restaurant_id = :restaurant_id
                AND ct.source_type = "sale"
@@ -334,7 +335,7 @@ final class CashService
              LEFT JOIN users ru ON ru.id = ct.received_by
              LEFT JOIN users vu ON vu.id = ct.validated_by
              LEFT JOIN sales s ON ct.source_type = "sale" AND s.id = ct.source_id
-             LEFT JOIN server_requests sr ON s.origin_type = "server_request" AND sr.id = s.origin_id
+             LEFT JOIN server_requests sr ON s.origin_type = "server_request" AND sr.id = s.origin_id AND sr.restaurant_id = s.restaurant_id
              LEFT JOIN users su ON su.id = s.server_id
              WHERE ct.restaurant_id = :restaurant_id
                AND ct.source_type = "sale"
@@ -368,7 +369,7 @@ final class CashService
              LEFT JOIN users fu ON fu.id = ct.from_user_id
              LEFT JOIN users tu ON tu.id = ct.to_user_id
              LEFT JOIN sales s ON ct.source_type = "sale" AND s.id = ct.source_id
-             LEFT JOIN server_requests sr ON s.origin_type = "server_request" AND sr.id = s.origin_id
+             LEFT JOIN server_requests sr ON s.origin_type = "server_request" AND sr.id = s.origin_id AND sr.restaurant_id = s.restaurant_id
              LEFT JOIN users su ON su.id = s.server_id
              WHERE ct.id = :id AND ct.restaurant_id = :restaurant_id
              LIMIT 1'
@@ -395,7 +396,7 @@ final class CashService
         }
         $saleId = (int) ($transfer['source_id'] ?? 0);
         $sale = $this->findSaleInRestaurant($saleId, $restaurantId);
-        $saleTs = (string) ($sale['validated_at'] ?? $sale['created_at'] ?? '');
+        $saleTs = (string) ($sale['sale_activity_at'] ?? $sale['validated_at'] ?? $sale['created_at'] ?? '');
         $saleDay = $this->mysqlDateTimeToYmd($restaurantId, $saleTs) ?? '';
         $remitTs = (string) ($transfer['requested_at'] ?? $transfer['created_at'] ?? '');
         $remitDay = $this->mysqlDateTimeToYmd($restaurantId, $remitTs) ?? '';
@@ -556,7 +557,7 @@ final class CashService
                 'cash_transfer',
                 $transferId,
                 $amount,
-                $this->mysqlDateTimeToYmd($restaurantId, (string) ($sale['validated_at'] ?? $sale['created_at'] ?? '')),
+                $this->mysqlDateTimeToYmd($restaurantId, (string) ($sale['sale_activity_at'] ?? $sale['validated_at'] ?? $sale['created_at'] ?? '')),
                 'reject_final',
                 $reason,
                 $payload['imputation_basis'] ?? null,
@@ -609,7 +610,7 @@ final class CashService
                     'cash_transfer',
                     $transferId,
                     $diff,
-                    $this->mysqlDateTimeToYmd($restaurantId, (string) ($sale['validated_at'] ?? $sale['created_at'] ?? '')),
+                    $this->mysqlDateTimeToYmd($restaurantId, (string) ($sale['sale_activity_at'] ?? $sale['validated_at'] ?? $sale['created_at'] ?? '')),
                     'partial_accept',
                     $reason,
                     $payload['imputation_basis'] ?? null,
@@ -1040,14 +1041,15 @@ final class CashService
                        sr.id AS server_request_id,
                        sr.service_reference,
                        sr.status AS server_request_status,
-                       su.full_name AS sale_server_name
+                       su.full_name AS sale_server_name,
+                       ' . sql_sale_activity_datetime_expr('s', 'sr') . ' AS sale_activity_at
                  FROM cash_transfers ct
                  LEFT JOIN users fu ON fu.id = ct.from_user_id
                  LEFT JOIN users tu ON tu.id = ct.to_user_id
                  LEFT JOIN users ru ON ru.id = ct.received_by
                  LEFT JOIN users vu ON vu.id = ct.validated_by
                  LEFT JOIN sales s ON ct.source_type = "sale" AND s.id = ct.source_id
-                 LEFT JOIN server_requests sr ON s.origin_type = "server_request" AND sr.id = s.origin_id
+                 LEFT JOIN server_requests sr ON s.origin_type = "server_request" AND sr.id = s.origin_id AND sr.restaurant_id = s.restaurant_id
                  LEFT JOIN users su ON su.id = s.server_id
                  WHERE ct.restaurant_id = :restaurant_id';
         $params = ['restaurant_id' => $restaurantId];
@@ -1124,11 +1126,12 @@ final class CashService
         $scopeSrv = (int) ($filters['scope_closed_sales_server_user_id'] ?? 0);
         if ($scopeSrv > 0 && !empty($filters['date_from']) && !empty($filters['date_to'])) {
             $soldStatement = $this->database->pdo()->prepare(
-                'SELECT COALESCE(SUM(total_amount), 0) FROM sales
-                 WHERE restaurant_id = :restaurant_id AND server_id = :srv
-                   AND status IN ("VALIDE", "CLOTURE", "VENDU_TOTAL", "VENDU_PARTIEL")
-                   AND COALESCE(validated_at, created_at) >= :sfrom
-                   AND COALESCE(validated_at, created_at) <= :sto'
+                'SELECT COALESCE(SUM(s.total_amount), 0) FROM sales s
+                 ' . sql_sale_activity_left_join_server_request('s', 'sr') . '
+                 WHERE s.restaurant_id = :restaurant_id AND s.server_id = :srv
+                   AND s.status IN ("VALIDE", "CLOTURE", "VENDU_TOTAL", "VENDU_PARTIEL")
+                   AND ' . sql_sale_activity_datetime_expr('s', 'sr') . ' >= :sfrom
+                   AND ' . sql_sale_activity_datetime_expr('s', 'sr') . ' <= :sto'
             );
             $soldStatement->execute([
                 'restaurant_id' => $restaurantId,
@@ -1297,7 +1300,12 @@ final class CashService
 
     private function findSaleInRestaurant(int $saleId, int $restaurantId): array
     {
-        $statement = $this->database->pdo()->prepare('SELECT * FROM sales WHERE id = :id AND restaurant_id = :restaurant_id LIMIT 1');
+        $statement = $this->database->pdo()->prepare(
+            'SELECT s.*, ' . sql_sale_activity_datetime_expr('s', 'sr') . ' AS sale_activity_at
+             FROM sales s
+             ' . sql_sale_activity_left_join_server_request('s', 'sr') . '
+             WHERE s.id = :id AND s.restaurant_id = :restaurant_id LIMIT 1'
+        );
         $statement->execute(['id' => $saleId, 'restaurant_id' => $restaurantId]);
         $sale = $statement->fetch(PDO::FETCH_ASSOC);
         if ($sale === false) {

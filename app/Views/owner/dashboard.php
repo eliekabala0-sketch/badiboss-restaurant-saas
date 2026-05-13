@@ -576,7 +576,7 @@ $saleRemittanceHist = $sale_remittance_history ?? [];
                             <td>#<?= e((string) ($h['sale_id'] ?? '-')) ?><?php if (!empty($h['service_reference'])): ?><br><span class="muted"><?= e((string) $h['service_reference']) ?></span><?php endif; ?></td>
                             <td><?= e(format_money((float) ($h['amount'] ?? 0), $restaurantCurrency)) ?></td>
                             <td><?= e(cash_transfer_status_label($h['status'] ?? null)) ?></td>
-                            <td><?= e(format_date_fr($h['validated_at'] ?? $h['received_at'] ?? $h['requested_at'] ?? $h['created_at'] ?? null, $subscriptionTimezone)) ?></td>
+                            <td><?= e(format_date_fr($h['sale_activity_at'] ?? $h['validated_at'] ?? $h['received_at'] ?? $h['requested_at'] ?? $h['created_at'] ?? null, $subscriptionTimezone)) ?></td>
                         </tr>
                     <?php endforeach; ?>
                     </tbody>

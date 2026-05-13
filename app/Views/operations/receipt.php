@@ -25,7 +25,7 @@ $invoiceNumber = 'FAC-' . (string) ($restaurant['id'] ?? '0') . '-' . str_pad((s
         </div>
     </div>
     <p><strong>Serveur :</strong> <?= e(named_actor_label($sale['server_name'] ?? null, 'cashier_server')) ?></p>
-    <p><strong>Date :</strong> <?= e(format_date_fr($sale['validated_at'] ?? $sale['created_at'] ?? null)) ?></p>
+    <p><strong>Date :</strong> <?= e(format_date_fr($sale['sale_activity_at'] ?? $sale['validated_at'] ?? $sale['created_at'] ?? null)) ?></p>
     <p><strong>Statut paiement :</strong> <?= e(validation_status_label($sale['status'] ?? null)) ?></p>
     <div class="table-wrap">
         <table>

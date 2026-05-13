@@ -120,7 +120,7 @@ foreach ($closedRequests as $request) {
     ];
 }
 foreach ($sales as $sale) {
-    $eventDate = (string) ($sale['validated_at'] ?: $sale['created_at']);
+    $eventDate = (string) ($sale['sale_activity_at'] ?? (($sale['validated_at'] ?? '') !== '' ? $sale['validated_at'] : ($sale['created_at'] ?? '')));
     $historyEntries[] = [
         'type' => 'Vente',
         'reference' => '#' . (string) $sale['id'] . ' - ' . (string) ($sale['server_name'] ?? 'Vente automatique'),
@@ -550,7 +550,7 @@ $todayShort = (float) ($todayAgentCash['shortfall'] ?? 0);
                         <div>
                             <strong>Vente #<?= e((string) $sale['sale_id']) ?></strong>
                             <div class="muted">
-                                <?= e(named_actor_label($sale['server_name'] ?? null, 'cashier_server')) ?> - <?= e(format_money($sale['sale_total_amount'] ?? 0, $restaurantCurrency)) ?> - Validee le <?= e(format_date_fr($sale['validated_at'] ?? $sale['sale_created_at'] ?? null, $historyTimezone)) ?>
+                                <?= e(named_actor_label($sale['server_name'] ?? null, 'cashier_server')) ?> - <?= e(format_money($sale['sale_total_amount'] ?? 0, $restaurantCurrency)) ?> — Activité vente <?= e(format_date_fr($sale['sale_activity_at'] ?? $sale['validated_at'] ?? $sale['sale_created_at'] ?? null, $historyTimezone)) ?>
                             </div>
                             <?php if (!empty($sale['server_request_id'])): ?>
                                 <div class="muted">Demande serveur liee #<?= e((string) $sale['server_request_id']) ?> - Reference <?= e((string) ($sale['service_reference'] ?? '-')) ?></div>

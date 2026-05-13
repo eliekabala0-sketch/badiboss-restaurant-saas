@@ -99,9 +99,10 @@ final class ReportService
         $soldStmt = $this->database->pdo()->prepare(
             'SELECT COALESCE(SUM(s.total_amount), 0) AS t
              FROM sales s
+             ' . sql_sale_activity_left_join_server_request('s', 'sr') . '
              WHERE s.restaurant_id = :rid
                AND s.status IN (' . $closedIn . ')
-               AND COALESCE(s.validated_at, s.created_at) >= :s AND COALESCE(s.validated_at, s.created_at) < :e'
+               AND ' . sql_sale_activity_datetime_expr('s', 'sr') . ' >= :s AND ' . sql_sale_activity_datetime_expr('s', 'sr') . ' < :e'
         );
         $soldStmt->execute(['rid' => $restaurantId, 's' => $s, 'e' => $e]);
         $totalSoldClosed = (float) ($soldStmt->fetch(PDO::FETCH_ASSOC)['t'] ?? 0);
@@ -264,10 +265,11 @@ final class ReportService
             $salesStmt = $pdo->prepare(
                 'SELECT COUNT(*) AS c, COALESCE(SUM(s.total_amount), 0) AS t
                  FROM sales s
+                 ' . sql_sale_activity_left_join_server_request('s', 'sr') . '
                  WHERE s.restaurant_id = :rid
                    AND s.server_id = :srv
                    AND s.status IN (' . $closedIn . ')
-                   AND COALESCE(s.validated_at, s.created_at) >= :s AND COALESCE(s.validated_at, s.created_at) < :e'
+                   AND ' . sql_sale_activity_datetime_expr('s', 'sr') . ' >= :s AND ' . sql_sale_activity_datetime_expr('s', 'sr') . ' < :e'
             );
             $salesStmt->execute(['rid' => $restaurantId, 'srv' => $restrictToServerUserId, 's' => $s, 'e' => $e]);
             $salesRow = $salesStmt->fetch(PDO::FETCH_ASSOC) ?: ['c' => 0, 't' => 0];
@@ -275,9 +277,10 @@ final class ReportService
             $salesStmt = $pdo->prepare(
                 'SELECT COUNT(*) AS c, COALESCE(SUM(s.total_amount), 0) AS t
                  FROM sales s
+                 ' . sql_sale_activity_left_join_server_request('s', 'sr') . '
                  WHERE s.restaurant_id = :rid
                    AND s.status IN (' . $closedIn . ')
-                   AND COALESCE(s.validated_at, s.created_at) >= :s AND COALESCE(s.validated_at, s.created_at) < :e'
+                   AND ' . sql_sale_activity_datetime_expr('s', 'sr') . ' >= :s AND ' . sql_sale_activity_datetime_expr('s', 'sr') . ' < :e'
             );
             $salesStmt->execute(['rid' => $restaurantId, 's' => $s, 'e' => $e]);
             $salesRow = $salesStmt->fetch(PDO::FETCH_ASSOC) ?: ['c' => 0, 't' => 0];
@@ -450,9 +453,9 @@ final class ReportService
             }
             $st2 = $pdo->prepare(
                 'SELECT COUNT(*) FROM sales s
+                 ' . sql_sale_activity_left_join_server_request('s', 'sr') . '
                  WHERE s.restaurant_id = :rid AND s.server_id = :uid
-                   AND s.validated_at IS NOT NULL
-                   AND s.validated_at >= :s AND s.validated_at < :e
+                   AND ' . sql_sale_activity_datetime_expr('s', 'sr') . ' >= :s AND ' . sql_sale_activity_datetime_expr('s', 'sr') . ' < :e
                    AND s.status IN (' . $inClosed . ')'
             );
             $st2->execute(['rid' => $restaurantId, 'uid' => $userId, 's' => $s, 'e' => $e]);
@@ -683,8 +686,10 @@ final class ReportService
                        ct.id AS transfer_id,
                        ct.status AS transfer_status,
                        ct.amount AS transfer_amount,
-                       ct.late_remittance_basis
+                       ct.late_remittance_basis,
+                       ' . sql_sale_activity_datetime_expr('s', 'sr') . ' AS sale_activity_at
                 FROM sales s
+                ' . sql_sale_activity_left_join_server_request('s', 'sr') . '
                 LEFT JOIN users u ON u.id = s.server_id
                 LEFT JOIN cash_transfers ct ON ct.id = (
                     SELECT c2.id FROM cash_transfers c2
@@ -694,8 +699,8 @@ final class ReportService
                 )
                 WHERE s.restaurant_id = :rid
                   AND s.status IN (' . $closedIn . ')
-                  AND COALESCE(s.validated_at, s.created_at) >= :st
-                  AND COALESCE(s.validated_at, s.created_at) < :en' . $extraUser . '
+                  AND ' . sql_sale_activity_datetime_expr('s', 'sr') . ' >= :st
+                  AND ' . sql_sale_activity_datetime_expr('s', 'sr') . ' < :en' . $extraUser . '
                 ORDER BY s.server_id ASC, s.id ASC';
         $st = $this->database->pdo()->prepare($sql);
         $st->execute(['rid' => $restaurantId, 'st' => $s, 'en' => $e]);
@@ -736,7 +741,8 @@ final class ReportService
                 $byServer[$sid]['missing_sales'][] = [
                     'sale_id' => $saleId,
                     'total_amount' => $amt,
-                    'validated_at' => $row['validated_at'] ?? null,
+                    'validated_at' => $row['sale_activity_at'] ?? $row['validated_at'] ?? null,
+                    'sale_activity_at' => $row['sale_activity_at'] ?? null,
                     'lines' => $itemsBySale[$saleId] ?? [],
                 ];
             }
@@ -979,7 +985,7 @@ final class ReportService
         $statement = $this->database->pdo()->prepare('SELECT COALESCE(SUM(quantity_produced), 0) AS total_produced, COALESCE(SUM(total_real_cost_snapshot), 0) AS total_real_cost, COALESCE(SUM(total_sale_value_snapshot), 0) AS value_produced, COALESCE(SUM(quantity_produced - quantity_remaining), 0) AS total_supplied_to_servers FROM kitchen_production WHERE restaurant_id = :restaurant_id AND created_at >= :start_at AND created_at < :end_at');
         $statement->execute(['restaurant_id' => $restaurantId, 'start_at' => $startAt->format('Y-m-d H:i:s'), 'end_at' => $endAt->format('Y-m-d H:i:s')]); $totals = $statement->fetch(PDO::FETCH_ASSOC) ?: [];
         $valueSupplied = $this->scalar('SELECT COALESCE(SUM(total_supplied_amount), 0) FROM server_requests WHERE restaurant_id = :restaurant_id AND created_at >= :start_at AND created_at < :end_at', ['restaurant_id' => $restaurantId, 'start_at' => $startAt->format('Y-m-d H:i:s'), 'end_at' => $endAt->format('Y-m-d H:i:s')]);
-        $realMaterialCostOfSales = $this->scalar('SELECT COALESCE(SUM(si.quantity * COALESCE(kp.unit_real_cost_snapshot, avg_cost.unit_real_cost_snapshot, 0)), 0) FROM sale_items si INNER JOIN sales s ON s.id = si.sale_id LEFT JOIN kitchen_production kp ON kp.id = si.kitchen_production_id LEFT JOIN (SELECT restaurant_id, menu_item_id, AVG(unit_real_cost_snapshot) AS unit_real_cost_snapshot FROM kitchen_production WHERE menu_item_id IS NOT NULL GROUP BY restaurant_id, menu_item_id) avg_cost ON avg_cost.restaurant_id = s.restaurant_id AND avg_cost.menu_item_id = si.menu_item_id WHERE s.restaurant_id = :restaurant_id AND COALESCE(s.validated_at, s.created_at) >= :start_at AND COALESCE(s.validated_at, s.created_at) < :end_at', ['restaurant_id' => $restaurantId, 'start_at' => $startAt->format('Y-m-d H:i:s'), 'end_at' => $endAt->format('Y-m-d H:i:s')]);
+        $realMaterialCostOfSales = $this->scalar('SELECT COALESCE(SUM(si.quantity * COALESCE(kp.unit_real_cost_snapshot, avg_cost.unit_real_cost_snapshot, 0)), 0) FROM sale_items si INNER JOIN sales s ON s.id = si.sale_id ' . sql_sale_activity_left_join_server_request('s', 'sr') . ' LEFT JOIN kitchen_production kp ON kp.id = si.kitchen_production_id LEFT JOIN (SELECT restaurant_id, menu_item_id, AVG(unit_real_cost_snapshot) AS unit_real_cost_snapshot FROM kitchen_production WHERE menu_item_id IS NOT NULL GROUP BY restaurant_id, menu_item_id) avg_cost ON avg_cost.restaurant_id = s.restaurant_id AND avg_cost.menu_item_id = si.menu_item_id WHERE s.restaurant_id = :restaurant_id AND ' . sql_sale_activity_datetime_expr('s', 'sr') . ' >= :start_at AND ' . sql_sale_activity_datetime_expr('s', 'sr') . ' < :end_at', ['restaurant_id' => $restaurantId, 'start_at' => $startAt->format('Y-m-d H:i:s'), 'end_at' => $endAt->format('Y-m-d H:i:s')]);
         $kitchenLosses = $this->scalar('SELECT COALESCE(SUM(material_loss_amount), 0) FROM operation_cases WHERE restaurant_id = :restaurant_id AND COALESCE(decided_at, technical_confirmed_at, validated_at, created_at) >= :start_at AND COALESCE(decided_at, technical_confirmed_at, validated_at, created_at) < :end_at AND final_qualification = "perte_cuisine"', ['restaurant_id' => $restaurantId, 'start_at' => $startAt->format('Y-m-d H:i:s'), 'end_at' => $endAt->format('Y-m-d H:i:s')]);
         $incidentCount = $this->scalar('SELECT COUNT(*) FROM operation_cases WHERE restaurant_id = :restaurant_id AND created_at >= :start_at AND created_at < :end_at AND source_module = "kitchen"', ['restaurant_id' => $restaurantId, 'start_at' => $startAt->format('Y-m-d H:i:s'), 'end_at' => $endAt->format('Y-m-d H:i:s')]);
         return ['total_produced' => (float) ($totals['total_produced'] ?? 0), 'real_material_cost_produced' => (float) ($totals['total_real_cost'] ?? 0), 'value_produced' => (float) ($totals['value_produced'] ?? 0), 'total_supplied_to_servers' => (float) ($totals['total_supplied_to_servers'] ?? 0), 'value_supplied' => (float) $valueSupplied, 'real_material_cost_of_sales' => (float) $realMaterialCostOfSales, 'kitchen_losses_value' => (float) $kitchenLosses, 'kitchen_incidents' => (int) $incidentCount];
@@ -1050,7 +1056,7 @@ final class ReportService
     }
     private function productMargins(int $restaurantId, DateTimeImmutable $startAt, DateTimeImmutable $endAt): array
     {
-        $statement = $this->database->pdo()->prepare('SELECT mi.name AS menu_item_name, COALESCE(SUM(si.quantity), 0) AS quantity_sold, COALESCE(AVG(si.unit_price), 0) AS average_sale_price, COALESCE(SUM(si.quantity * si.unit_price), 0) AS total_sales_value, COALESCE(AVG(COALESCE(kp.unit_real_cost_snapshot, avg_cost.unit_real_cost_snapshot, 0)), 0) AS unit_real_cost, COALESCE(SUM(si.quantity * COALESCE(kp.unit_real_cost_snapshot, avg_cost.unit_real_cost_snapshot, 0)), 0) AS total_real_cost FROM sale_items si INNER JOIN sales s ON s.id = si.sale_id INNER JOIN menu_items mi ON mi.id = si.menu_item_id LEFT JOIN kitchen_production kp ON kp.id = si.kitchen_production_id LEFT JOIN (SELECT restaurant_id, menu_item_id, AVG(unit_real_cost_snapshot) AS unit_real_cost_snapshot FROM kitchen_production WHERE menu_item_id IS NOT NULL GROUP BY restaurant_id, menu_item_id) avg_cost ON avg_cost.restaurant_id = s.restaurant_id AND avg_cost.menu_item_id = si.menu_item_id WHERE s.restaurant_id = :restaurant_id AND COALESCE(s.validated_at, s.created_at) >= :start_at AND COALESCE(s.validated_at, s.created_at) < :end_at GROUP BY mi.id, mi.name ORDER BY total_sales_value DESC, mi.name ASC');
+        $statement = $this->database->pdo()->prepare('SELECT mi.name AS menu_item_name, COALESCE(SUM(si.quantity), 0) AS quantity_sold, COALESCE(AVG(si.unit_price), 0) AS average_sale_price, COALESCE(SUM(si.quantity * si.unit_price), 0) AS total_sales_value, COALESCE(AVG(COALESCE(kp.unit_real_cost_snapshot, avg_cost.unit_real_cost_snapshot, 0)), 0) AS unit_real_cost, COALESCE(SUM(si.quantity * COALESCE(kp.unit_real_cost_snapshot, avg_cost.unit_real_cost_snapshot, 0)), 0) AS total_real_cost FROM sale_items si INNER JOIN sales s ON s.id = si.sale_id ' . sql_sale_activity_left_join_server_request('s', 'sr') . ' INNER JOIN menu_items mi ON mi.id = si.menu_item_id LEFT JOIN kitchen_production kp ON kp.id = si.kitchen_production_id LEFT JOIN (SELECT restaurant_id, menu_item_id, AVG(unit_real_cost_snapshot) AS unit_real_cost_snapshot FROM kitchen_production WHERE menu_item_id IS NOT NULL GROUP BY restaurant_id, menu_item_id) avg_cost ON avg_cost.restaurant_id = s.restaurant_id AND avg_cost.menu_item_id = si.menu_item_id WHERE s.restaurant_id = :restaurant_id AND ' . sql_sale_activity_datetime_expr('s', 'sr') . ' >= :start_at AND ' . sql_sale_activity_datetime_expr('s', 'sr') . ' < :end_at GROUP BY mi.id, mi.name ORDER BY total_sales_value DESC, mi.name ASC');
         $statement->execute(['restaurant_id' => $restaurantId, 'start_at' => $startAt->format('Y-m-d H:i:s'), 'end_at' => $endAt->format('Y-m-d H:i:s')]); $rows = $statement->fetchAll(PDO::FETCH_ASSOC);
         foreach ($rows as &$row) { $row['unit_margin'] = (float) $row['average_sale_price'] - (float) $row['unit_real_cost']; $row['total_margin'] = (float) $row['total_sales_value'] - (float) $row['total_real_cost']; } unset($row);
         return $rows;
@@ -1064,12 +1070,12 @@ final class ReportService
         if ($userId > 0) {
             $extra .= ' AND s.server_id = ' . $userId;
         }
-        $statement = $this->database->pdo()->prepare('SELECT COALESCE(u.full_name, "Vente automatique") AS server_name, COUNT(s.id) AS sales_count, COALESCE(SUM(s.total_amount), 0) AS total_amount FROM sales s LEFT JOIN users u ON u.id = s.server_id WHERE s.restaurant_id = :restaurant_id AND COALESCE(s.validated_at, s.created_at) >= :start_at AND COALESCE(s.validated_at, s.created_at) < :end_at' . $extra . ' GROUP BY COALESCE(u.full_name, "Vente automatique") ORDER BY total_amount DESC');
+        $statement = $this->database->pdo()->prepare('SELECT COALESCE(u.full_name, "Vente automatique") AS server_name, COUNT(s.id) AS sales_count, COALESCE(SUM(s.total_amount), 0) AS total_amount FROM sales s ' . sql_sale_activity_left_join_server_request('s', 'sr') . ' LEFT JOIN users u ON u.id = s.server_id WHERE s.restaurant_id = :restaurant_id AND ' . sql_sale_activity_datetime_expr('s', 'sr') . ' >= :start_at AND ' . sql_sale_activity_datetime_expr('s', 'sr') . ' < :end_at' . $extra . ' GROUP BY COALESCE(u.full_name, "Vente automatique") ORDER BY total_amount DESC');
         $statement->execute(['restaurant_id' => $restaurantId, 'start_at' => $startAt->format('Y-m-d H:i:s'), 'end_at' => $endAt->format('Y-m-d H:i:s')]); return $statement->fetchAll(PDO::FETCH_ASSOC);
     }
     private function salesByType(int $restaurantId, DateTimeImmutable $startAt, DateTimeImmutable $endAt): array
     {
-        $statement = $this->database->pdo()->prepare('SELECT sale_type, COUNT(*) AS sales_count, COALESCE(SUM(total_amount), 0) AS total_amount FROM sales WHERE restaurant_id = :restaurant_id AND COALESCE(validated_at, created_at) >= :start_at AND COALESCE(validated_at, created_at) < :end_at GROUP BY sale_type ORDER BY sale_type ASC');
+        $statement = $this->database->pdo()->prepare('SELECT s.sale_type, COUNT(*) AS sales_count, COALESCE(SUM(s.total_amount), 0) AS total_amount FROM sales s ' . sql_sale_activity_left_join_server_request('s', 'sr') . ' WHERE s.restaurant_id = :restaurant_id AND ' . sql_sale_activity_datetime_expr('s', 'sr') . ' >= :start_at AND ' . sql_sale_activity_datetime_expr('s', 'sr') . ' < :end_at GROUP BY s.sale_type ORDER BY s.sale_type ASC');
         $statement->execute(['restaurant_id' => $restaurantId, 'start_at' => $startAt->format('Y-m-d H:i:s'), 'end_at' => $endAt->format('Y-m-d H:i:s')]); return $statement->fetchAll(PDO::FETCH_ASSOC);
     }
 
@@ -1085,11 +1091,12 @@ final class ReportService
         int $serverUserId,
     ): array {
         $statement = $this->database->pdo()->prepare(
-            'SELECT sale_type, COUNT(*) AS sales_count, COALESCE(SUM(total_amount), 0) AS total_amount
-             FROM sales
-             WHERE restaurant_id = :restaurant_id AND server_id = :srv
-               AND COALESCE(validated_at, created_at) >= :start_at AND COALESCE(validated_at, created_at) < :end_at
-             GROUP BY sale_type ORDER BY sale_type ASC'
+            'SELECT s.sale_type, COUNT(*) AS sales_count, COALESCE(SUM(s.total_amount), 0) AS total_amount
+             FROM sales s
+             ' . sql_sale_activity_left_join_server_request('s', 'sr') . '
+             WHERE s.restaurant_id = :restaurant_id AND s.server_id = :srv
+               AND ' . sql_sale_activity_datetime_expr('s', 'sr') . ' >= :start_at AND ' . sql_sale_activity_datetime_expr('s', 'sr') . ' < :end_at
+             GROUP BY s.sale_type ORDER BY s.sale_type ASC'
         );
         $statement->execute([
             'restaurant_id' => $restaurantId,
@@ -1511,10 +1518,11 @@ final class ReportService
         $run(
             'SELECT s.server_id AS uid, u.full_name AS fn, COALESCE(r.code, "") AS rc, COUNT(*) AS c
              FROM sales s
+             ' . sql_sale_activity_left_join_server_request('s', 'sr') . '
              INNER JOIN users u ON u.id = s.server_id
              LEFT JOIN roles r ON r.id = u.role_id
              WHERE s.restaurant_id = :rid AND s.status IN (' . $inStatus . ')
-               AND COALESCE(s.validated_at, s.created_at) >= :s AND COALESCE(s.validated_at, s.created_at) < :e'
+               AND ' . sql_sale_activity_datetime_expr('s', 'sr') . ' >= :s AND ' . sql_sale_activity_datetime_expr('s', 'sr') . ' < :e'
             . ($userFilter > 0 ? ' AND s.server_id = :uidfil' : '')
             . ($roleFilter !== '' ? ' AND r.code = :rolec' : '')
             . ' GROUP BY s.server_id, u.full_name, r.code',
@@ -1920,19 +1928,19 @@ final class ReportService
             $extra .= ' AND r.code = ' . $this->database->pdo()->quote((string) $viewFilters['role_code']);
         }
         $statement = $this->database->pdo()->prepare(
-            'SELECT s.id AS sale_id, s.validated_at AS created_at, s.total_amount,
+            'SELECT s.id AS sale_id, ' . sql_sale_activity_datetime_expr('s', 'sr') . ' AS created_at, s.total_amount,
                     u.full_name AS actor_name, COALESCE(r.code, "cashier_server") AS actor_role_code, u.id AS user_id,
                     mi.name AS menu_item_name, si.quantity AS item_quantity
              FROM sales s
+             ' . sql_sale_activity_left_join_server_request('s', 'sr') . '
              INNER JOIN users u ON u.id = s.server_id
              LEFT JOIN roles r ON r.id = u.role_id
              LEFT JOIN sale_items si ON si.sale_id = s.id
              LEFT JOIN menu_items mi ON mi.id = si.menu_item_id
              WHERE s.restaurant_id = :restaurant_id
-               AND s.validated_at IS NOT NULL
-               AND s.validated_at >= :start_at AND s.validated_at < :end_at
+               AND ' . sql_sale_activity_datetime_expr('s', 'sr') . ' >= :start_at AND ' . sql_sale_activity_datetime_expr('s', 'sr') . ' < :end_at
                AND s.status IN ("VALIDE","CLOTURE","VENDU_TOTAL","VENDU_PARTIEL")' . $extra . '
-             ORDER BY s.validated_at DESC, s.id ASC, si.id ASC'
+             ORDER BY ' . sql_sale_activity_datetime_expr('s', 'sr') . ' DESC, s.id ASC, si.id ASC'
         );
         $statement->execute([
             'restaurant_id' => $restaurantId,
@@ -2026,9 +2034,10 @@ final class ReportService
              LEFT JOIN menu_categories mc ON mc.id = mi.category_id
              LEFT JOIN users u ON u.id = s.server_id
              LEFT JOIN roles r ON r.id = u.role_id
+             ' . sql_sale_activity_left_join_server_request('s', 'sr') . '
              WHERE s.restaurant_id = :restaurant_id
-               AND COALESCE(s.validated_at, s.created_at) >= :start_at
-               AND COALESCE(s.validated_at, s.created_at) < :end_at' . $extra . '
+               AND ' . sql_sale_activity_datetime_expr('s', 'sr') . ' >= :start_at
+               AND ' . sql_sale_activity_datetime_expr('s', 'sr') . ' < :end_at' . $extra . '
              GROUP BY category_id, category_name, mi.id, mi.name
              ORDER BY category_name ASC, line_total DESC'
         );
@@ -2114,9 +2123,10 @@ final class ReportService
              INNER JOIN menu_items mi ON mi.id = si.menu_item_id
              LEFT JOIN users u ON u.id = s.server_id
              LEFT JOIN roles r ON r.id = u.role_id
+             ' . sql_sale_activity_left_join_server_request('s', 'sr') . '
              WHERE s.restaurant_id = :restaurant_id
-               AND COALESCE(s.validated_at, s.created_at) >= :start_at
-               AND COALESCE(s.validated_at, s.created_at) < :end_at' . $extra . '
+               AND ' . sql_sale_activity_datetime_expr('s', 'sr') . ' >= :start_at
+               AND ' . sql_sale_activity_datetime_expr('s', 'sr') . ' < :end_at' . $extra . '
              GROUP BY server_name, server_user_id, server_role_code, mi.id, mi.name
              ORDER BY server_name ASC, line_total DESC'
         );
@@ -2494,10 +2504,11 @@ final class ReportService
                     COUNT(s.id) AS sales_count,
                     COALESCE(SUM(s.total_amount), 0) AS total_amount
              FROM sales s
+             ' . sql_sale_activity_left_join_server_request('s', 'sr') . '
              LEFT JOIN users u ON u.id = s.server_id
              WHERE s.restaurant_id = :restaurant_id
-               AND COALESCE(s.validated_at, s.created_at) >= :start_at
-               AND COALESCE(s.validated_at, s.created_at) < :end_at
+               AND ' . sql_sale_activity_datetime_expr('s', 'sr') . ' >= :start_at
+               AND ' . sql_sale_activity_datetime_expr('s', 'sr') . ' < :end_at
                AND s.status IN (' . $inList . ')
              GROUP BY COALESCE(u.id, 0), COALESCE(u.full_name, "Serveur")
              ORDER BY total_amount DESC, sales_count DESC
@@ -2528,9 +2539,10 @@ final class ReportService
              INNER JOIN sales s ON s.id = si.sale_id
              INNER JOIN menu_items mi ON mi.id = si.menu_item_id
              LEFT JOIN menu_categories mc ON mc.id = mi.category_id
+             ' . sql_sale_activity_left_join_server_request('s', 'sr') . '
              WHERE s.restaurant_id = :restaurant_id
-               AND COALESCE(s.validated_at, s.created_at) >= :start_at
-               AND COALESCE(s.validated_at, s.created_at) < :end_at
+               AND ' . sql_sale_activity_datetime_expr('s', 'sr') . ' >= :start_at
+               AND ' . sql_sale_activity_datetime_expr('s', 'sr') . ' < :end_at
              GROUP BY mi.id, mi.name, mc.name
              ORDER BY total_sold DESC, qty_sold DESC, mi.name ASC
              LIMIT 1'
@@ -2706,8 +2718,9 @@ final class ReportService
         $closedSalesStmt = $pdo->prepare(
             'SELECT s.server_id AS uid, COUNT(*) AS c
              FROM sales s
-             WHERE s.restaurant_id = :rid AND s.validated_at IS NOT NULL
-               AND s.validated_at >= :s AND s.validated_at < :e
+             ' . sql_sale_activity_left_join_server_request('s', 'sr') . '
+             WHERE s.restaurant_id = :rid
+               AND ' . sql_sale_activity_datetime_expr('s', 'sr') . ' >= :s AND ' . sql_sale_activity_datetime_expr('s', 'sr') . ' < :e
                AND s.status IN (' . $inClosed . ')
              GROUP BY s.server_id'
         );
@@ -2735,9 +2748,9 @@ final class ReportService
             'SELECT s.server_id AS uid,
                     AVG(TIMESTAMPDIFF(SECOND, COALESCE(sr.created_at, s.created_at), s.validated_at)) AS avg_sec
              FROM sales s
-             LEFT JOIN server_requests sr ON s.origin_type = "server_request" AND sr.id = s.origin_id
+             LEFT JOIN server_requests sr ON s.origin_type = "server_request" AND sr.id = s.origin_id AND sr.restaurant_id = s.restaurant_id
              WHERE s.restaurant_id = :rid AND s.validated_at IS NOT NULL
-               AND s.validated_at >= :s AND s.validated_at < :e
+               AND ' . sql_sale_activity_datetime_expr('s', 'sr') . ' >= :s AND ' . sql_sale_activity_datetime_expr('s', 'sr') . ' < :e
                AND s.status IN (' . $inClosed . ')
                AND TIMESTAMPDIFF(SECOND, COALESCE(sr.created_at, s.created_at), s.validated_at) >= 0
              GROUP BY s.server_id'
@@ -2750,12 +2763,13 @@ final class ReportService
 
         $avgRemitStmt = $pdo->prepare(
             'SELECT s.server_id AS uid,
-                    AVG(TIMESTAMPDIFF(SECOND, s.validated_at, ct.requested_at)) AS avg_sec
+                    AVG(TIMESTAMPDIFF(SECOND, ' . sql_sale_activity_datetime_expr('s', 'sr') . ', ct.requested_at)) AS avg_sec
              FROM sales s
+             ' . sql_sale_activity_left_join_server_request('s', 'sr') . '
              INNER JOIN cash_transfers ct ON ct.restaurant_id = s.restaurant_id AND ct.source_type = "sale" AND ct.source_id = s.id
              WHERE s.restaurant_id = :rid
-               AND s.validated_at IS NOT NULL AND ct.requested_at IS NOT NULL
-               AND TIMESTAMPDIFF(SECOND, s.validated_at, ct.requested_at) >= 0
+               AND ct.requested_at IS NOT NULL
+               AND TIMESTAMPDIFF(SECOND, ' . sql_sale_activity_datetime_expr('s', 'sr') . ', ct.requested_at) >= 0
                AND ct.requested_at >= :s AND ct.requested_at < :e
                AND s.status IN (' . $inClosed . ')
              GROUP BY s.server_id'
