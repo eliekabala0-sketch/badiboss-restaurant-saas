@@ -221,6 +221,7 @@ final class DashboardController
         }
 
         $restaurantId = $this->ensureSandboxRestaurant($code, $actor);
+        $this->ensureSandboxSubscriptionActive($restaurantId, $actor);
         $createdUsers = $this->ensureSandboxAccounts($restaurantId, $code, $actor);
 
         Container::getInstance()->get('audit')->log([
@@ -639,5 +640,20 @@ final class DashboardController
         }
 
         return $created;
+    }
+
+    private function ensureSandboxSubscriptionActive(int $restaurantId, array $actor): void
+    {
+        $subscription = Container::getInstance()->get('subscriptionService')->summaryForRestaurant($restaurantId);
+        if (is_array($subscription) && (bool) ($subscription['is_operational'] ?? false)) {
+            return;
+        }
+
+        Container::getInstance()->get('subscriptionService')->activateRestaurant($restaurantId, [
+            'subscription_started_at' => (new \DateTimeImmutable('now'))->format('Y-m-d H:i:s'),
+            'subscription_duration_days' => 3650,
+            'payment_status' => 'WAIVED',
+            'justification' => 'Activation abonnement sandbox (tests ventes/minuit)',
+        ], $actor);
     }
 }
