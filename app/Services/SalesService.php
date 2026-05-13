@@ -327,6 +327,81 @@ final class SalesService
         return $count;
     }
 
+    /**
+     * Runner manuel sécurisé (sandbox only) pour la clôture minuit des demandes REMIS_SERVEUR.
+     *
+     * @return array<string, mixed>
+     */
+    public function runSandboxMidnightReconcile(int $restaurantId, array $actor, bool $readOnly = true): array
+    {
+        $restaurant = Container::getInstance()->get('restaurantAdmin')->findRestaurant($restaurantId);
+        if ($restaurant === null) {
+            throw new \RuntimeException('Restaurant introuvable.');
+        }
+        $restaurantCode = (string) ($restaurant['restaurant_code'] ?? '');
+        if (!is_sandbox_restaurant_code($restaurantCode)) {
+            throw new \RuntimeException('Runner refusé: restaurant hors allowlist sandbox.');
+        }
+
+        $timezone = $this->restaurantTimezone($restaurantId);
+        $todayStart = (new DateTimeImmutable('now', $timezone))->setTime(0, 0, 0)->format('Y-m-d H:i:s');
+        $statement = $this->database->pdo()->prepare(
+            'SELECT id, total_supplied_amount, total_sold_amount, total_returned_amount,
+                    COALESCE(received_at, supplied_at, updated_at, created_at) AS activity_at
+             FROM server_requests
+             WHERE restaurant_id = :restaurant_id
+               AND status = "REMIS_SERVEUR"
+               AND total_supplied_amount > 0
+               AND COALESCE(received_at, supplied_at, updated_at, created_at) < :today_start
+             ORDER BY COALESCE(received_at, supplied_at, updated_at, created_at) ASC, id ASC'
+        );
+        $statement->execute([
+            'restaurant_id' => $restaurantId,
+            'today_start' => $todayStart,
+        ]);
+        $candidates = $statement->fetchAll(PDO::FETCH_ASSOC);
+        $requestIds = array_values(array_map(static fn (array $row): int => (int) ($row['id'] ?? 0), $candidates));
+
+        $createdSalesBefore = $this->countSalesLinkedToRequests($restaurantId, $requestIds);
+        $createdCount = 0;
+        if (!$readOnly) {
+            $createdCount = $this->reconcileOverdueServerClosures($restaurantId);
+        }
+        $createdSalesAfter = $this->countSalesLinkedToRequests($restaurantId, $requestIds);
+
+        Container::getInstance()->get('audit')->log([
+            'restaurant_id' => $restaurantId,
+            'user_id' => $actor['id'] ?? null,
+            'actor_name' => $actor['full_name'] ?? 'system',
+            'actor_role_code' => $actor['role_code'] ?? 'system',
+            'module_name' => 'sales',
+            'action_name' => $readOnly ? 'sandbox_midnight_reconcile_dry_run' : 'sandbox_midnight_reconcile_execute',
+            'entity_type' => 'restaurants',
+            'entity_id' => (string) $restaurantId,
+            'new_values' => [
+                'restaurant_code' => $restaurantCode,
+                'read_only_diagnostic' => $readOnly ? 1 : 0,
+                'candidate_request_ids' => $requestIds,
+                'candidate_count' => count($requestIds),
+                'sales_linked_before' => $createdSalesBefore,
+                'sales_linked_after' => $createdSalesAfter,
+                'created_count' => $createdCount,
+            ],
+            'justification' => 'Runner manuel minuit (sandbox only)',
+        ]);
+
+        return [
+            'restaurant_id' => $restaurantId,
+            'restaurant_code' => $restaurantCode,
+            'read_only_diagnostic' => $readOnly,
+            'candidate_count' => count($requestIds),
+            'candidate_request_ids' => $requestIds,
+            'sales_linked_before' => $createdSalesBefore,
+            'sales_linked_after' => $createdSalesAfter,
+            'created_count' => $createdCount,
+        ];
+    }
+
     public function cancelServerRequestByServer(int $restaurantId, int $requestId, string $reason, array $actor): void
     {
         $reason = trim($reason);
@@ -2026,6 +2101,25 @@ final class SalesService
         $v = $statement->fetchColumn();
 
         return is_numeric($v) ? (int) $v : null;
+    }
+
+    /**
+     * @param list<int> $requestIds
+     */
+    private function countSalesLinkedToRequests(int $restaurantId, array $requestIds): int
+    {
+        $requestIds = array_values(array_filter(array_map('intval', $requestIds), static fn (int $v): bool => $v > 0));
+        if ($requestIds === []) {
+            return 0;
+        }
+        $in = implode(',', array_fill(0, count($requestIds), '?'));
+        $statement = $this->database->pdo()->prepare(
+            'SELECT COUNT(*) FROM sales
+             WHERE restaurant_id = ? AND origin_type = "server_request" AND origin_id IN (' . $in . ')'
+        );
+        $statement->execute(array_merge([$restaurantId], $requestIds));
+
+        return (int) $statement->fetchColumn();
     }
 
     private function findServerRequest(int $requestId, int $restaurantId): ?array

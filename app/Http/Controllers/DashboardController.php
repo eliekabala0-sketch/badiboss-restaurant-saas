@@ -210,6 +210,65 @@ final class DashboardController
         audit_access('dashboard', null, 'screens', 'super-admin-ops-force', 'Force statut operation super admin');
     }
 
+    public function setupSalesSandbox(Request $request): void
+    {
+        authorize_access('platform.admin.view');
+        $actor = current_user() ?? [];
+        $code = strtolower(trim((string) $request->input('restaurant_code', 'test-ventes-minuit')));
+        $code = Container::getInstance()->get('tenantProvisioning')->previewRestaurantCode($code);
+        if (!is_sandbox_restaurant_code($code)) {
+            throw new \RuntimeException('Code sandbox hors allowlist.');
+        }
+
+        $restaurantId = $this->ensureSandboxRestaurant($code, $actor);
+        $createdUsers = $this->ensureSandboxAccounts($restaurantId, $code, $actor);
+
+        Container::getInstance()->get('audit')->log([
+            'restaurant_id' => $restaurantId,
+            'user_id' => $actor['id'] ?? null,
+            'actor_name' => $actor['full_name'] ?? 'system',
+            'actor_role_code' => $actor['role_code'] ?? 'system',
+            'module_name' => 'tenant_management',
+            'action_name' => 'sandbox_sales_setup',
+            'entity_type' => 'restaurants',
+            'entity_id' => (string) $restaurantId,
+            'new_values' => [
+                'restaurant_code' => $code,
+                'allowed_sandbox_codes' => sandbox_allowed_restaurant_codes(),
+                'accounts_created_or_verified' => $createdUsers,
+            ],
+            'justification' => 'Setup sandbox ventes/minuit',
+        ]);
+
+        flash('success', 'Sandbox ventes/minuit prêt (restaurant + comptes test).');
+        redirect('/super-admin');
+    }
+
+    public function runSalesSandboxMidnight(Request $request): void
+    {
+        authorize_access('platform.admin.view');
+        $restaurantId = (int) $request->input('restaurant_id', 0);
+        if ($restaurantId <= 0) {
+            throw new \RuntimeException('restaurant_id requis.');
+        }
+        $readOnly = !in_array(strtolower((string) $request->input('read_only_diagnostic', '1')), ['0', 'false', 'no'], true);
+        $result = Container::getInstance()->get('salesService')->runSandboxMidnightReconcile(
+            $restaurantId,
+            current_user() ?? [],
+            $readOnly
+        );
+
+        flash(
+            'success',
+            ($result['read_only_diagnostic'] ? '[DRY-RUN] ' : '')
+            . 'Candidats=' . (string) ($result['candidate_count'] ?? 0)
+            . ' | ventes_liees_avant=' . (string) ($result['sales_linked_before'] ?? 0)
+            . ' | ventes_liees_apres=' . (string) ($result['sales_linked_after'] ?? 0)
+            . ' | créées=' . (string) ($result['created_count'] ?? 0)
+        );
+        redirect('/super-admin');
+    }
+
     public function owner(Request $request): void
     {
         authorize_access('tenant.dashboard.view');
@@ -500,5 +559,85 @@ final class DashboardController
             'flash_success' => flash('success'),
             'flash_error' => $inlineError ?? flash('error'),
         ];
+    }
+
+    private function ensureSandboxRestaurant(string $code, array $actor): int
+    {
+        $pdo = Container::getInstance()->get('db')->pdo();
+        $statement = $pdo->prepare('SELECT id FROM restaurants WHERE restaurant_code = :code LIMIT 1');
+        $statement->execute(['code' => $code]);
+        $existingId = (int) ($statement->fetchColumn() ?: 0);
+        if ($existingId > 0) {
+            return $existingId;
+        }
+
+        return Container::getInstance()->get('tenantProvisioning')->createRestaurant([
+            'name' => strtoupper($code),
+            'restaurant_code' => $code,
+            'slug' => $code,
+            'support_email' => 'sandbox+' . $code . '@badiboss.test',
+            'phone' => '+243000000000',
+            'city' => 'Sandbox',
+            'country' => 'CD',
+            'address_line' => 'Sandbox only',
+            'public_name' => strtoupper($code),
+            'subscription_plan_id' => 1,
+            'status' => 'active',
+            'subscription_status' => 'ACTIVE',
+            'subscription_payment_status' => 'PAID',
+            'timezone' => 'Africa/Kinshasa',
+            'currency_code' => 'USD',
+        ], $actor);
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function ensureSandboxAccounts(int $restaurantId, string $code, array $actor): array
+    {
+        $templates = [
+            ['full_name' => 'Owner Sandbox', 'role_code' => 'owner', 'email' => 'owner-' . $code . '@badiboss.test'],
+            ['full_name' => 'Manager Sandbox', 'role_code' => 'manager', 'email' => 'manager-' . $code . '@badiboss.test'],
+            ['full_name' => 'Server Sandbox', 'role_code' => 'cashier_server', 'email' => 'server-' . $code . '@badiboss.test'],
+            ['full_name' => 'Kitchen Sandbox', 'role_code' => 'kitchen', 'email' => 'kitchen-' . $code . '@badiboss.test'],
+            ['full_name' => 'Stock Sandbox', 'role_code' => 'stock_manager', 'email' => 'stock-' . $code . '@badiboss.test'],
+            ['full_name' => 'Caisse Sandbox', 'role_code' => 'cashier_accountant', 'email' => 'caisse-' . $code . '@badiboss.test'],
+        ];
+        $pdo = Container::getInstance()->get('db')->pdo();
+        $created = [];
+        foreach ($templates as $tpl) {
+            $exists = $pdo->prepare('SELECT id FROM users WHERE restaurant_id = :rid AND email = :email LIMIT 1');
+            $exists->execute(['rid' => $restaurantId, 'email' => $tpl['email']]);
+            if ((int) ($exists->fetchColumn() ?: 0) > 0) {
+                $created[] = $tpl['email'] . ':exists';
+                continue;
+            }
+            $roleStatement = $pdo->prepare(
+                'SELECT id FROM roles
+                 WHERE code = :code
+                   AND status = "active"
+                   AND (scope = "system" OR (scope = "tenant" AND restaurant_id = :rid))
+                 ORDER BY scope ASC
+                 LIMIT 1'
+            );
+            $roleStatement->execute(['code' => $tpl['role_code'], 'rid' => $restaurantId]);
+            $roleId = (int) ($roleStatement->fetchColumn() ?: 0);
+            if ($roleId <= 0) {
+                throw new \RuntimeException('Role introuvable pour sandbox: ' . $tpl['role_code']);
+            }
+
+            Container::getInstance()->get('userAdmin')->createUser([
+                'restaurant_id' => $restaurantId,
+                'role_id' => $roleId,
+                'full_name' => $tpl['full_name'],
+                'email' => $tpl['email'],
+                'phone' => '+243000000000',
+                'password' => 'password',
+                'status' => 'active',
+            ], $actor);
+            $created[] = $tpl['email'] . ':created';
+        }
+
+        return $created;
     }
 }

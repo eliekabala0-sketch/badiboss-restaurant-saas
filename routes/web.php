@@ -37,6 +37,8 @@ $router->post('/super-admin/stock-reset/preview', [DashboardController::class, '
 $router->post('/super-admin/stock-reset/execute', [DashboardController::class, 'executeStockReset'], [AuthMiddleware::class, SuperAdminMiddleware::class]);
 $router->post('/super-admin/operations/lookup', [DashboardController::class, 'superAdminOperationLookup'], [AuthMiddleware::class, SuperAdminMiddleware::class]);
 $router->post('/super-admin/operations/force', [DashboardController::class, 'superAdminOperationForce'], [AuthMiddleware::class, SuperAdminMiddleware::class]);
+$router->post('/super-admin/sandbox/setup-sales-midnight', [DashboardController::class, 'setupSalesSandbox'], [AuthMiddleware::class, SuperAdminMiddleware::class]);
+$router->post('/super-admin/sandbox/run-sales-midnight', [DashboardController::class, 'runSalesSandboxMidnight'], [AuthMiddleware::class, SuperAdminMiddleware::class]);
 $router->get('/super-admin/restaurants', [RestaurantAdminController::class, 'index'], [AuthMiddleware::class, SuperAdminMiddleware::class]);
 $router->post('/super-admin/restaurants', [RestaurantAdminController::class, 'store'], [AuthMiddleware::class, SuperAdminMiddleware::class]);
 $router->get('/super-admin/restaurants/{id}', [RestaurantAdminController::class, 'show'], [AuthMiddleware::class, SuperAdminMiddleware::class]);

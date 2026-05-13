@@ -1088,3 +1088,35 @@ function sql_sale_activity_left_join_server_request(string $saleAlias = 's', str
         . $saleAlias . '.origin_type = "server_request" AND ' . $serverRequestAlias . '.id = ' . $saleAlias . '.origin_id '
         . 'AND ' . $serverRequestAlias . '.restaurant_id = ' . $saleAlias . '.restaurant_id';
 }
+
+/**
+ * @return list<string>
+ */
+function sandbox_allowed_restaurant_codes(): array
+{
+    $raw = (string) env('SANDBOX_RESTAURANT_CODES', 'test-ventes-minuit');
+    $parts = preg_split('/[,\s;]+/', strtolower(trim($raw))) ?: [];
+    $out = [];
+    foreach ($parts as $code) {
+        $code = trim((string) $code);
+        if ($code === '') {
+            continue;
+        }
+        $out[] = $code;
+    }
+    if ($out === []) {
+        $out[] = 'test-ventes-minuit';
+    }
+
+    return array_values(array_unique($out));
+}
+
+function is_sandbox_restaurant_code(?string $restaurantCode): bool
+{
+    $code = strtolower(trim((string) $restaurantCode));
+    if ($code === '') {
+        return false;
+    }
+
+    return in_array($code, sandbox_allowed_restaurant_codes(), true);
+}
