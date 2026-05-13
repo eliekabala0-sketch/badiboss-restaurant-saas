@@ -782,14 +782,14 @@ final class OperationsController
 
         $items = $this->serverRequestItemsPayload($request);
 
-        Container::getInstance()->get('salesService')->createServerRequest($restaurantId, [
+        $newRequestId = Container::getInstance()->get('salesService')->createServerRequest($restaurantId, [
             'service_reference' => $request->input('service_reference'),
             'note' => $request->input('note'),
             'items' => $items,
         ], current_user());
 
-        flash('success', 'Demande serveur enregistree.');
-        redirect($this->moduleUrl('/ventes', $restaurantId));
+        flash('success', 'Demande serveur enregistree #' . (string) $newRequestId . '.');
+        redirect($this->moduleUrl('/ventes', $restaurantId) . '#op-focus-server_request-' . (string) $newRequestId);
     }
 
     public function cancelServerRequest(Request $request): void

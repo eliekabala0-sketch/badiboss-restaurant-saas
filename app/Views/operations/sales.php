@@ -972,7 +972,7 @@ $todayShort = (float) ($todayAgentCash['shortfall'] ?? 0);
         <div class="grid">
             <?php foreach ($activeRequests as $index => $request): ?>
                 <?php $items = $requestItemsByRequest[(int) $request['id']] ?? []; ?>
-                <article class="card <?= $index >= $activePreviewLimit ? 'history-extra' : '' ?>" data-history-group="sales_active_requests" <?= $index >= $activePreviewLimit ? 'style="padding:18px; border-radius:16px; display:none;"' : 'style="padding:18px; border-radius:16px;"' ?> id="op-focus-server_request-<?= e((string) $request['id']) ?>" data-operation-focus="server_request:<?= e((string) $request['id']) ?>">
+                <article class="card <?= $index >= $activePreviewLimit ? 'history-extra' : '' ?>" data-history-group="sales_active_requests" <?= $index >= $activePreviewLimit ? 'style="padding:18px; border-radius:16px; display:none;"' : 'style="padding:18px; border-radius:16px;"' ?> id="op-focus-server_request-<?= e((string) $request['id']) ?>" data-operation-focus="server_request:<?= e((string) $request['id']) ?>" data-service-reference="<?= e((string) ($request['service_reference'] ?? '')) ?>" data-server-request-id="<?= e((string) $request['id']) ?>">
                     <div class="topbar" style="margin-bottom:12px;">
                         <div>
                             <strong>Demande #<?= e((string) $request['id']) ?></strong>

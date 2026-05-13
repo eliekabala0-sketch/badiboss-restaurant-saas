@@ -191,7 +191,7 @@ final class SalesService
         return $periods;
     }
 
-    public function createServerRequest(int $restaurantId, array $payload, array $actor): void
+    public function createServerRequest(int $restaurantId, array $payload, array $actor): int
     {
         $items = $payload['items'] ?? [];
         if ($items === []) {
@@ -275,6 +275,7 @@ final class SalesService
                 'justification' => 'Demande chiffree du serveur depuis le menu',
             ]);
 
+            return $requestId;
         } catch (\Throwable $throwable) {
             if ($pdo->inTransaction()) {
                 $pdo->rollBack();
