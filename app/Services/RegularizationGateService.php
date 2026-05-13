@@ -398,7 +398,11 @@ final class RegularizationGateService
             return $day;
         }
         $tz = $this->reportTz($restaurantId);
-        foreach (['validated_at', 'sale_created_at'] as $k) {
+        foreach ([
+            'sale_activity_at',
+            'server_request_received_at',
+            'validated_at',
+        ] as $k) {
             $t = trim((string) ($row[$k] ?? ''));
             if ($t === '') {
                 continue;
