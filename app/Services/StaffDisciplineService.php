@@ -508,13 +508,12 @@ final class StaffDisciplineService
         }
 
         if ($preset === 'prev_month') {
-            $win = $rs->operationalPeriodWindow($restaurantId, 'prev_month', $anchorYmd);
-            $first = $win['start']->format('Y-m-d');
-            $last = $win['end']->modify('-1 day')->format('Y-m-d');
-            $monthly = $this->averageEvaluatedDaysInRange($restaurantId, $userId, $first, $last, $tz);
+            $monthSnap = $this->snapshotCalendarMonthGauge($restaurantId, $userId, $anchorYmd, true, $tz, $todayY);
+            $monthly = $monthSnap['score'] ?? null;
         } else {
             $monthEnd = min($refY, $todayY);
-            $monthly = $this->averageMonthToDateNullable($restaurantId, $userId, $monthEnd, $tz);
+            $monthSnap = $this->snapshotCalendarMonthGauge($restaurantId, $userId, $monthEnd, false, $tz, $todayY);
+            $monthly = $monthSnap['score'] ?? null;
         }
 
         $ledgerMonthKey = substr($refY, 0, 7) . '-01';
@@ -1296,6 +1295,327 @@ final class StaffDisciplineService
         return (int) $st->fetchColumn();
     }
 
+    private function maxUnjustifiedAbsenceStreakInRange(
+        int $restaurantId,
+        int $userId,
+        string $roleCode,
+        string $fromYmd,
+        string $toYmd,
+        DateTimeZone $tz,
+    ): int {
+        $eng = $this->effectiveAgentEngagementStartYmd($restaurantId, $userId, $tz);
+        $start = max($fromYmd, $eng);
+        if ($start > $toYmd) {
+            return 0;
+        }
+        try {
+            $cur = new DateTimeImmutable($start . ' 00:00:00', $tz);
+            $endD = new DateTimeImmutable($toYmd . ' 00:00:00', $tz);
+        } catch (\Throwable) {
+            return 0;
+        }
+        $maxStreak = 0;
+        $streak = 0;
+        for ($d = $cur; $d <= $endD; $d = $d->modify('+1 day')) {
+            $ev = $this->evaluateCalendarDay($restaurantId, $userId, $roleCode, $d->format('Y-m-d'), $tz);
+            if (!empty($ev['evaluated']) && ($ev['evaluation_kind'] ?? '') === 'absence_unjustified') {
+                $streak++;
+                if ($streak > $maxStreak) {
+                    $maxStreak = $streak;
+                }
+            } else {
+                $streak = 0;
+            }
+        }
+
+        return $maxStreak;
+    }
+
+    private function negativeLedgerPointsForUserDayRange(
+        int $restaurantId,
+        int $userId,
+        string $fromYmd,
+        string $toYmd,
+    ): int {
+        if ($userId <= 0 || $fromYmd > $toYmd) {
+            return 0;
+        }
+        $st = $this->database->pdo()->prepare(
+            'SELECT COALESCE(SUM(LEAST(0, delta_points)), 0) AS pts
+             FROM staff_score_ledger
+             WHERE restaurant_id = :rid AND user_id = :uid AND day_ymd >= :from AND day_ymd <= :to'
+        );
+        $st->execute([
+            'rid' => $restaurantId,
+            'uid' => $userId,
+            'from' => $fromYmd,
+            'to' => $toYmd,
+        ]);
+
+        return (int) $st->fetchColumn();
+    }
+
+    /**
+     * @return array{late_count:int,max_delay_days:int}
+     */
+    private function serverLateRemittanceMetricsForRange(
+        int $restaurantId,
+        int $userId,
+        string $fromYmd,
+        string $toYmd,
+    ): array {
+        if ($userId <= 0 || $fromYmd > $toYmd) {
+            return ['late_count' => 0, 'max_delay_days' => 0];
+        }
+        $st = $this->database->pdo()->prepare(
+            'SELECT COUNT(*) AS late_count,
+                    COALESCE(MAX(GREATEST(0, DATEDIFF(remittance_day_ymd, sale_day_ymd))), 0) AS max_delay_days
+             FROM cash_transfers
+             WHERE restaurant_id = :rid AND from_user_id = :uid AND source_type = "sale"
+               AND sale_day_ymd IS NOT NULL AND remittance_day_ymd IS NOT NULL
+               AND sale_day_ymd >= :from AND sale_day_ymd <= :to
+               AND remittance_day_ymd > sale_day_ymd'
+        );
+        $st->execute([
+            'rid' => $restaurantId,
+            'uid' => $userId,
+            'from' => $fromYmd,
+            'to' => $toYmd,
+        ]);
+        $row = $st->fetch(PDO::FETCH_ASSOC) ?: [];
+
+        return [
+            'late_count' => (int) ($row['late_count'] ?? 0),
+            'max_delay_days' => (int) ($row['max_delay_days'] ?? 0),
+        ];
+    }
+
+    /**
+     * @param array<string,mixed> $monthStats
+     *
+     * @return array{
+     *   score:?float,
+     *   raw_score:?float,
+     *   cap_score:?float,
+     *   cap_reasons:list<string>,
+     *   metrics:array<string,mixed>
+     * }
+     */
+    private function monthlySeverityAdjustedScore(
+        int $restaurantId,
+        int $userId,
+        string $roleCode,
+        string $fromYmd,
+        string $toYmd,
+        DateTimeZone $tz,
+        ?float $rawScore,
+        array $monthStats,
+    ): array {
+        $ledgerPenaltyPts = $this->negativeLedgerPointsForUserDayRange($restaurantId, $userId, $fromYmd, $toYmd);
+        $unjustifiedAbsenceDays = (int) ($monthStats['days_unjustified_absence'] ?? 0);
+        $softAbsenceDays = (int) ($monthStats['days_soft_absence'] ?? 0);
+        $measuredActivityDays = (int) ($monthStats['days_with_activity'] ?? 0);
+        $zeroActivityDays = (int) ($monthStats['days_without_measured_activity'] ?? 0);
+        $maxUnjustifiedStreak = $this->maxUnjustifiedAbsenceStreakInRange(
+            $restaurantId,
+            $userId,
+            $roleCode,
+            $fromYmd,
+            $toYmd,
+            $tz,
+        );
+        $shortfallHits = $roleCode === 'cashier_server'
+            ? $this->ledgerReasonCountForUserDayRange(
+                $restaurantId,
+                $userId,
+                $fromYmd,
+                $toYmd,
+                ['server_shortfall_today', 'server_shortfall_legacy'],
+            )
+            : 0;
+        $remittanceRejectedHits = $roleCode === 'cashier_server'
+            ? $this->ledgerReasonCountForUserDayRange(
+                $restaurantId,
+                $userId,
+                $fromYmd,
+                $toYmd,
+                ['server_remittance_rejected'],
+            )
+            : 0;
+        $lateRemittance = $roleCode === 'cashier_server'
+            ? $this->serverLateRemittanceMetricsForRange($restaurantId, $userId, $fromYmd, $toYmd)
+            : ['late_count' => 0, 'max_delay_days' => 0];
+        $activityPctVsRole = $this->averageActivitePctVsRoleForWindow(
+            $restaurantId,
+            $userId,
+            $roleCode,
+            'month',
+            $toYmd,
+        );
+
+        $capScore = 100.0;
+        $capReasons = [];
+        $capApplied = false;
+        $applyCap = static function (float $current, float $next): float {
+            return $next < $current ? $next : $current;
+        };
+
+        if ($ledgerPenaltyPts <= -55) {
+            $newCap = $applyCap($capScore, 59.0);
+            if ($newCap < $capScore) {
+                $capScore = $newCap;
+                $capReasons[] = 'penalites du mois tres elevees';
+                $capApplied = true;
+            }
+        } elseif ($ledgerPenaltyPts <= -35) {
+            $newCap = $applyCap($capScore, 74.0);
+            if ($newCap < $capScore) {
+                $capScore = $newCap;
+                $capReasons[] = 'penalites du mois elevees';
+                $capApplied = true;
+            }
+        } elseif ($ledgerPenaltyPts <= -20) {
+            $newCap = $applyCap($capScore, 89.0);
+            if ($newCap < $capScore) {
+                $capScore = $newCap;
+                $capReasons[] = 'penalites du mois visibles';
+                $capApplied = true;
+            }
+        }
+
+        if ($unjustifiedAbsenceDays >= 2) {
+            $newCap = $applyCap($capScore, 74.0);
+            if ($newCap < $capScore) {
+                $capScore = $newCap;
+                $capReasons[] = 'absences non justifiees repetees';
+                $capApplied = true;
+            }
+        } elseif ($unjustifiedAbsenceDays >= 1) {
+            $newCap = $applyCap($capScore, 89.0);
+            if ($newCap < $capScore) {
+                $capScore = $newCap;
+                $capReasons[] = 'absence non justifiee';
+                $capApplied = true;
+            }
+        }
+
+        if ($maxUnjustifiedStreak >= 3) {
+            $newCap = $applyCap($capScore, 59.0);
+            if ($newCap < $capScore) {
+                $capScore = $newCap;
+                $capReasons[] = 'absences successives';
+                $capApplied = true;
+            }
+        } elseif ($maxUnjustifiedStreak >= 2) {
+            $newCap = $applyCap($capScore, 74.0);
+            if ($newCap < $capScore) {
+                $capScore = $newCap;
+                $capReasons[] = '2 jours consecutifs sans activite justifiee';
+                $capApplied = true;
+            }
+        }
+
+        if ($softAbsenceDays >= 3) {
+            $newCap = $applyCap($capScore, 88.0);
+            if ($newCap < $capScore) {
+                $capScore = $newCap;
+                $capReasons[] = 'absences justifiees ou retards justifies frequents';
+                $capApplied = true;
+            }
+        }
+
+        if ($shortfallHits >= 2) {
+            $newCap = $applyCap($capScore, 59.0);
+            if ($newCap < $capScore) {
+                $capScore = $newCap;
+                $capReasons[] = 'manquants caisse repetes';
+                $capApplied = true;
+            }
+        } elseif ($shortfallHits >= 1) {
+            $newCap = $applyCap($capScore, 74.0);
+            if ($newCap < $capScore) {
+                $capScore = $newCap;
+                $capReasons[] = 'manquant caisse';
+                $capApplied = true;
+            }
+        }
+
+        if ($remittanceRejectedHits >= 1) {
+            $newCap = $applyCap($capScore, 74.0);
+            if ($newCap < $capScore) {
+                $capScore = $newCap;
+                $capReasons[] = 'remise caisse rejetee';
+                $capApplied = true;
+            }
+        }
+
+        if ((int) ($lateRemittance['max_delay_days'] ?? 0) >= 2) {
+            $newCap = $applyCap($capScore, 59.0);
+            if ($newCap < $capScore) {
+                $capScore = $newCap;
+                $capReasons[] = 'retard caisse grave';
+                $capApplied = true;
+            }
+        } elseif ((int) ($lateRemittance['late_count'] ?? 0) >= 2) {
+            $newCap = $applyCap($capScore, 74.0);
+            if ($newCap < $capScore) {
+                $capScore = $newCap;
+                $capReasons[] = 'retards caisse repetes';
+                $capApplied = true;
+            }
+        } elseif ((int) ($lateRemittance['late_count'] ?? 0) >= 1) {
+            $newCap = $applyCap($capScore, 89.0);
+            if ($newCap < $capScore) {
+                $capScore = $newCap;
+                $capReasons[] = 'retard de versement caisse';
+                $capApplied = true;
+            }
+        }
+
+        if ($activityPctVsRole !== null && is_finite($activityPctVsRole)) {
+            if ($activityPctVsRole < 50.0) {
+                $newCap = $applyCap($capScore, 73.0);
+                if ($newCap < $capScore) {
+                    $capScore = $newCap;
+                    $capReasons[] = 'faible activite vs collegues';
+                    $capApplied = true;
+                }
+            } elseif ($activityPctVsRole < 80.0) {
+                $newCap = $applyCap($capScore, 88.0);
+                if ($newCap < $capScore) {
+                    $capScore = $newCap;
+                    $capReasons[] = 'activite en dessous de la moyenne du role';
+                    $capApplied = true;
+                }
+            }
+        }
+
+        $finalScore = $rawScore;
+        if ($finalScore !== null && is_finite($finalScore) && $capApplied) {
+            $finalScore = round(min($finalScore, $capScore), 1);
+        }
+
+        return [
+            'score' => ($finalScore !== null && is_finite($finalScore)) ? $finalScore : null,
+            'raw_score' => ($rawScore !== null && is_finite($rawScore)) ? round($rawScore, 1) : null,
+            'cap_score' => $capApplied ? round($capScore, 1) : null,
+            'cap_reasons' => array_values(array_unique($capReasons)),
+            'metrics' => [
+                'unjustified_absence_days' => $unjustifiedAbsenceDays,
+                'soft_absence_days' => $softAbsenceDays,
+                'max_unjustified_streak' => $maxUnjustifiedStreak,
+                'cash_shortfall_hits' => $shortfallHits,
+                'late_remittance_hits' => (int) ($lateRemittance['late_count'] ?? 0),
+                'late_remittance_max_delay_days' => (int) ($lateRemittance['max_delay_days'] ?? 0),
+                'remittance_rejected_hits' => $remittanceRejectedHits,
+                'ledger_penalty_points_month' => $ledgerPenaltyPts,
+                'activity_pct_vs_role_avg' => ($activityPctVsRole !== null && is_finite($activityPctVsRole)) ? round($activityPctVsRole, 1) : null,
+                'measured_activity_days' => $measuredActivityDays,
+                'days_without_measured_activity' => $zeroActivityDays,
+            ],
+        ];
+    }
+
     /**
      * Aperçu paie (lecture) : mois, agents, base, jauge, présences, retenue indicative, net proposé.
      *
@@ -1342,15 +1662,27 @@ final class StaffDisciplineService
                 continue;
             }
             $roleCode = (string) ($u['role_code'] ?? '');
-            $monthlyScore = $this->averageEvaluatedDaysInRange($restaurantId, $uid, $start, $end, $tz);
-            $retentionPct = $this->proposedSalaryRetentionPercent($monthlyScore);
+            $monthGauge = $this->snapshotCalendarMonthGauge($restaurantId, $uid, $end, false, $tz, $todayY);
+            $disciplineMonth = is_array($monthGauge['score_breakdown']['month_rules'] ?? null)
+                ? $monthGauge['score_breakdown']['month_rules']
+                : [];
+            $monthlyScore = array_key_exists('score', $disciplineMonth)
+                ? $disciplineMonth['score']
+                : ($monthGauge['score'] ?? null);
+            $rawMonthlyScore = array_key_exists('raw_score', $disciplineMonth)
+                ? $disciplineMonth['raw_score']
+                : $monthlyScore;
+            $retentionPct = $this->proposedSalaryRetentionPercent(is_numeric($monthlyScore) ? (float) $monthlyScore : null);
             $base = (float) ($profiles[$uid]['base_salary_monthly'] ?? 0);
             $currency = (string) ($profiles[$uid]['currency'] ?? 'USD');
             $bonus = (float) ($profiles[$uid]['bonus_monthly'] ?? 0);
             if (!is_finite($bonus) || $bonus < 0) {
                 $bonus = 0.0;
             }
-            $unjDays = $this->countUnjustifiedAbsenceDaysInRange($restaurantId, $uid, $roleCode, $start, $end, $tz);
+            $monthMetrics = is_array($disciplineMonth['metrics'] ?? null) ? $disciplineMonth['metrics'] : [];
+            $unjDays = array_key_exists('unjustified_absence_days', $monthMetrics)
+                ? (int) ($monthMetrics['unjustified_absence_days'] ?? 0)
+                : $this->countUnjustifiedAbsenceDaysInRange($restaurantId, $uid, $roleCode, $start, $end, $tz);
             $perDayAbs = $base > 0 ? min($base / 22, $base * 0.12) : 0.0;
             $absDeduction = round(min($base * 0.35, $unjDays * $perDayAbs), 2);
             $scoreRetentionAmt = round($base * ($retentionPct / 100), 2);
@@ -1364,13 +1696,9 @@ final class StaffDisciplineService
             $attDays = (int) $attSt->fetchColumn();
             $restDays = $this->countReposAttendanceDaysInMonth($restaurantId, $uid, $monthKey);
 
-            $penSt = $pdo->prepare(
-                'SELECT COALESCE(SUM(LEAST(0, delta_points)), 0) AS pts
-                 FROM staff_score_ledger
-                 WHERE restaurant_id = :rid AND user_id = :uid AND DATE_FORMAT(day_ymd, "%Y-%m") = :m'
-            );
-            $penSt->execute(['rid' => $restaurantId, 'uid' => $uid, 'm' => $monthKey]);
-            $ledgerPenaltyPts = (int) $penSt->fetchColumn();
+            $ledgerPenaltyPts = array_key_exists('ledger_penalty_points_month', $monthMetrics)
+                ? (int) ($monthMetrics['ledger_penalty_points_month'] ?? 0)
+                : $this->negativeLedgerPointsForUserDayRange($restaurantId, $uid, $start, $end);
 
             $rows[] = [
                 'user_id' => $uid,
@@ -1379,18 +1707,27 @@ final class StaffDisciplineService
                 'base_salary_monthly' => $base,
                 'currency' => $currency,
                 'monthly_score_avg' => $monthlyScore,
+                'monthly_score_raw_avg' => $rawMonthlyScore,
+                'monthly_score_cap' => $disciplineMonth['cap_score'] ?? null,
                 'monthly_score_zone' => $this->zoneFromScoreNullable($monthlyScore),
                 'retention_proposed_pct' => $retentionPct,
                 'retention_amount_est' => $scoreRetentionAmt,
                 'bonus_monthly' => $bonus,
                 'unjustified_absence_days' => $unjDays,
+                'justified_absence_days' => (int) ($monthMetrics['soft_absence_days'] ?? 0),
                 'rest_days_recorded' => $restDays,
                 'deduction_absence_est' => $absDeduction,
                 'service_start_ymd' => $profiles[$uid]['service_start_ymd'] ?? null,
                 'profile_note' => $profiles[$uid]['profile_note'] ?? null,
                 'net_pay_proposed' => $net,
                 'attendance_days_recorded' => $attDays,
+                'measured_activity_days' => (int) ($monthMetrics['measured_activity_days'] ?? 0),
                 'ledger_penalty_points_month' => $ledgerPenaltyPts,
+                'cash_shortfall_hits' => (int) ($monthMetrics['cash_shortfall_hits'] ?? 0),
+                'late_remittance_hits' => (int) ($monthMetrics['late_remittance_hits'] ?? 0),
+                'late_remittance_max_delay_days' => (int) ($monthMetrics['late_remittance_max_delay_days'] ?? 0),
+                'activity_pct_vs_role_avg' => $monthMetrics['activity_pct_vs_role_avg'] ?? null,
+                'discipline_cap_reasons' => $disciplineMonth['cap_reasons'] ?? [],
             ];
         }
 
@@ -3244,9 +3581,25 @@ final class StaffDisciplineService
             ];
         }
 
-        $avg = round($sum / $evalDays, 1);
-        if (!is_finite($avg)) {
-            $avg = 0.0;
+        $rawAvg = round($sum / $evalDays, 1);
+        if (!is_finite($rawAvg)) {
+            $rawAvg = 0.0;
+        }
+        $monthRules = $this->monthlySeverityAdjustedScore(
+            $restaurantId,
+            $userId,
+            $role,
+            $cursor->format('Y-m-d'),
+            $end->format('Y-m-d'),
+            $tz,
+            $rawAvg,
+            $monthStats,
+        );
+        $avg = $monthRules['score'] ?? $rawAvg;
+        $note = 'Moyenne provisoire du mois sur les jours depuis l\'entree en service (activite, repos neutre, absences penalisees).';
+        if (($monthRules['cap_score'] ?? null) !== null && !empty($monthRules['cap_reasons'])) {
+            $note = 'Moyenne brute ' . $monthRules['raw_score'] . ' %, plafonnee a ' . $monthRules['cap_score']
+                . ' % pour le mois : ' . implode(', ', (array) $monthRules['cap_reasons']) . '.';
         }
 
         return [
@@ -3261,6 +3614,7 @@ final class StaffDisciplineService
                 'actions_total' => $actionsSum,
                 'calendar_days' => $calendarDays,
                 'month_stats' => $monthStats,
+                'month_rules' => $monthRules,
             ],
             'note' => 'Moyenne provisoire du mois sur les jours depuis l’entrée en service (activité, repos neutre, absences pénalisées).',
         ];
@@ -3312,4 +3666,3 @@ final class StaffDisciplineService
         return $this->zoneFromScore($s);
     }
 }
-

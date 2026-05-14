@@ -11,8 +11,8 @@ $periodLabel = (string) ($preview['period_label'] ?? '');
 ?>
 <section class="topbar">
     <div class="brand">
-        <h1>Préparer la paie</h1>
-        <p class="muted">Aperçu indicatif : salaires de base enregistrés, jauge mensuelle moyenne (jours évalués), présences saisies, points pénalité du mois, retenue proposée et net calculé. Ajustez les profils salaire dans la base si besoin.</p>
+        <h1>Preparer la paie</h1>
+        <p class="muted">Apercu indicatif : salaire de base, jauge mensuelle finale, absences, retards caisse, manquants, faible activite, penalites du mois, retenue proposee et net calcule. Ajustez les profils salaire dans la base si besoin.</p>
     </div>
 </section>
 
@@ -22,13 +22,13 @@ $periodLabel = (string) ($preview['period_label'] ?? '');
 <section class="card no-print" style="padding:18px 22px; margin-bottom:24px;">
     <form method="get" action="/owner/paie/preparer" class="split" style="align-items:flex-end; gap:16px; flex-wrap:wrap;">
         <label style="display:flex; flex-direction:column; gap:6px;">
-            <span class="muted">Mois à préparer (AAAA-MM)</span>
+            <span class="muted">Mois a preparer (AAAA-MM)</span>
             <input type="month" name="month" value="<?= e($month_query) ?>" required>
         </label>
         <button type="submit">Actualiser</button>
     </form>
-    <p class="muted" style="margin:14px 0 0;">Période calcul : <?= e($periodLabel) ?> · <?= e($periodStart) ?> → <?= e($periodEnd) ?></p>
-    <p class="muted" style="margin:8px 0 0;">Ordre : serveurs, cuisine, stock, caisse, autres ; meilleure moyenne mensuelle en haut.</p>
+    <p class="muted" style="margin:14px 0 0;">Periode calcul : <?= e($periodLabel) ?> · <?= e($periodStart) ?> -> <?= e($periodEnd) ?></p>
+    <p class="muted" style="margin:8px 0 0;">Ordre : serveurs, cuisine, stock, caisse, autres ; meilleure jauge mensuelle finale en haut.</p>
 </section>
 
 <section class="card" style="padding:0; margin-bottom:24px; overflow:auto;">
@@ -36,19 +36,24 @@ $periodLabel = (string) ($preview['period_label'] ?? '');
         <thead>
         <tr>
             <th>Agent</th>
-            <th>Rôle</th>
+            <th>Role</th>
             <th>Salaire base</th>
-            <th>Jauge mois (moy.)</th>
+            <th>Jauge mois</th>
             <th>Profil</th>
             <th>Abs. non just.</th>
-            <th>Repos (saisis)</th>
-            <th>Présences (lignes)</th>
-            <th>Pts pénalité</th>
+            <th>Abs. just./mal.</th>
+            <th>Retards caisse</th>
+            <th>Manquants</th>
+            <th>Faible activite</th>
+            <th>Repos</th>
+            <th>Jours actifs</th>
+            <th>Pts penalite</th>
+            <th>Alerte score</th>
             <th>Retenue %</th>
             <th>Retenue (est.)</th>
-            <th>Déduc. absence (est.)</th>
+            <th>Deduc. absence</th>
             <th>Prime</th>
-            <th>Net proposé</th>
+            <th>Net propose</th>
         </tr>
         </thead>
         <tbody>
@@ -57,13 +62,13 @@ $periodLabel = (string) ($preview['period_label'] ?? '');
             $s = (string) $z;
 
             return match ($s) {
-                'non_evalue' => 'Non évalué',
+                'non_evalue' => 'Non evalue',
                 'vert' => 'Excellent',
                 'jaune' => 'Bon',
                 'orange' => 'Moyen',
-                'rouge' => 'Problématique',
-                'rouge_critique' => 'Très problématique',
-                default => $s === '' ? '—' : ucfirst($s),
+                'rouge' => 'Problematique',
+                'rouge_critique' => 'Tres problematique',
+                default => $s === '' ? '-' : ucfirst($s),
             };
         };
         $payrollZonePill = static function (string $z): string {
@@ -80,17 +85,45 @@ $periodLabel = (string) ($preview['period_label'] ?? '');
             <?php if (!is_array($r)) {
                 continue;
             } ?>
-            <?php $zRaw = (string) ($r['monthly_score_zone'] ?? 'non_evalue'); ?>
+            <?php
+            $zRaw = (string) ($r['monthly_score_zone'] ?? 'non_evalue');
+            $rawScore = $r['monthly_score_raw_avg'] ?? null;
+            $finalScore = $r['monthly_score_avg'] ?? null;
+            $scoreCap = $r['monthly_score_cap'] ?? null;
+            $activityPct = $r['activity_pct_vs_role_avg'] ?? null;
+            $capReasons = is_array($r['discipline_cap_reasons'] ?? null) ? $r['discipline_cap_reasons'] : [];
+            ?>
             <tr>
                 <td><?= e((string) ($r['full_name'] ?? '')) ?></td>
                 <td><?= e(restaurant_role_label($r['role_code'] ?? null)) ?></td>
                 <td><?= e(format_money((float) ($r['base_salary_monthly'] ?? 0), (string) ($r['currency'] ?? 'USD'))) ?></td>
-                <td><?= ($r['monthly_score_avg'] ?? null) === null ? 'Non évalué' : e((string) $r['monthly_score_avg']) . ' %' ?></td>
+                <td>
+                    <?= $finalScore === null ? 'Non evalue' : e((string) $finalScore) . ' %' ?>
+                    <?php if ($rawScore !== null && $finalScore !== null && (float) $rawScore > (float) $finalScore): ?>
+                        <div class="muted" style="font-size:0.85rem;">brut <?= e((string) $rawScore) ?> % · cap <?= e((string) $scoreCap) ?> %</div>
+                    <?php endif; ?>
+                </td>
                 <td><span class="pill <?= e($payrollZonePill($zRaw)) ?>"><?= e($payrollZoneLabel($zRaw)) ?></span></td>
                 <td><?= e((string) (int) ($r['unjustified_absence_days'] ?? 0)) ?></td>
+                <td><?= e((string) (int) ($r['justified_absence_days'] ?? 0)) ?></td>
+                <td>
+                    <?= e((string) (int) ($r['late_remittance_hits'] ?? 0)) ?>
+                    <?php if ((int) ($r['late_remittance_max_delay_days'] ?? 0) > 0): ?>
+                        <div class="muted" style="font-size:0.85rem;">max <?= e((string) (int) ($r['late_remittance_max_delay_days'] ?? 0)) ?> j</div>
+                    <?php endif; ?>
+                </td>
+                <td><?= e((string) (int) ($r['cash_shortfall_hits'] ?? 0)) ?></td>
+                <td><?= $activityPct === null ? '-' : e((string) $activityPct) . ' % role' ?></td>
                 <td><?= e((string) (int) ($r['rest_days_recorded'] ?? 0)) ?></td>
-                <td><?= e((string) (int) ($r['attendance_days_recorded'] ?? 0)) ?></td>
+                <td><?= e((string) (int) ($r['measured_activity_days'] ?? 0)) ?></td>
                 <td><?= e((string) (int) ($r['ledger_penalty_points_month'] ?? 0)) ?></td>
+                <td>
+                    <?php if ($capReasons === []): ?>
+                        -
+                    <?php else: ?>
+                        <?= e(implode(' / ', $capReasons)) ?>
+                    <?php endif; ?>
+                </td>
                 <td><?= e((string) (float) ($r['retention_proposed_pct'] ?? 0)) ?> %</td>
                 <td><?= e(format_money((float) ($r['retention_amount_est'] ?? 0), (string) ($r['currency'] ?? 'USD'))) ?></td>
                 <td><?= e(format_money((float) ($r['deduction_absence_est'] ?? 0), (string) ($r['currency'] ?? 'USD'))) ?></td>
@@ -103,6 +136,6 @@ $periodLabel = (string) ($preview['period_label'] ?? '');
 </section>
 
 <section class="card no-print" style="padding:18px 22px; margin-bottom:24px;">
-    <p class="muted" style="margin:0 0 12px;">Cet écran est une aide à la préparation : contrôlez les montants avant tout paiement réel.</p>
-    <button type="button" class="button-muted" onclick="window.print()">Prévisualiser paie (impression / PDF)</button>
+    <p class="muted" style="margin:0 0 12px;">Cet ecran est une aide a la preparation : controlez les montants avant tout paiement reel.</p>
+    <button type="button" class="button-muted" onclick="window.print()">Previsualiser paie (impression / PDF)</button>
 </section>
