@@ -105,8 +105,8 @@ final class RegularizationGateService
             }
         }
 
-        $blocked = $reasons !== [];
-        if ($blocked && $uid > 0) {
+        $hasAlerts = $reasons !== [];
+        if ($hasAlerts && $uid > 0) {
             Container::getInstance()->get('staffDiscipline')->ensureLedgerPenalty(
                 $restaurantId,
                 $uid,
@@ -116,7 +116,7 @@ final class RegularizationGateService
         }
 
         return [
-            'blocked' => $blocked,
+            'blocked' => false,
             'reasons' => $reasons,
             'codes' => $codes,
             'backlog' => $backlog,

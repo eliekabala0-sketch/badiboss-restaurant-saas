@@ -1633,6 +1633,9 @@ final class OperationsController
 
     private function assertDayStartAllowsNewOperations(int $restaurantId): void
     {
+        Container::getInstance()->get('regularizationGate')->assessForUser($restaurantId, current_user() ?? []);
+        return;
+
         $gate = Container::getInstance()->get('regularizationGate')->assessForUser($restaurantId, current_user() ?? []);
         if (!($gate['blocked'] ?? false)) {
             return;
