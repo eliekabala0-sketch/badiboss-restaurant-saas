@@ -13,6 +13,8 @@ use PDO;
 final class SalesService
 {
     private ?bool $serverRequestResponsibleOutcomeColumn = null;
+    /** @var array<string, bool> */
+    private array $serverRequestColumnExists = [];
 
     public function __construct(private readonly Database $database)
     {
@@ -82,16 +84,22 @@ final class SalesService
 
     public function listServerRequests(int $restaurantId, ?int $serverId = null): array
     {
+        $resolutionBySelect = 'NULL AS resolution_by_name';
+        $resolutionByJoin = '';
+        if ($this->serverRequestColumnExists('resolution_by')) {
+            $resolutionBySelect = 'resolution_user.full_name AS resolution_by_name';
+            $resolutionByJoin = ' LEFT JOIN users resolution_user ON resolution_user.id = sr.resolution_by';
+        }
         $sql = 'SELECT sr.*,
                        u.full_name AS server_name,
                        ready_user.full_name AS ready_by_name,
                        received_user.full_name AS received_by_name,
-                       resolution_user.full_name AS resolution_by_name
+                       ' . $resolutionBySelect . '
                 FROM server_requests sr
                 INNER JOIN users u ON u.id = sr.server_id
                 LEFT JOIN users ready_user ON ready_user.id = sr.ready_by
                 LEFT JOIN users received_user ON received_user.id = sr.received_by
-                LEFT JOIN users resolution_user ON resolution_user.id = sr.resolution_by
+                ' . $resolutionByJoin . '
                 WHERE sr.restaurant_id = :restaurant_id';
         $params = ['restaurant_id' => $restaurantId];
 
@@ -109,6 +117,20 @@ final class SalesService
 
     public function listServerRequestItems(int $restaurantId, ?int $serverId = null): array
     {
+        $resolutionNoteSelect = 'NULL AS request_resolution_note';
+        $resolutionAtSelect = 'NULL AS request_resolution_at';
+        $resolutionBySelect = 'NULL AS resolution_by_name';
+        $resolutionByJoin = '';
+        if ($this->serverRequestColumnExists('resolution_note')) {
+            $resolutionNoteSelect = 'sr.resolution_note AS request_resolution_note';
+        }
+        if ($this->serverRequestColumnExists('resolution_at')) {
+            $resolutionAtSelect = 'sr.resolution_at AS request_resolution_at';
+        }
+        if ($this->serverRequestColumnExists('resolution_by')) {
+            $resolutionBySelect = 'resolution_actor.full_name AS resolution_by_name';
+            $resolutionByJoin = ' LEFT JOIN users resolution_actor ON resolution_actor.id = sr.resolution_by';
+        }
         $sql = 'SELECT sri.*,
                        sr.status AS request_status,
                        sr.server_id,
@@ -117,21 +139,21 @@ final class SalesService
                        sr.created_at AS request_created_at,
                        sr.ready_at AS request_ready_at,
                        sr.received_at AS request_received_at,
-                       sr.resolution_note AS request_resolution_note,
-                       sr.resolution_at AS request_resolution_at,
+                       ' . $resolutionNoteSelect . ',
+                       ' . $resolutionAtSelect . ',
                        u.full_name AS server_name,
                        mi.name AS menu_item_name,
                        mi.image_url AS menu_item_image_url,
                        prepared_user.full_name AS prepared_by_name,
                        received_user.full_name AS received_by_name,
-                       resolution_actor.full_name AS resolution_by_name
+                       ' . $resolutionBySelect . '
                 FROM server_request_items sri
                 INNER JOIN server_requests sr ON sr.id = sri.request_id
                 INNER JOIN menu_items mi ON mi.id = sri.menu_item_id
                 INNER JOIN users u ON u.id = sr.server_id
                 LEFT JOIN users prepared_user ON prepared_user.id = sri.technical_confirmed_by
                 LEFT JOIN users received_user ON received_user.id = sri.received_by
-                LEFT JOIN users resolution_actor ON resolution_actor.id = sr.resolution_by
+                ' . $resolutionByJoin . '
                 WHERE sr.restaurant_id = :restaurant_id';
         $params = ['restaurant_id' => $restaurantId];
 
@@ -207,12 +229,15 @@ final class SalesService
                     sri.id AS request_item_id,
                     sri.menu_item_id,
                     mi.name AS menu_item_name,
+                    COALESCE(mc.id, 0) AS category_id,
+                    COALESCE(mc.name, "Sans categorie") AS category_name,
                     COALESCE(sri.supplied_quantity, 0) AS supplied_quantity,
                     COALESCE(sri.returned_quantity_validated, sri.returned_quantity, 0) AS returned_quantity_validated,
                     COALESCE(sri.unit_price, 0) AS unit_price
              FROM server_requests sr
              INNER JOIN server_request_items sri ON sri.request_id = sr.id
              INNER JOIN menu_items mi ON mi.id = sri.menu_item_id
+             LEFT JOIN menu_categories mc ON mc.id = mi.category_id
              INNER JOIN users u ON u.id = sr.server_id
              LEFT JOIN roles r ON r.id = u.role_id
              WHERE sr.restaurant_id = :restaurant_id
@@ -276,6 +301,8 @@ final class SalesService
                 'request_item_id' => (int) ($row['request_item_id'] ?? 0),
                 'menu_item_id' => (int) ($row['menu_item_id'] ?? 0),
                 'menu_item_name' => (string) ($row['menu_item_name'] ?? ''),
+                'category_id' => (int) ($row['category_id'] ?? 0),
+                'category_name' => (string) ($row['category_name'] ?? 'Sans categorie'),
                 'sold_quantity' => $soldQuantity,
                 'returned_quantity' => $returnedQuantity,
                 'unit_price' => $unitPrice,
@@ -2350,6 +2377,35 @@ final class SalesService
         $this->serverRequestResponsibleOutcomeColumn = ((int) $statement->fetchColumn()) > 0;
 
         return $this->serverRequestResponsibleOutcomeColumn;
+    }
+
+    private function serverRequestColumnExists(string $columnName): bool
+    {
+        if (array_key_exists($columnName, $this->serverRequestColumnExists)) {
+            return $this->serverRequestColumnExists[$columnName];
+        }
+
+        $databaseName = (string) ($this->database->config()['database'] ?? '');
+        if ($databaseName === '') {
+            $this->serverRequestColumnExists[$columnName] = false;
+
+            return false;
+        }
+
+        $statement = $this->database->pdo()->prepare(
+            'SELECT COUNT(*)
+             FROM information_schema.COLUMNS
+             WHERE TABLE_SCHEMA = :database_name
+               AND TABLE_NAME = "server_requests"
+               AND COLUMN_NAME = :column_name'
+        );
+        $statement->execute([
+            'database_name' => $databaseName,
+            'column_name' => $columnName,
+        ]);
+        $this->serverRequestColumnExists[$columnName] = ((int) $statement->fetchColumn()) > 0;
+
+        return $this->serverRequestColumnExists[$columnName];
     }
 
     /**

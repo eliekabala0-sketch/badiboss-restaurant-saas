@@ -10,12 +10,17 @@ use PDO;
 
 final class CorrectionRequestService
 {
+    private ?bool $correctionRequestsTableExists = null;
+
     public function __construct(private readonly Database $database)
     {
     }
 
     public function listPendingForRestaurant(int $restaurantId): array
     {
+        if (!$this->correctionRequestsTableExists()) {
+            return [];
+        }
         $statement = $this->database->pdo()->prepare(
             'SELECT cr.*,
                     requester.full_name AS requested_by_name,
@@ -34,6 +39,9 @@ final class CorrectionRequestService
 
     public function listRecentForRestaurant(int $restaurantId, int $limit = 20): array
     {
+        if (!$this->correctionRequestsTableExists()) {
+            return [];
+        }
         $limit = max(1, min($limit, 100));
         $statement = $this->database->pdo()->prepare(
             'SELECT cr.*,
@@ -291,5 +299,30 @@ final class CorrectionRequestService
         $decoded = json_decode($value, true);
 
         return is_array($decoded) ? $decoded : [];
+    }
+
+    private function correctionRequestsTableExists(): bool
+    {
+        if ($this->correctionRequestsTableExists !== null) {
+            return $this->correctionRequestsTableExists;
+        }
+
+        $databaseName = (string) ($this->database->config()['database'] ?? '');
+        if ($databaseName === '') {
+            $this->correctionRequestsTableExists = false;
+
+            return false;
+        }
+
+        $statement = $this->database->pdo()->prepare(
+            'SELECT COUNT(*)
+             FROM information_schema.TABLES
+             WHERE TABLE_SCHEMA = :database_name
+               AND TABLE_NAME = "correction_requests"'
+        );
+        $statement->execute(['database_name' => $databaseName]);
+        $this->correctionRequestsTableExists = ((int) $statement->fetchColumn()) > 0;
+
+        return $this->correctionRequestsTableExists;
     }
 }

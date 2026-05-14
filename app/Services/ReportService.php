@@ -47,6 +47,8 @@ final class ReportService
         [$startAt, $endAt, $label] = $this->periodBounds($selectedDate, 'daily', $timezone);
         $empty = [];
         $sales = $this->salesDetailByServerProduct($restaurantId, $startAt, $endAt, false, 0, $empty);
+        $servedWithoutSale = $this->servedRequestsWithoutSaleForReport($restaurantId, $startAt, $endAt, $empty);
+        $sales = $this->mergeServedWithoutSaleIntoSalesDetail($sales, $servedWithoutSale);
         $kitchen = $this->kitchenDetailByCook($restaurantId, $startAt, $endAt, 0, $empty);
         $stock = $this->stockDetailByPerson($restaurantId, $startAt, $endAt, 0, $empty);
 
@@ -57,6 +59,8 @@ final class ReportService
 
         [$weekStart, $weekEnd, $weekLabel] = $this->periodBounds($selectedDate, 'weekly', $timezone);
         $salesWeek = $this->salesDetailByServerProduct($restaurantId, $weekStart, $weekEnd, false, 0, $empty);
+        $servedWithoutSaleWeek = $this->servedRequestsWithoutSaleForReport($restaurantId, $weekStart, $weekEnd, $empty);
+        $salesWeek = $this->mergeServedWithoutSaleIntoSalesDetail($salesWeek, $servedWithoutSaleWeek);
         $activityWeek = $this->activityIndex($restaurantId, $weekStart, $weekEnd, []);
         $autoClosedWeek = $this->autoClosedServerRequestAudits($restaurantId, $weekStart, $weekEnd);
         $execWeek = $this->executiveSummaryRollup($restaurantId, $weekStart, $weekEnd, $weekLabel, $empty, $salesWeek, $activityWeek);
@@ -922,9 +926,11 @@ final class ReportService
         $financeScope = $serverReportScopeUserId > 0 ? $serverReportScopeUserId : null;
         $salesByServer = $this->salesByServer($restaurantId, $startAt, $endAt, $closedOnly, $userId);
         $reportActivityIndex = $this->activityIndex($restaurantId, $startAt, $endAt, $viewFilters);
-        $reportSalesDetailByServer = $this->salesDetailByServerProduct($restaurantId, $startAt, $endAt, $closedOnly, $userId, $viewFilters);
-        $reportExecutiveSummary = $this->executiveSummaryRollup($restaurantId, $startAt, $endAt, $label, $viewFilters, $reportSalesDetailByServer, $reportActivityIndex);
         $servedWithoutSale = $this->servedRequestsWithoutSaleForReport($restaurantId, $startAt, $endAt, $viewFilters);
+        $salesByServer = $this->mergeServedWithoutSaleIntoSalesByServer($salesByServer, $servedWithoutSale);
+        $reportSalesDetailByServer = $this->salesDetailByServerProduct($restaurantId, $startAt, $endAt, $closedOnly, $userId, $viewFilters);
+        $reportSalesDetailByServer = $this->mergeServedWithoutSaleIntoSalesDetail($reportSalesDetailByServer, $servedWithoutSale);
+        $reportExecutiveSummary = $this->executiveSummaryRollup($restaurantId, $startAt, $endAt, $label, $viewFilters, $reportSalesDetailByServer, $reportActivityIndex);
         $servedWithoutSaleSummary = $this->summarizeServedRequestsWithoutSale($servedWithoutSale);
         $summary = ['period' => $period, 'period_label' => $label, 'selected_date' => $selectedDate->format('Y-m-d'), 'timezone' => $timezone->getName(), 'range_start' => $startAt->format('Y-m-d H:i:s'), 'range_end' => $displayEndAt->format('Y-m-d H:i:s'), 'opening_stock_total' => $this->openingStock($restaurantId, $startAt, $currentStock), 'current_stock_total' => $currentStock, 'kitchen_outputs' => $this->sumMovement($restaurantId, $startAt, $endAt, 'SORTIE_CUISINE'), 'stock_returns' => $this->sumMovement($restaurantId, $startAt, $endAt, 'RETOUR_STOCK'), 'kitchen_production' => $this->sumProduction($restaurantId, $startAt, $endAt), 'stock_report' => $this->stockReport($restaurantId, $startAt, $endAt), 'kitchen_report' => $this->kitchenReport($restaurantId, $startAt, $endAt), 'server_report' => $this->serverReport($restaurantId, $startAt, $endAt), 'financial_report' => $this->financialReport($restaurantId, $startAt, $endAt, $displayEndAt, $financeScope), 'product_margins' => $this->productMargins($restaurantId, $startAt, $endAt), 'sales_by_server' => $salesByServer, 'sales_by_type' => $this->salesByType($restaurantId, $startAt, $endAt), 'material_losses' => $this->sumLosses($restaurantId, $startAt, $endAt, 'MATIERE_PREMIERE'), 'financial_losses' => $this->sumLosses($restaurantId, $startAt, $endAt, 'ARGENT'), 'dish_yields' => $this->dishYields($restaurantId, $startAt, $endAt), 'product_issues' => $this->productIssues($restaurantId, $startAt, $endAt), 'incident_statuses' => $this->incidentsByField($restaurantId, $startAt, $endAt, 'status'), 'incident_qualifications' => $this->incidentsByField($restaurantId, $startAt, $endAt, 'final_qualification'), 'incident_responsibilities' => $this->incidentsByField($restaurantId, $startAt, $endAt, 'responsibility_scope'), 'incident_cases' => $this->incidentCases($restaurantId, $startAt, $endAt), 'fraud_alerts' => $this->fraudAlerts($restaurantId, $startAt, $endAt), 'view_filters' => $viewFilters, 'people_overview' => $this->peopleOverview($restaurantId, $startAt, $endAt, $userId, $salesByServer, $viewFilters), 'activity_index' => $reportActivityIndex, 'nominative_timeline' => $this->nominativeTimeline($restaurantId, $startAt, $endAt, $viewFilters), 'sales_detail_by_server' => $reportSalesDetailByServer, 'executive_summary' => $reportExecutiveSummary, 'kitchen_detail_by_cook' => $this->kitchenDetailByCook($restaurantId, $startAt, $endAt, $userId, $viewFilters), 'stock_detail_by_person' => $this->stockDetailByPerson($restaurantId, $startAt, $endAt, $userId, $viewFilters)];
         $salesTotal = 0.0; foreach ($summary['sales_by_type'] as $row) { $salesTotal += (float) $row['total_amount']; }
@@ -935,15 +941,19 @@ final class ReportService
             'recorded_sales_total' => round($salesTotal, 2),
             'served_without_sale_count' => (int) ($servedWithoutSaleSummary['count'] ?? 0),
             'served_without_sale_total' => (float) ($servedWithoutSaleSummary['total_amount'] ?? 0),
-            'combined_activity_total' => round($salesTotal + (float) ($servedWithoutSaleSummary['total_amount'] ?? 0), 2),
+            'combined_activity_total' => round((float) ($reportSalesDetailByServer['grand_total'] ?? 0), 2),
         ];
-        $summary['general_report'] = ['total_product_value' => (float) $summary['kitchen_report']['value_produced'], 'total_sold_value' => $salesTotal, 'real_material_cost_value' => (float) $summary['kitchen_report']['real_material_cost_of_sales'], 'total_losses_value' => (float) $summary['stock_report']['stock_losses_value'] + (float) $summary['kitchen_report']['kitchen_losses_value'] + (float) $summary['server_report']['server_loss_value'] + (float) $summary['financial_losses'], 'stock_loss_value' => (float) $summary['stock_report']['stock_losses_value'], 'kitchen_loss_value' => (float) $summary['kitchen_report']['kitchen_losses_value'], 'server_loss_value' => (float) $summary['server_report']['server_loss_value']];
-        $summary['estimated_profit'] = $salesTotal - (float) $summary['kitchen_report']['real_material_cost_of_sales'] - (float) $summary['stock_report']['stock_losses_value'] - (float) $summary['kitchen_report']['kitchen_losses_value'] - (float) $summary['server_report']['server_loss_value'] - (float) $summary['financial_losses'];
+        $activitySalesTotal = round((float) ($reportSalesDetailByServer['grand_total'] ?? 0), 2);
+        $summary['general_report'] = ['total_product_value' => (float) $summary['kitchen_report']['value_produced'], 'total_sold_value' => $activitySalesTotal, 'real_material_cost_value' => (float) $summary['kitchen_report']['real_material_cost_of_sales'], 'total_losses_value' => (float) $summary['stock_report']['stock_losses_value'] + (float) $summary['kitchen_report']['kitchen_losses_value'] + (float) $summary['server_report']['server_loss_value'] + (float) $summary['financial_losses'], 'stock_loss_value' => (float) $summary['stock_report']['stock_losses_value'], 'kitchen_loss_value' => (float) $summary['kitchen_report']['kitchen_losses_value'], 'server_loss_value' => (float) $summary['server_report']['server_loss_value']];
+        $summary['estimated_profit'] = $activitySalesTotal - (float) $summary['kitchen_report']['real_material_cost_of_sales'] - (float) $summary['stock_report']['stock_losses_value'] - (float) $summary['kitchen_report']['kitchen_losses_value'] - (float) $summary['server_report']['server_loss_value'] - (float) $summary['financial_losses'];
         $summary['general_report']['estimated_gross_profit'] = (float) $summary['estimated_profit'];
         $summary['auto_closed_operations'] = $this->autoClosedServerRequestAudits($restaurantId, $startAt, $endAt);
         $summary['leaderboards'] = $this->leaderboardSlices($restaurantId, $selectedDate);
         $summary['agents_activity'] = $this->agentsActivityBreakdown($restaurantId, $startAt, $endAt, $viewFilters, $reportActivityIndex);
-        $summary['sales_by_category'] = $this->salesByCategoryReport($restaurantId, $startAt, $endAt, $closedOnly, $userId, $viewFilters);
+        $summary['sales_by_category'] = $this->mergeServedWithoutSaleIntoSalesByCategory(
+            $this->salesByCategoryReport($restaurantId, $startAt, $endAt, $closedOnly, $userId, $viewFilters),
+            $servedWithoutSale
+        );
         $summary['server_remittance_shortfall'] = $this->serverRemittanceShortfallBreakdown($restaurantId, $startAt, $endAt, $userId);
         $needleArt = mb_strtolower(trim((string) ($viewFilters['article_search'] ?? '')), 'UTF-8');
         if ($needleArt !== '') {
@@ -2216,6 +2226,83 @@ final class ReportService
     }
 
     /**
+     * @param array{categories:list<array<string, mixed>>, grand_total:float} $salesByCategory
+     * @param list<array<string, mixed>> $servedWithoutSale
+     *
+     * @return array{categories:list<array<string, mixed>>, grand_total:float}
+     */
+    private function mergeServedWithoutSaleIntoSalesByCategory(array $salesByCategory, array $servedWithoutSale): array
+    {
+        $byCategory = [];
+        foreach (($salesByCategory['categories'] ?? []) as $categoryRow) {
+            $key = ((int) ($categoryRow['category_id'] ?? 0)) . '|' . (string) ($categoryRow['category_name'] ?? '');
+            $byCategory[$key] = $categoryRow;
+        }
+
+        foreach ($servedWithoutSale as $requestRow) {
+            foreach (($requestRow['lines'] ?? []) as $line) {
+                $lineTotal = (float) ($line['line_total'] ?? 0);
+                $soldQuantity = (float) ($line['sold_quantity'] ?? 0);
+                if ($lineTotal <= 0.0001 || $soldQuantity <= 0.0001) {
+                    continue;
+                }
+
+                $categoryId = (int) ($line['category_id'] ?? 0);
+                $categoryName = (string) ($line['category_name'] ?? 'Sans categorie');
+                $key = $categoryId . '|' . $categoryName;
+                if (!isset($byCategory[$key])) {
+                    $byCategory[$key] = [
+                        'category_id' => $categoryId,
+                        'category_name' => $categoryName,
+                        'quantity_total' => 0.0,
+                        'total_amount' => 0.0,
+                        'top_item_name' => '',
+                        'top_item_qty' => 0.0,
+                        'top_item_amount' => 0.0,
+                    ];
+                }
+
+                $byCategory[$key]['quantity_total'] = round((float) ($byCategory[$key]['quantity_total'] ?? 0) + $soldQuantity, 3);
+                $byCategory[$key]['total_amount'] = round((float) ($byCategory[$key]['total_amount'] ?? 0) + $lineTotal, 2);
+                if (
+                    $lineTotal > (float) ($byCategory[$key]['top_item_amount'] ?? 0) + 0.0001
+                    || (
+                        abs($lineTotal - (float) ($byCategory[$key]['top_item_amount'] ?? 0)) <= 0.0001
+                        && $soldQuantity > (float) ($byCategory[$key]['top_item_qty'] ?? 0)
+                    )
+                ) {
+                    $byCategory[$key]['top_item_name'] = (string) ($line['menu_item_name'] ?? '');
+                    $byCategory[$key]['top_item_qty'] = round($soldQuantity, 3);
+                    $byCategory[$key]['top_item_amount'] = round($lineTotal, 2);
+                }
+            }
+        }
+
+        $grand = 0.0;
+        $categories = array_values($byCategory);
+        foreach ($categories as &$categoryRow) {
+            $categoryRow['quantity_total'] = round((float) ($categoryRow['quantity_total'] ?? 0), 3);
+            $categoryRow['total_amount'] = round((float) ($categoryRow['total_amount'] ?? 0), 2);
+            $grand += (float) ($categoryRow['total_amount'] ?? 0);
+        }
+        unset($categoryRow);
+
+        foreach ($categories as &$categoryRow) {
+            $categoryRow['pct_of_grand'] = $grand <= 0.0
+                ? 0.0
+                : round(100.0 * (float) ($categoryRow['total_amount'] ?? 0) / $grand, 2);
+        }
+        unset($categoryRow);
+
+        usort($categories, static fn (array $a, array $b): int => ((float) ($b['total_amount'] ?? 0)) <=> ((float) ($a['total_amount'] ?? 0)));
+
+        return [
+            'categories' => $categories,
+            'grand_total' => round($grand, 2),
+        ];
+    }
+
+    /**
      * Ventes détaillées par serveur et par produit (carte/menu).
      *
      * @return array{servers: list<array<string, mixed>>, grand_total: float}
@@ -2300,6 +2387,157 @@ final class ReportService
         unset($srv);
 
         return ['servers' => $servers, 'grand_total' => round($grand, 2)];
+    }
+
+    /**
+     * @param array{servers:list<array<string, mixed>>, grand_total:float} $salesDetail
+     * @param list<array<string, mixed>> $servedWithoutSale
+     *
+     * @return array{servers:list<array<string, mixed>>, grand_total:float}
+     */
+    private function mergeServedWithoutSaleIntoSalesDetail(array $salesDetail, array $servedWithoutSale): array
+    {
+        $byServer = [];
+        foreach (($salesDetail['servers'] ?? []) as $serverRow) {
+            $key = $this->salesDetailServerKey($serverRow);
+            $byServer[$key] = $serverRow;
+            $byServer[$key]['lines'] = is_array($serverRow['lines'] ?? null) ? array_values($serverRow['lines']) : [];
+        }
+
+        foreach ($servedWithoutSale as $requestRow) {
+            $serverName = (string) ($requestRow['server_name'] ?? 'Vente automatique');
+            if ($serverName === '') {
+                $serverName = 'Vente automatique';
+            }
+            $serverUserId = (int) ($requestRow['server_user_id'] ?? 0);
+            $serverRoleCode = (string) ($requestRow['server_role_code'] ?? '');
+            $key = $serverUserId . '|' . $serverName . '|' . $serverRoleCode;
+            if (!isset($byServer[$key])) {
+                $byServer[$key] = [
+                    'server_name' => $serverName,
+                    'server_user_id' => $serverUserId,
+                    'server_role_code' => $serverRoleCode,
+                    'lines' => [],
+                    'server_total' => 0.0,
+                ];
+            }
+
+            foreach (($requestRow['lines'] ?? []) as $line) {
+                $menuItemId = (int) ($line['menu_item_id'] ?? 0);
+                $soldQuantity = (float) ($line['sold_quantity'] ?? 0);
+                $lineTotal = (float) ($line['line_total'] ?? 0);
+                if ($menuItemId <= 0 || $soldQuantity <= 0.0001 || $lineTotal <= 0.0001) {
+                    continue;
+                }
+
+                $merged = false;
+                foreach ($byServer[$key]['lines'] as &$existingLine) {
+                    if ((int) ($existingLine['menu_item_id'] ?? 0) !== $menuItemId) {
+                        continue;
+                    }
+                    $existingLine['qty_sold'] = round((float) ($existingLine['qty_sold'] ?? 0) + $soldQuantity, 3);
+                    $existingLine['line_total'] = round((float) ($existingLine['line_total'] ?? 0) + $lineTotal, 2);
+                    $merged = true;
+                    break;
+                }
+                unset($existingLine);
+
+                if (!$merged) {
+                    $byServer[$key]['lines'][] = [
+                        'menu_item_id' => $menuItemId,
+                        'menu_item_name' => (string) ($line['menu_item_name'] ?? ''),
+                        'qty_sold' => round($soldQuantity, 3),
+                        'line_total' => round($lineTotal, 2),
+                        'pct_of_server_sales' => 0.0,
+                    ];
+                }
+
+                $byServer[$key]['server_total'] = round((float) ($byServer[$key]['server_total'] ?? 0) + $lineTotal, 2);
+            }
+        }
+
+        $grand = 0.0;
+        $servers = array_values($byServer);
+        foreach ($servers as &$serverRow) {
+            usort(
+                $serverRow['lines'],
+                static fn (array $left, array $right): int => ((float) ($right['line_total'] ?? 0)) <=> ((float) ($left['line_total'] ?? 0))
+            );
+            $grand += (float) ($serverRow['server_total'] ?? 0);
+        }
+        unset($serverRow);
+
+        foreach ($servers as &$serverRow) {
+            $serverTotal = (float) ($serverRow['server_total'] ?? 0);
+            $serverRow['pct_of_grand_total'] = $grand <= 0.0 ? 0.0 : round(100.0 * $serverTotal / $grand, 2);
+            foreach ($serverRow['lines'] as &$line) {
+                $lineTotal = (float) ($line['line_total'] ?? 0);
+                $line['pct_of_server_sales'] = $serverTotal <= 0.0 ? 0.0 : round(100.0 * $lineTotal / $serverTotal, 2);
+            }
+            unset($line);
+        }
+        unset($serverRow);
+
+        usort($servers, static fn (array $a, array $b): int => ((float) ($b['server_total'] ?? 0)) <=> ((float) ($a['server_total'] ?? 0)));
+
+        return [
+            'servers' => $servers,
+            'grand_total' => round($grand, 2),
+        ];
+    }
+
+    /**
+     * @param list<array<string, mixed>> $salesByServer
+     * @param list<array<string, mixed>> $servedWithoutSale
+     *
+     * @return list<array<string, mixed>>
+     */
+    private function mergeServedWithoutSaleIntoSalesByServer(array $salesByServer, array $servedWithoutSale): array
+    {
+        $byServer = [];
+        foreach ($salesByServer as $row) {
+            $serverName = (string) ($row['server_name'] ?? 'Vente automatique');
+            $byServer[$serverName] = [
+                'server_name' => $serverName,
+                'sales_count' => (int) ($row['sales_count'] ?? 0),
+                'total_amount' => round((float) ($row['total_amount'] ?? 0), 2),
+            ];
+        }
+
+        foreach ($servedWithoutSale as $requestRow) {
+            $serverName = (string) ($requestRow['server_name'] ?? 'Vente automatique');
+            if ($serverName === '') {
+                $serverName = 'Vente automatique';
+            }
+            if (!isset($byServer[$serverName])) {
+                $byServer[$serverName] = [
+                    'server_name' => $serverName,
+                    'sales_count' => 0,
+                    'total_amount' => 0.0,
+                ];
+            }
+
+            $byServer[$serverName]['sales_count'] += 1;
+            $byServer[$serverName]['total_amount'] = round(
+                (float) ($byServer[$serverName]['total_amount'] ?? 0) + (float) ($requestRow['total_virtual_sold_amount'] ?? 0),
+                2
+            );
+        }
+
+        $rows = array_values($byServer);
+        usort($rows, static fn (array $a, array $b): int => ((float) ($b['total_amount'] ?? 0)) <=> ((float) ($a['total_amount'] ?? 0)));
+
+        return $rows;
+    }
+
+    /**
+     * @param array<string, mixed> $serverRow
+     */
+    private function salesDetailServerKey(array $serverRow): string
+    {
+        return (int) ($serverRow['server_user_id'] ?? 0)
+            . '|' . (string) ($serverRow['server_name'] ?? '')
+            . '|' . (string) ($serverRow['server_role_code'] ?? '');
     }
 
     /**

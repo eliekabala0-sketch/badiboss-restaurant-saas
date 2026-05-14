@@ -261,8 +261,11 @@ final class StockService
     public function listMovementHistoryRows(int $restaurantId): array
     {
         $this->ensureStockMovementEnum();
+        $categoryLabelSelect = $this->tableColumnExists('stock_items', 'category_label')
+            ? 'si.category_label AS stock_item_category_label,'
+            : 'NULL AS stock_item_category_label,';
         $statement = $this->database->pdo()->prepare(
-            'SELECT sm.*, si.name AS stock_item_name, si.unit_name, si.category_label AS stock_item_category_label,
+            'SELECT sm.*, si.name AS stock_item_name, si.unit_name, ' . $categoryLabelSelect . '
                     u.full_name AS user_name,
                     ur.code AS user_role_code,
                     v.full_name AS validated_by_name,
