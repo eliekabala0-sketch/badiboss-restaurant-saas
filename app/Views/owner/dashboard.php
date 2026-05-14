@@ -66,12 +66,18 @@ $day_start_hold = $day_start_hold ?? ['blocked' => false, 'reasons' => [], 'item
 <?php
 $disciplinary_alerts = $disciplinary_alerts ?? [];
 $discipline_work_schedule = $discipline_work_schedule ?? null;
+$disciplineDashboardLoaded = !empty($discipline_dashboard_loaded);
 ?>
 <?php if (can_access('staff.team_gauges.view') && $disciplinary_alerts !== []): ?>
 <details class="card no-print" style="padding:12px 16px; margin-bottom:18px;" data-autoclose-details>
     <summary style="font-weight:600; cursor:pointer;">Alertes disciplinaires</summary>
     <?php require base_path('app/Views/partials/disciplinary_alerts_foldable.php'); ?>
 </details>
+<?php endif; ?>
+<?php if (can_access('staff.team_gauges.view') && !$disciplineDashboardLoaded): ?>
+<section class="card no-print" style="padding:16px 18px; margin-bottom:18px;">
+    <p class="muted" style="margin:0;">Les jauges et alertes d’équipe sont disponibles sur <a href="/owner/discipline">Discipline</a>. Pour les charger ici ponctuellement : <a href="/owner?discipline_dashboard=1">ouvrir la version complète</a>.</p>
+</section>
 <?php endif; ?>
 <section class="card brand-visual" style="margin-bottom:24px; background-image:url('<?= e($restaurantCover) ?>');">
     <div class="brand-visual-body">

@@ -342,12 +342,13 @@ final class DashboardController
         $todayY = Container::getInstance()->get('reportService')->todayForRestaurant($restaurantId);
         $staffDisc = Container::getInstance()->get('staffDiscipline');
         $staffDisc->ensureSchema();
+        $loadDisciplineDashboard = (string) ($request->query['discipline_dashboard'] ?? '') === '1';
 
         $dash = $this->ownerOperationalDashboardBundle($request, $restaurantId);
         $wideTasks = Container::getInstance()->get('regularizationGate')->listRestaurantWideTasks($restaurantId, 30);
         $hold = Container::getInstance()->get('regularizationGate')->assessForUser($restaurantId, $actor);
         $disciplineSchedule = $staffDisc->disciplineWorkScheduleForRestaurant($restaurantId);
-        $disciplinaryAlerts = can_access('staff.team_gauges.view')
+        $disciplinaryAlerts = $loadDisciplineDashboard && can_access('staff.team_gauges.view')
             ? $staffDisc->listDisciplinaryAlerts($restaurantId)
             : [];
 
@@ -380,8 +381,9 @@ final class DashboardController
             'restaurant_reg_tasks' => $wideTasks,
             'day_start_hold' => $hold,
             'discipline_work_schedule' => $disciplineSchedule,
+            'discipline_dashboard_loaded' => $loadDisciplineDashboard,
             'disciplinary_alerts' => $disciplinaryAlerts,
-            'staff_gauges_overview' => can_access('staff.team_gauges.view')
+            'staff_gauges_overview' => $loadDisciplineDashboard && can_access('staff.team_gauges.view')
                 ? $staffDisc->gaugesSnapshotRestaurantOperational(
                     $restaurantId,
                     (string) ($dash['dash_preset'] ?? 'today'),
