@@ -885,9 +885,9 @@ final class StaffDisciplineService
                 $dayBreakdown = is_array($active['score_breakdown'] ?? null) ? $active['score_breakdown'] : [];
                 $dayKind = (string) ($dayBreakdown['evaluation_kind'] ?? '');
                 $dayActions = (int) ($dayBreakdown['action_count'] ?? 0);
-                $monthScore = $weekly;
-                $monthZone = $this->zoneFromScoreNullable(is_numeric($monthScore) ? (float) $monthScore : null);
-                $monthEvalDays = is_numeric($weekly) ? 1 : 0;
+                $monthScore = null;
+                $monthZone = (string) ($active['zone'] ?? 'non_evalue');
+                $monthEvalDays = 0;
                 $monthActions = $dayActions;
                 $unjustified = $dayKind === 'absence_unjustified' ? 1 : 0;
                 $softAbsence = in_array($dayKind, ['absence_authorized', 'absence_illness', 'late_justified'], true) ? 1 : 0;
