@@ -882,56 +882,16 @@ final class StaffDisciplineService
                 $engagementStart = $this->effectiveAgentEngagementStartYmd($restaurantId, $uid, $tz);
                 $monthStart = substr($todayYmd, 0, 7) . '-01';
                 $periodStart = max($monthStart, $globalStart, $engagementStart);
-
-                $monthScore = null;
-                $monthZone = 'non_evalue';
-                $monthEvalDays = 0;
-                $monthActions = 0;
-                $unjustified = 0;
-                $softAbsence = 0;
-                $zeroActivity = 0;
-
-                if ($periodStart <= $todayYmd) {
-                    $sum = 0.0;
-                    try {
-                        $cursor = new DateTimeImmutable($periodStart . ' 00:00:00', $tz);
-                        $end = new DateTimeImmutable($todayYmd . ' 00:00:00', $tz);
-                    } catch (\Throwable) {
-                        $cursor = null;
-                        $end = null;
-                    }
-                    if ($cursor !== null && $end !== null) {
-                        for ($d = $cursor; $d <= $end; $d = $d->modify('+1 day')) {
-                            $ev = $this->evaluateCalendarDay($restaurantId, $uid, $roleCode, $d->format('Y-m-d'), $tz);
-                            if (!($ev['evaluated'] ?? false)) {
-                                continue;
-                            }
-                            $score = $ev['score'] ?? null;
-                            if ($score !== null && is_numeric($score)) {
-                                $sum += (float) $score;
-                                $monthEvalDays++;
-                            }
-                            $actions = (int) ($ev['action_count'] ?? 0);
-                            $monthActions += $actions;
-                            $ek = (string) ($ev['evaluation_kind'] ?? '');
-                            if ($ek === 'absence_unjustified') {
-                                $unjustified++;
-                            } elseif ($ek === 'absence_authorized' || $ek === 'absence_illness' || $ek === 'late_justified') {
-                                $softAbsence++;
-                            }
-                            if ($actions === 0 && !in_array($ek, ['neutral_rest', 'neutral_exempt', 'manager_present_confirm'], true)) {
-                                $zeroActivity++;
-                            }
-                        }
-                    }
-                    if ($monthEvalDays > 0) {
-                        $monthScore = round($sum / $monthEvalDays, 1);
-                        if (!is_finite($monthScore)) {
-                            $monthScore = null;
-                        }
-                        $monthZone = $this->zoneFromScoreNullable($monthScore);
-                    }
-                }
+                $dayBreakdown = is_array($active['score_breakdown'] ?? null) ? $active['score_breakdown'] : [];
+                $dayKind = (string) ($dayBreakdown['evaluation_kind'] ?? '');
+                $dayActions = (int) ($dayBreakdown['action_count'] ?? 0);
+                $monthScore = $weekly;
+                $monthZone = $this->zoneFromScoreNullable(is_numeric($monthScore) ? (float) $monthScore : null);
+                $monthEvalDays = is_numeric($weekly) ? 1 : 0;
+                $monthActions = $dayActions;
+                $unjustified = $dayKind === 'absence_unjustified' ? 1 : 0;
+                $softAbsence = in_array($dayKind, ['absence_authorized', 'absence_illness', 'late_justified'], true) ? 1 : 0;
+                $zeroActivity = ($dayActions === 0 && !in_array($dayKind, ['neutral_rest', 'neutral_exempt', 'manager_present_confirm'], true)) ? 1 : 0;
 
                 $shortfallHits = $roleCode === 'cashier_server'
                     ? $this->ledgerReasonCountForUserDayRange(
