@@ -798,11 +798,33 @@ final class StaffDisciplineService
             if (($u['status'] ?? '') !== 'active') {
                 continue;
             }
+            try {
+                $gauges = $this->gaugesForUserOperationalPanel($restaurantId, $uid, $preset, $anchorYmd);
+            } catch (\Throwable) {
+                $gauges = [
+                    'daily' => null,
+                    'weekly_avg' => null,
+                    'monthly_avg' => null,
+                    'zone' => 'non_evalue',
+                    'ledger_preview' => [],
+                    'dash_preset' => $preset,
+                    'dash_anchor_ymd' => $anchorYmd,
+                    'active_period' => [
+                        'titre' => 'Lecture a verifier',
+                        'jour' => $anchorYmd,
+                        'score' => null,
+                        'zone' => 'non_evalue',
+                        'points_detail' => [],
+                        'note' => 'Une anomalie de calcul a ete isolee pour cet agent. Les autres jauges restent chargees.',
+                    ],
+                    'row_metrics' => [],
+                ];
+            }
             $out[] = [
                 'user_id' => $uid,
                 'full_name' => (string) ($u['full_name'] ?? ''),
                 'role_code' => $u['role_code'] ?? null,
-                'gauges' => $this->gaugesForUserOperationalPanel($restaurantId, $uid, $preset, $anchorYmd),
+                'gauges' => $gauges,
             ];
         }
 

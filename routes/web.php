@@ -26,6 +26,8 @@ use App\Middleware\SuperAdminMiddleware;
 $router->get('/', [RestaurantOnboardingController::class, 'home']);
 $router->get('/health', [DashboardController::class, 'health']);
 $router->get('/health/version', [DashboardController::class, 'healthVersion']);
+$router->get('/media/restaurants/{restaurantCode}/menu/{filename}', [MediaController::class, 'menuUpload']);
+$router->get('/media/restaurants/{restaurantCode}/{filename}', [MediaController::class, 'restaurantUpload']);
 $router->get('/uploads/restaurants/{restaurantCode}/{filename}', [MediaController::class, 'restaurantUpload']);
 $router->get('/uploads/restaurants/{restaurantCode}/menu/{filename}', [MediaController::class, 'menuUpload']);
 $router->get('/login', [AuthController::class, 'showLogin']);

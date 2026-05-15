@@ -276,6 +276,14 @@ function restaurant_media_url(?string $value): ?string
         return $value;
     }
 
+    if (str_starts_with($value, '/uploads/restaurants/')) {
+        return '/media/restaurants/' . ltrim(substr($value, strlen('/uploads/restaurants/')), '/');
+    }
+
+    if (str_starts_with($value, 'uploads/restaurants/')) {
+        return '/media/restaurants/' . ltrim(substr($value, strlen('uploads/restaurants/')), '/');
+    }
+
     return '/' . ltrim($value, '/');
 }
 
