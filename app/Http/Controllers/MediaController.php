@@ -11,7 +11,7 @@ final class MediaController
     public function restaurantUpload(Request $request): void
     {
         $restaurantCode = $this->sanitizePathSegment((string) $request->route('restaurantCode', ''));
-        $filename = $this->sanitizePathSegment((string) $request->route('filename', ''));
+        $filename = $this->resolveFilename($request);
 
         $this->serveUpload(
             base_path('public/uploads/restaurants/' . $restaurantCode . '/' . $filename),
@@ -22,7 +22,7 @@ final class MediaController
     public function menuUpload(Request $request): void
     {
         $restaurantCode = $this->sanitizePathSegment((string) $request->route('restaurantCode', ''));
-        $filename = $this->sanitizePathSegment((string) $request->route('filename', ''));
+        $filename = $this->resolveFilename($request);
 
         $this->serveUpload(
             base_path('public/uploads/restaurants/' . $restaurantCode . '/menu/' . $filename),
@@ -66,6 +66,13 @@ final class MediaController
         $value = str_replace(['..', '/', '\\'], '', $value);
 
         return preg_replace('/[^A-Za-z0-9._-]/', '', $value) ?? '';
+    }
+
+    private function resolveFilename(Request $request): string
+    {
+        $raw = (string) ($request->route('filename', '') ?: ($request->query['file'] ?? ''));
+
+        return $this->sanitizePathSegment($raw);
     }
 
     private function fallbackKindFromFilename(string $filename): string

@@ -276,12 +276,12 @@ function restaurant_media_url(?string $value): ?string
         return $value;
     }
 
-    if (str_starts_with($value, '/uploads/restaurants/')) {
-        return '/media/restaurants/' . ltrim(substr($value, strlen('/uploads/restaurants/')), '/');
+    $normalized = ltrim($value, '/');
+    if (preg_match('#^uploads/restaurants/([^/]+)/menu/([^/]+)$#', $normalized, $m) === 1) {
+        return '/media/restaurants/' . rawurlencode($m[1]) . '/menu?file=' . rawurlencode($m[2]);
     }
-
-    if (str_starts_with($value, 'uploads/restaurants/')) {
-        return '/media/restaurants/' . ltrim(substr($value, strlen('uploads/restaurants/')), '/');
+    if (preg_match('#^uploads/restaurants/([^/]+)/([^/]+)$#', $normalized, $m) === 1) {
+        return '/media/restaurants/' . rawurlencode($m[1]) . '?file=' . rawurlencode($m[2]);
     }
 
     return '/' . ltrim($value, '/');

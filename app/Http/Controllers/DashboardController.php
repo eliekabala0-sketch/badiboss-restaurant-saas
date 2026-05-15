@@ -505,7 +505,7 @@ final class DashboardController
             'today_ymd' => $todayY,
             'discipline_schedule' => $staffDisc->disciplineWorkScheduleForRestaurant($restaurantId),
             'alerts' => $loadAlerts ? $staffDisc->listDisciplinaryAlerts($restaurantId) : [],
-            'gauge_rows' => $loadHeavy ? $staffDisc->gaugesSnapshotRestaurantOperational($restaurantId, 'today', $todayY) : [],
+            'gauge_rows' => $loadHeavy ? $staffDisc->gaugesSnapshotRestaurantDailyLight($restaurantId, $todayY) : [],
             'discipline_heavy_loaded' => $loadHeavy,
             'discipline_alerts_loaded' => $loadAlerts,
             'staff_users' => $attUsers,

@@ -834,6 +834,157 @@ final class StaffDisciplineService
     }
 
     /**
+     * Lecture detaillee discipline du jour, allegee pour les ecrans owner / gerant.
+     *
+     * @return list<array{user_id:int, full_name:string, role_code:?string, gauges: array<string,mixed>}>
+     */
+    public function gaugesSnapshotRestaurantDailyLight(int $restaurantId, string $todayYmd): array
+    {
+        $this->ensureSchema();
+        $tz = Container::getInstance()->get('reportService')->timezoneForRestaurantReports($restaurantId);
+        $users = Container::getInstance()->get('roleAdmin')->listUsersForRestaurant($restaurantId);
+        $out = [];
+
+        foreach ($users as $u) {
+            $uid = (int) ($u['id'] ?? 0);
+            $roleCode = (string) ($u['role_code'] ?? '');
+            if ($uid <= 0 || $this->isOwnerDisciplineRole($roleCode)) {
+                continue;
+            }
+            if (($u['status'] ?? '') !== 'active') {
+                continue;
+            }
+
+            $gauges = [
+                'daily' => null,
+                'weekly_avg' => null,
+                'monthly_avg' => null,
+                'zone' => 'non_evalue',
+                'ledger_preview' => [],
+                'dash_preset' => 'today',
+                'dash_anchor_ymd' => $todayYmd,
+                'active_period' => [
+                    'titre' => 'Aujourd hui',
+                    'jour' => $todayYmd,
+                    'score' => null,
+                    'zone' => 'non_evalue',
+                    'points_detail' => [],
+                    'score_breakdown' => ['evaluated' => false, 'action_count' => 0],
+                    'note' => 'Lecture discipline indisponible pour cet agent.',
+                ],
+                'row_metrics' => [],
+            ];
+
+            try {
+                $active = $this->snapshotDayGauge($restaurantId, $uid, $todayYmd, 'Aujourd hui', $tz);
+                $weekly = $this->averageLastDaysNullable($restaurantId, $uid, $todayYmd, 7, $tz);
+                $globalStart = $this->effectiveGlobalStartYmd($restaurantId);
+                $engagementStart = $this->effectiveAgentEngagementStartYmd($restaurantId, $uid, $tz);
+                $monthStart = substr($todayYmd, 0, 7) . '-01';
+                $periodStart = max($monthStart, $globalStart, $engagementStart);
+
+                $monthScore = null;
+                $monthZone = 'non_evalue';
+                $monthEvalDays = 0;
+                $monthActions = 0;
+                $unjustified = 0;
+                $softAbsence = 0;
+                $zeroActivity = 0;
+
+                if ($periodStart <= $todayYmd) {
+                    $sum = 0.0;
+                    try {
+                        $cursor = new DateTimeImmutable($periodStart . ' 00:00:00', $tz);
+                        $end = new DateTimeImmutable($todayYmd . ' 00:00:00', $tz);
+                    } catch (\Throwable) {
+                        $cursor = null;
+                        $end = null;
+                    }
+                    if ($cursor !== null && $end !== null) {
+                        for ($d = $cursor; $d <= $end; $d = $d->modify('+1 day')) {
+                            $ev = $this->evaluateCalendarDay($restaurantId, $uid, $roleCode, $d->format('Y-m-d'), $tz);
+                            if (!($ev['evaluated'] ?? false)) {
+                                continue;
+                            }
+                            $score = $ev['score'] ?? null;
+                            if ($score !== null && is_numeric($score)) {
+                                $sum += (float) $score;
+                                $monthEvalDays++;
+                            }
+                            $actions = (int) ($ev['action_count'] ?? 0);
+                            $monthActions += $actions;
+                            $ek = (string) ($ev['evaluation_kind'] ?? '');
+                            if ($ek === 'absence_unjustified') {
+                                $unjustified++;
+                            } elseif ($ek === 'absence_authorized' || $ek === 'absence_illness' || $ek === 'late_justified') {
+                                $softAbsence++;
+                            }
+                            if ($actions === 0 && !in_array($ek, ['neutral_rest', 'neutral_exempt', 'manager_present_confirm'], true)) {
+                                $zeroActivity++;
+                            }
+                        }
+                    }
+                    if ($monthEvalDays > 0) {
+                        $monthScore = round($sum / $monthEvalDays, 1);
+                        if (!is_finite($monthScore)) {
+                            $monthScore = null;
+                        }
+                        $monthZone = $this->zoneFromScoreNullable($monthScore);
+                    }
+                }
+
+                $shortfallHits = $roleCode === 'cashier_server'
+                    ? $this->ledgerReasonCountForUserDayRange(
+                        $restaurantId,
+                        $uid,
+                        $periodStart,
+                        $todayYmd,
+                        ['server_shortfall_today', 'server_shortfall_legacy']
+                    )
+                    : 0;
+                $lateRemittance = $roleCode === 'cashier_server'
+                    ? $this->serverLateRemittanceMetricsForRange($restaurantId, $uid, $periodStart, $todayYmd)
+                    : ['late_count' => 0, 'max_delay_days' => 0];
+
+                $gauges = [
+                    'daily' => ($active['score'] ?? null),
+                    'weekly_avg' => $weekly,
+                    'monthly_avg' => $monthScore,
+                    'zone' => $monthZone,
+                    'ledger_preview' => array_slice((array) ($active['points_detail'] ?? []), -12),
+                    'dash_preset' => 'today',
+                    'dash_anchor_ymd' => $todayYmd,
+                    'active_period' => $active,
+                    'row_metrics' => [
+                        'activite_actions' => (int) (($active['score_breakdown']['action_count'] ?? 0)),
+                        'activite_pct_moyenne_periode' => null,
+                        'jours_evalues_periode' => $monthEvalDays,
+                        'absences_injustifiees' => $unjustified,
+                        'absences_justifiees_maladie' => $softAbsence,
+                        'jours_sans_activite_mesuree' => $zeroActivity,
+                        'manquants_caisse_hits' => $shortfallHits,
+                        'late_remittance_hits' => (int) ($lateRemittance['late_count'] ?? 0),
+                        'late_remittance_max_delay_days' => (int) ($lateRemittance['max_delay_days'] ?? 0),
+                        'actions_mois' => $monthActions,
+                    ],
+                ];
+            } catch (\Throwable) {
+            }
+
+            $out[] = [
+                'user_id' => $uid,
+                'full_name' => (string) ($u['full_name'] ?? ''),
+                'role_code' => $u['role_code'] ?? null,
+                'gauges' => $gauges,
+            ];
+        }
+
+        $this->sortOperationalGaugeSnapshotRows($out);
+
+        return $out;
+    }
+
+    /**
      * Règles horaires pour retard / remise caisse (paramètres restaurant, défauts raisonnables).
      *
      * @return array{work_start:string, arrival_grace_minutes:int, cash_deadline:string, notice_unset:bool}
