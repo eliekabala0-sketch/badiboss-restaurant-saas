@@ -431,12 +431,13 @@ final class DashboardController
         $restaurant = Container::getInstance()->get('restaurantAdmin')->findRestaurant($restaurantId);
         $staffDisc = Container::getInstance()->get('staffDiscipline');
         $staffDisc->ensureSchema();
+        $loadHeavy = (string) ($request->query['heavy'] ?? '') === '1';
         $todayY = Container::getInstance()->get('reportService')->todayForRestaurant($restaurantId);
         $monthIn = trim((string) ($request->query['month'] ?? ''));
         if ($monthIn === '') {
             $monthIn = substr($todayY, 0, 7);
         }
-        $preview = $staffDisc->payrollMonthPreview($restaurantId, $monthIn);
+        $preview = $staffDisc->payrollMonthPreview($restaurantId, $monthIn, $loadHeavy);
 
         view('owner/prepare-payroll', [
             'title' => 'Préparer la paie',
@@ -444,6 +445,7 @@ final class DashboardController
             'restaurant' => $restaurant,
             'payroll_preview' => $preview,
             'month_query' => $preview['month'],
+            'payroll_heavy_loaded' => $loadHeavy,
             'flash_success' => $flashSuccess,
             'flash_error' => $flashError,
         ]);
@@ -484,8 +486,9 @@ final class DashboardController
             'restaurant' => Container::getInstance()->get('restaurantAdmin')->findRestaurant($restaurantId),
             'today_ymd' => $todayY,
             'discipline_schedule' => $staffDisc->disciplineWorkScheduleForRestaurant($restaurantId),
-            'alerts' => $staffDisc->listDisciplinaryAlerts($restaurantId),
-            'gauge_rows' => $staffDisc->gaugesSnapshotRestaurantOperational($restaurantId, 'today', $todayY),
+            'alerts' => $loadHeavy ? $staffDisc->listDisciplinaryAlerts($restaurantId) : [],
+            'gauge_rows' => $loadHeavy ? $staffDisc->gaugesSnapshotRestaurantOperational($restaurantId, 'today', $todayY) : [],
+            'discipline_heavy_loaded' => $loadHeavy,
             'staff_users' => $attUsers,
             'payroll_profiles' => $payrollProfiles,
             'flash_success' => $flashSuccess,

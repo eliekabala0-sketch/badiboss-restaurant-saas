@@ -8,6 +8,7 @@ $rows = is_array($preview['rows'] ?? null) ? $preview['rows'] : [];
 $periodStart = (string) ($preview['period_start'] ?? '');
 $periodEnd = (string) ($preview['period_end'] ?? '');
 $periodLabel = (string) ($preview['period_label'] ?? '');
+$payrollHeavyLoaded = !empty($payroll_heavy_loaded);
 ?>
 <section class="topbar">
     <div class="brand">
@@ -18,6 +19,12 @@ $periodLabel = (string) ($preview['period_label'] ?? '');
 
 <?php if (!empty($flash_success)): ?><div class="flash-ok"><?= e($flash_success) ?></div><?php endif; ?>
 <?php if (!empty($flash_error)): ?><div class="flash-bad"><?= e($flash_error) ?></div><?php endif; ?>
+
+<?php if (!$payrollHeavyLoaded): ?>
+<section class="card no-print" style="padding:14px 16px; margin-bottom:16px;">
+    <p class="muted" style="margin:0;">Vue rapide chargee pour eviter un blocage. La jauge mensuelle, les absences, retards caisse, manquants et retenues sont charges; les scores jour et semaine detaillees restent a la demande : <a href="/owner/paie/preparer?month=<?= e(rawurlencode($month_query)) ?>&heavy=1">ouvrir la version detaillee</a>.</p>
+</section>
+<?php endif; ?>
 
 <section class="card no-print" style="padding:18px 22px; margin-bottom:24px;">
     <form method="get" action="/owner/paie/preparer" class="split" style="align-items:flex-end; gap:16px; flex-wrap:wrap;">
@@ -109,7 +116,7 @@ $periodLabel = (string) ($preview['period_label'] ?? '');
                         <div class="muted" style="font-size:0.85rem;">brut <?= e((string) $rawScore) ?> % · cap <?= e((string) $scoreCap) ?> %</div>
                     <?php endif; ?>
                     <div class="muted" style="font-size:0.85rem;">
-                        jour <?= $dayScore === null ? 'Non evalue' : e((string) $dayScore) . ' %' ?>
+                        jour <?= $payrollHeavyLoaded ? ($dayScore === null ? 'Non evalue' : e((string) $dayScore) . ' %') : 'sur demande' ?>
                         · semaine <?= $weekScore === null ? 'Non evalue' : e((string) $weekScore) . ' %' ?>
                         · mois <?= $monthScore === null ? 'Non evalue' : e((string) $monthScore) . ' %' ?>
                     </div>

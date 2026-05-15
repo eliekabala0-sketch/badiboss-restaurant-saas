@@ -7,6 +7,7 @@ $alerts = is_array($alerts ?? null) ? $alerts : [];
 $gaugeRows = is_array($gauge_rows ?? null) ? $gauge_rows : [];
 $staffUsers = is_array($staff_users ?? null) ? $staff_users : [];
 $payrollProfiles = is_array($payroll_profiles ?? null) ? $payroll_profiles : [];
+$disciplineHeavyLoaded = !empty($discipline_heavy_loaded);
 $cur = $restaurant['currency'] ?? 'USD';
 $disciplineZoneLabel = static function (?string $z): string {
     $s = (string) $z;
@@ -40,6 +41,12 @@ $disciplineZonePill = static function (string $z): string {
 
 <?php if (!empty($flash_success)): ?><div class="flash-ok"><?= e($flash_success) ?></div><?php endif; ?>
 <?php if (!empty($flash_error)): ?><div class="flash-bad"><?= e($flash_error) ?></div><?php endif; ?>
+
+<?php if (!$disciplineHeavyLoaded): ?>
+    <section class="card no-print" style="padding:14px 16px; margin-bottom:16px;">
+        <p class="muted" style="margin:0;">Vue rapide chargee pour eviter un blocage a l ouverture. Les jauges equipe et alertes detaillees se chargent a la demande : <a href="/owner/discipline?heavy=1">ouvrir la version detaillee</a>.</p>
+    </section>
+<?php endif; ?>
 
 <?php if (!empty($sched['notice_unset'])): ?>
     <section class="status-banner status-warning no-print" style="margin-bottom:18px;">
@@ -176,7 +183,9 @@ $disciplineZonePill = static function (string $z): string {
 
 <details class="card no-print" style="padding:14px 16px; margin-bottom:16px;" <?= $alerts === [] ? '' : 'open' ?> data-autoclose-details>
     <summary style="font-weight:600; cursor:pointer;">Alertes disciplinaires</summary>
-    <?php if ($alerts === []): ?>
+    <?php if (!$disciplineHeavyLoaded): ?>
+        <p class="muted" style="margin-top:12px;">Vue rapide : alertes detaillees non chargees ici. <a href="/owner/discipline?heavy=1">Afficher les alertes actives</a>.</p>
+    <?php elseif ($alerts === []): ?>
         <p class="muted" style="margin-top:12px;">Aucune alerte active.</p>
     <?php else: ?>
         <?php

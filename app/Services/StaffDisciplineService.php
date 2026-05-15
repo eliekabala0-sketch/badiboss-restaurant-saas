@@ -1638,7 +1638,7 @@ final class StaffDisciplineService
      *
      * @return array{month:string, period_label:string, period_start:string, period_end:string, rows: list<array<string,mixed>>}
      */
-    public function payrollMonthPreview(int $restaurantId, string $monthInput): array
+    public function payrollMonthPreview(int $restaurantId, string $monthInput, bool $includeHeavyScores = false): array
     {
         $this->ensureSchema();
         $rs = Container::getInstance()->get('reportService');
@@ -1681,8 +1681,8 @@ final class StaffDisciplineService
             }
             $roleCode = (string) ($u['role_code'] ?? '');
             $monthGauge = $this->snapshotCalendarMonthGauge($restaurantId, $uid, $end, false, $tz, $todayY);
-            $dayGauge = $this->snapshotDayGauge($restaurantId, $uid, $end, 'Jour', $tz);
-            $weekGauge = $this->snapshotOperationalWeekGauge($restaurantId, $uid, $end, $tz);
+            $dayGauge = $includeHeavyScores ? $this->snapshotDayGauge($restaurantId, $uid, $end, 'Jour', $tz) : [];
+            $weekGauge = $includeHeavyScores ? $this->snapshotOperationalWeekGauge($restaurantId, $uid, $end, $tz) : [];
             $disciplineMonth = is_array($monthGauge['score_breakdown']['month_rules'] ?? null)
                 ? $monthGauge['score_breakdown']['month_rules']
                 : [];

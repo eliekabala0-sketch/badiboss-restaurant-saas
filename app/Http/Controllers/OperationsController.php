@@ -1452,16 +1452,19 @@ final class OperationsController
             $isServerReporter ? (int) $actor['id'] : null,
             false,
         );
+        $loadHeavyReport = (string) ($request->query['heavy'] ?? '') === '1';
+        $reportFilters = $viewFilters;
+        $reportFilters['__report_heavy'] = $loadHeavyReport;
 
         $stockControlBundle = null;
-        if (can_access('stock.control.report.view')) {
+        if ($loadHeavyReport && can_access('stock.control.report.view')) {
             $stockControlBundle = Container::getInstance()->get('stockControlReport')->buildBundle($restaurantId, $date, $period);
         }
 
         $staffDisc = Container::getInstance()->get('staffDiscipline');
         $staffDisc->ensureSchema();
         $disciplineSchedule = $staffDisc->disciplineWorkScheduleForRestaurant($restaurantId);
-        $disciplinaryAlerts = (!$isServerReporter && can_access('staff.team_gauges.view'))
+        $disciplinaryAlerts = ($loadHeavyReport && !$isServerReporter && can_access('staff.team_gauges.view'))
             ? $staffDisc->listDisciplinaryAlerts($restaurantId)
             : [];
 
@@ -1470,7 +1473,7 @@ final class OperationsController
             'restaurant' => Container::getInstance()->get('restaurantAdmin')->findRestaurant($restaurantId),
             'date' => $date,
             'period' => $period,
-            'view_filters' => $viewFilters,
+            'view_filters' => $reportFilters,
             'report_users' => $reportUsers,
             'report_role_codes' => array_keys($reportRoleCodes),
             'report_menu_items' => Container::getInstance()->get('menuAdmin')->listPublicItems($restaurantId),
@@ -1478,7 +1481,7 @@ final class OperationsController
                 Container::getInstance()->get('stockService')->listItems($restaurantId),
                 static fn (array $row): bool => empty($row['archived_at'])
             )),
-            'report' => Container::getInstance()->get('reportService')->dailyReport($restaurantId, $date, $period, $viewFilters),
+            'report' => Container::getInstance()->get('reportService')->dailyReport($restaurantId, $date, $period, $reportFilters),
             'cash_today_snapshot' => $isServerReporter
                 ? null
                 : Container::getInstance()->get('reportService')->cashTodayOperationalSnapshot($restaurantId),
@@ -1495,6 +1498,7 @@ final class OperationsController
             'stock_control_stock_query' => '',
             'discipline_work_schedule' => $disciplineSchedule,
             'disciplinary_alerts' => $disciplinaryAlerts,
+            'report_heavy_loaded' => $loadHeavyReport,
         ]));
 
         audit_access('reports', $restaurantId, 'screens', 'daily-report', 'Consultation rapport journalier');

@@ -56,6 +56,7 @@ $dash_tab_extra_qs .= '&period=' . rawurlencode((string) ($period ?? 'daily'));
 $regularizationBacklog = $regularization_backlog ?? [];
 $module_today_pulse = $module_today_pulse ?? [];
 $reportAgentFilterLocked = !empty($report_agent_filter_locked);
+$reportHeavyLoaded = !empty($report['heavy_loaded'] ?? null) || !empty($report_heavy_loaded ?? null);
 $activityDaySalesSnap = $report['activity_day_sales_snapshot'] ?? [
     'recorded_sales_count' => 0,
     'recorded_sales_total' => 0,
@@ -152,6 +153,12 @@ window.addEventListener('beforeprint', function () {
     </div>
 </section>
 
+<?php if (!$reportHeavyLoaded): ?>
+<section class="card no-print" style="padding:14px 16px; margin-bottom:16px;">
+    <p class="muted" style="margin:0;">Vue rapide chargee pour eviter un blocage a l ouverture. Les blocs lourds equipe, timeline, detail cuisine-stock et controle stock se chargent a la demande : <a href="/rapport?heavy=1<?= e($dash_tab_extra_qs) ?>">ouvrir la version detaillee</a>.</p>
+</section>
+<?php endif; ?>
+
 <?php require base_path('app/Views/partials/regularization_hold_banner.php'); ?>
 <?php require base_path('app/Views/partials/operational_period_tabs.php'); ?>
 
@@ -166,7 +173,9 @@ $disciplinary_alerts = $disciplinary_alerts ?? [];
         Début <?= e((string) ($dSchedRep['work_start'] ?? '08:00')) ?> · tolérance <?= e((string) ($dSchedRep['arrival_grace_minutes'] ?? '15')) ?> min · versement max <?= e((string) ($dSchedRep['cash_deadline'] ?? '22:00')) ?>
         <?php if (!empty($dSchedRep['notice_unset'])): ?> <em>(défauts)</em><?php endif; ?>
     </p>
-    <?php if ($disciplinary_alerts !== []): ?>
+    <?php if (!$reportHeavyLoaded): ?>
+        <p class="muted" style="margin:0; font-size:0.88rem;">Vue rapide : alertes equipe non chargees ici. Utilisez la version detaillee si besoin.</p>
+    <?php elseif ($disciplinary_alerts !== []): ?>
         <?php require base_path('app/Views/partials/disciplinary_alerts_foldable.php'); ?>
     <?php else: ?>
         <p class="muted" style="margin:0; font-size:0.88rem;">Aucune alerte disciplinaire active pour le moment.</p>
