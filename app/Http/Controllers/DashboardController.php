@@ -432,6 +432,7 @@ final class DashboardController
         $staffDisc = Container::getInstance()->get('staffDiscipline');
         $staffDisc->ensureSchema();
         $loadHeavy = (string) ($request->query['heavy'] ?? '') === '1';
+        $loadAlerts = $loadHeavy && (string) ($request->query['alerts'] ?? '') === '1';
         $todayY = Container::getInstance()->get('reportService')->todayForRestaurant($restaurantId);
         $monthIn = trim((string) ($request->query['month'] ?? ''));
         if ($monthIn === '') {
@@ -503,9 +504,10 @@ final class DashboardController
             'restaurant' => Container::getInstance()->get('restaurantAdmin')->findRestaurant($restaurantId),
             'today_ymd' => $todayY,
             'discipline_schedule' => $staffDisc->disciplineWorkScheduleForRestaurant($restaurantId),
-            'alerts' => $loadHeavy ? $staffDisc->listDisciplinaryAlerts($restaurantId) : [],
+            'alerts' => $loadAlerts ? $staffDisc->listDisciplinaryAlerts($restaurantId) : [],
             'gauge_rows' => $loadHeavy ? $staffDisc->gaugesSnapshotRestaurantOperational($restaurantId, 'today', $todayY) : [],
             'discipline_heavy_loaded' => $loadHeavy,
+            'discipline_alerts_loaded' => $loadAlerts,
             'staff_users' => $attUsers,
             'payroll_profiles' => $payrollProfiles,
             'flash_success' => $flashSuccess,

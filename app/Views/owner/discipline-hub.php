@@ -9,6 +9,7 @@ $gaugeRows = is_array($gauge_rows ?? null) ? $gauge_rows : [];
 $staffUsers = is_array($staff_users ?? null) ? $staff_users : [];
 $payrollProfiles = is_array($payroll_profiles ?? null) ? $payroll_profiles : [];
 $disciplineHeavyLoaded = !empty($discipline_heavy_loaded);
+$disciplineAlertsLoaded = !empty($discipline_alerts_loaded);
 $cur = $restaurant['currency'] ?? 'USD';
 
 $disciplineZoneLabel = static function (?string $z): string {
@@ -250,10 +251,12 @@ $sanctionHint = static function (array $activePeriod, array $metrics): string {
     <?php endforeach; ?>
 </details>
 
-<details class="card no-print" style="padding:14px 16px; margin-bottom:16px;" <?= ($disciplineHeavyLoaded && $alerts !== []) ? 'open' : '' ?> data-autoclose-details>
+<details class="card no-print" style="padding:14px 16px; margin-bottom:16px;" <?= ($disciplineAlertsLoaded && $alerts !== []) ? 'open' : '' ?> data-autoclose-details>
     <summary style="font-weight:600; cursor:pointer;">Alertes disciplinaires</summary>
     <?php if (!$disciplineHeavyLoaded): ?>
         <p class="muted" style="margin-top:12px;">Vue rapide : les alertes detaillees ne sont pas chargees ici. <a href="/owner/discipline?heavy=1">Afficher les alertes actives</a>.</p>
+    <?php elseif (!$disciplineAlertsLoaded): ?>
+        <p class="muted" style="margin-top:12px;">Mode detaille charge pour les jauges du jour. Les alertes disciplinaires lourdes restent repliees pour proteger l ouverture de page : <a href="/owner/discipline?heavy=1&amp;alerts=1">charger aussi les alertes actives</a>.</p>
     <?php elseif ($alerts === []): ?>
         <p class="muted" style="margin-top:12px;">Aucune alerte active.</p>
     <?php else: ?>
