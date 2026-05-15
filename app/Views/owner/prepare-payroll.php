@@ -92,6 +92,12 @@ $periodLabel = (string) ($preview['period_label'] ?? '');
             $scoreCap = $r['monthly_score_cap'] ?? null;
             $activityPct = $r['activity_pct_vs_role_avg'] ?? null;
             $capReasons = is_array($r['discipline_cap_reasons'] ?? null) ? $r['discipline_cap_reasons'] : [];
+            $dayScore = $r['day_score'] ?? null;
+            $weekScore = $r['week_score'] ?? null;
+            $monthScore = $r['month_score'] ?? null;
+            $effectiveStart = (string) ($r['period_effective_start'] ?? '');
+            $monthNote = trim((string) ($r['month_note'] ?? ''));
+            $nonEvalReason = trim((string) ($r['non_evaluated_reason'] ?? ''));
             ?>
             <tr>
                 <td><?= e((string) ($r['full_name'] ?? '')) ?></td>
@@ -101,6 +107,19 @@ $periodLabel = (string) ($preview['period_label'] ?? '');
                     <?= $finalScore === null ? 'Non evalue' : e((string) $finalScore) . ' %' ?>
                     <?php if ($rawScore !== null && $finalScore !== null && (float) $rawScore > (float) $finalScore): ?>
                         <div class="muted" style="font-size:0.85rem;">brut <?= e((string) $rawScore) ?> % · cap <?= e((string) $scoreCap) ?> %</div>
+                    <?php endif; ?>
+                    <div class="muted" style="font-size:0.85rem;">
+                        jour <?= $dayScore === null ? 'Non evalue' : e((string) $dayScore) . ' %' ?>
+                        · semaine <?= $weekScore === null ? 'Non evalue' : e((string) $weekScore) . ' %' ?>
+                        · mois <?= $monthScore === null ? 'Non evalue' : e((string) $monthScore) . ' %' ?>
+                    </div>
+                    <?php if ($effectiveStart !== ''): ?>
+                        <div class="muted" style="font-size:0.85rem;">debut cotation reel : <?= e($effectiveStart) ?></div>
+                    <?php endif; ?>
+                    <?php if ($nonEvalReason !== ''): ?>
+                        <div class="muted" style="font-size:0.85rem;"><?= e($nonEvalReason) ?></div>
+                    <?php elseif ($monthNote !== ''): ?>
+                        <div class="muted" style="font-size:0.85rem;"><?= e($monthNote) ?></div>
                     <?php endif; ?>
                 </td>
                 <td><span class="pill <?= e($payrollZonePill($zRaw)) ?>"><?= e($payrollZoneLabel($zRaw)) ?></span></td>

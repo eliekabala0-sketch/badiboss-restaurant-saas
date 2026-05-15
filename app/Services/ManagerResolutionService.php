@@ -340,10 +340,110 @@ final class ManagerResolutionService
                 $todayYmd,
                 $disc,
             ),
+            'server_request_item' => $this->contextServerRequestItem(
+                $restaurantId,
+                $focusId,
+                $actor,
+                $todayYmd,
+                $disc,
+            ),
+            'kitchen_stock_request' => $this->contextKitchenStockRequest($restaurantId, $focusId),
             'sale' => $this->contextSale($restaurantId, $focusId, $todayYmd, $cash),
             'cash_transfer' => $this->contextCashTransfer($restaurantId, $focusId, $actor, $todayYmd, $cash),
             default => null,
         };
+    }
+
+    /**
+     * @return array<string, mixed>|null
+     */
+    private function contextServerRequestItem(
+        int $restaurantId,
+        int $requestItemId,
+        ?array $actor,
+        string $todayYmd,
+        StaffDisciplineService $disc,
+    ): ?array {
+        $st = $this->database->pdo()->prepare(
+            'SELECT sri.request_id
+             FROM server_request_items sri
+             INNER JOIN server_requests sr ON sr.id = sri.request_id
+             WHERE sri.id = :id AND sr.restaurant_id = :rid
+             LIMIT 1'
+        );
+        $st->execute(['id' => $requestItemId, 'rid' => $restaurantId]);
+        $requestId = (int) $st->fetchColumn();
+        if ($requestId <= 0) {
+            return null;
+        }
+
+        return $this->contextServerRequest($restaurantId, $requestId, $actor, $todayYmd, $disc);
+    }
+
+    /**
+     * @return array<string, mixed>|null
+     */
+    private function contextKitchenStockRequest(int $restaurantId, int $requestId): ?array
+    {
+        $st = $this->database->pdo()->prepare(
+            'SELECT ksr.*,
+                    rq.full_name AS requested_by_name,
+                    si.name AS stock_item_name,
+                    si.unit_name,
+                    (
+                        SELECT MAX(oc.decided_at)
+                        FROM operation_cases oc
+                        WHERE oc.restaurant_id = ksr.restaurant_id
+                          AND oc.source_entity_type = "kitchen_stock_requests"
+                          AND oc.source_entity_id = ksr.id
+                          AND oc.decided_at IS NOT NULL
+                    ) AS manager_case_decided_at
+             FROM kitchen_stock_requests ksr
+             LEFT JOIN users rq ON rq.id = ksr.requested_by
+             LEFT JOIN stock_items si ON si.id = ksr.stock_item_id
+             WHERE ksr.id = :id AND ksr.restaurant_id = :rid
+             LIMIT 1'
+        );
+        $st->execute(['id' => $requestId, 'rid' => $restaurantId]);
+        $row = $st->fetch(PDO::FETCH_ASSOC);
+        if ($row === false) {
+            return null;
+        }
+
+        $status = (string) ($row['status'] ?? '');
+        $resolved = !empty($row['manager_case_decided_at'])
+            || !empty($row['received_at'])
+            || in_array($status, ['CLOTURE', 'ANNULE', 'REFUSE_STOCK'], true);
+        if (!$resolved) {
+            return null;
+        }
+
+        $detail = [];
+        if (!empty($row['manager_case_decided_at'])) {
+            $detail['decision_manager_at'] = (string) $row['manager_case_decided_at'];
+        }
+        if (!empty($row['received_at'])) {
+            $detail['reception_cuisine_at'] = (string) $row['received_at'];
+        }
+        if (!empty($row['responded_at'])) {
+            $detail['reponse_stock_at'] = (string) $row['responded_at'];
+        }
+
+        return [
+            'entity_kind' => 'kitchen_stock_request',
+            'entity_id' => $requestId,
+            'already_resolved' => true,
+            'operation_label' => 'Demande stock cuisine n° ' . $requestId,
+            'agent_label' => (string) ($row['requested_by_name'] ?? ''),
+            'origin_at' => (string) ($row['created_at'] ?? ''),
+            'amount_hint' => 0.0,
+            'status_label' => stock_request_status_label($status !== '' ? $status : 'CLOTURE'),
+            'outcome_code' => 'manager_resolved',
+            'outcome_label' => 'Déjà traité',
+            'outcome_at' => (string) ($row['manager_case_decided_at'] ?? $row['received_at'] ?? $row['updated_at'] ?? $row['created_at'] ?? ''),
+            'outcome_detail' => $detail,
+            'decided_by_label' => '',
+        ];
     }
 
     /**

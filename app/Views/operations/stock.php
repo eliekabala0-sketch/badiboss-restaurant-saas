@@ -136,7 +136,19 @@ $groupDomId = static function (string $prefix, string $label): string {
 
 $activeSimpleRequests = array_values(array_filter(
     $kitchen_stock_requests,
-    static fn (array $request): bool => !in_array((int) $request['id'], $managerCaseRequestIds, true)
+    static function (array $request) use ($managerCaseRequestIds): bool {
+        if (in_array((int) $request['id'], $managerCaseRequestIds, true)) {
+            return false;
+        }
+        if (!empty($request['manager_case_decided_at'])) {
+            return false;
+        }
+        if (!empty($request['received_at']) && in_array((string) ($request['status'] ?? ''), ['FOURNI_TOTAL', 'FOURNI_PARTIEL', 'NON_FOURNI', 'CLOTURE'], true)) {
+            return false;
+        }
+
+        return !in_array((string) ($request['status'] ?? ''), ['CLOTURE', 'ANNULE', 'REFUSE_STOCK'], true);
+    }
 ));
 
 $waitingRequests = array_values(array_filter(
