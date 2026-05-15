@@ -437,7 +437,23 @@ final class DashboardController
         if ($monthIn === '') {
             $monthIn = substr($todayY, 0, 7);
         }
-        $preview = $staffDisc->payrollMonthPreview($restaurantId, $monthIn, $loadHeavy);
+        if ($loadHeavy) {
+            $preview = $staffDisc->payrollMonthPreview($restaurantId, $monthIn, true);
+        } else {
+            $periodStart = $monthIn . '-01';
+            try {
+                $periodEndMonth = (new DateTimeImmutable($periodStart . ' 00:00:00'))->modify('last day of this month')->format('Y-m-d');
+            } catch (\Throwable) {
+                $periodEndMonth = $todayY;
+            }
+            $preview = [
+                'month' => $monthIn,
+                'period_label' => 'Mois ' . $monthIn,
+                'period_start' => $periodStart,
+                'period_end' => substr($todayY, 0, 7) === $monthIn ? $todayY : $periodEndMonth,
+                'rows' => [],
+            ];
+        }
 
         view('owner/prepare-payroll', [
             'title' => 'Préparer la paie',

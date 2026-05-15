@@ -88,6 +88,11 @@ $payrollHeavyLoaded = !empty($payroll_heavy_loaded);
             };
         };
         ?>
+        <?php if ($rows === []): ?>
+            <tr>
+                <td colspan="19" class="muted">Previsualisation detaillee non chargee dans la vue rapide. Utilisez le lien de chargement detaille ci-dessus si vous avez besoin des lignes agent par agent.</td>
+            </tr>
+        <?php endif; ?>
         <?php foreach ($rows as $r): ?>
             <?php if (!is_array($r)) {
                 continue;

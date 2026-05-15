@@ -1452,7 +1452,8 @@ final class OperationsController
             $isServerReporter ? (int) $actor['id'] : null,
             false,
         );
-        $loadHeavyReport = (string) ($request->query['heavy'] ?? '') === '1';
+        $heavyRequested = (string) ($request->query['heavy'] ?? '') === '1';
+        $loadHeavyReport = false;
         $reportFilters = $viewFilters;
         $reportFilters['__report_heavy'] = $loadHeavyReport;
 
@@ -1498,7 +1499,7 @@ final class OperationsController
             'stock_control_stock_query' => '',
             'discipline_work_schedule' => $disciplineSchedule,
             'disciplinary_alerts' => $disciplinaryAlerts,
-            'report_heavy_loaded' => $loadHeavyReport,
+            'report_heavy_loaded' => $heavyRequested,
         ]));
 
         audit_access('reports', $restaurantId, 'screens', 'daily-report', 'Consultation rapport journalier');
