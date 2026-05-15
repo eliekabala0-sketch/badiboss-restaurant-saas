@@ -479,6 +479,7 @@ final class DashboardController
         session_release_read_lock();
         $staffDisc = Container::getInstance()->get('staffDiscipline');
         $staffDisc->ensureSchema();
+        $loadHeavy = (string) ($request->query['heavy'] ?? '') === '1';
         $todayY = Container::getInstance()->get('reportService')->todayForRestaurant($restaurantId);
         $users = Container::getInstance()->get('roleAdmin')->listUsersForRestaurant($restaurantId);
         $attUsers = array_values(array_filter(
