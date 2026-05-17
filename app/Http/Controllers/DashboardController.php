@@ -450,8 +450,12 @@ final class DashboardController
         if ($monthIn === '') {
             $monthIn = substr($todayY, 0, 7);
         }
-        $preview = $staffDisc->payrollMonthPreview($restaurantId, $monthIn, $loadHeavy);
-        $disciplineRows = $staffDisc->gaugesSnapshotRestaurantOperational($restaurantId, $disciplinePreset, $disciplineDate);
+        $disciplineRows = $loadHeavy
+            ? $staffDisc->gaugesSnapshotRestaurantOperational($restaurantId, $disciplinePreset, $disciplineDate)
+            : $staffDisc->gaugesSnapshotRestaurantDailyLight($restaurantId, $disciplineDate);
+        $preview = $loadHeavy
+            ? $staffDisc->payrollMonthPreview($restaurantId, $monthIn, true)
+            : $staffDisc->payrollMonthPreviewLight($restaurantId, $monthIn, $disciplineRows);
 
         view('owner/prepare-payroll', [
             'title' => 'Préparer la paie',
@@ -493,6 +497,7 @@ final class DashboardController
         $anchorYmd = preg_match('/^\d{4}-\d{2}-\d{2}$/', $anchorRaw) ? $anchorRaw : $todayY;
         $periodWindow = Container::getInstance()->get('reportService')->operationalPeriodWindow($restaurantId, $preset, $anchorYmd);
         $loadAlerts = (string) ($request->query['alerts'] ?? '') === '1';
+        $loadHeavy = (string) ($request->query['heavy'] ?? '') === '1';
         $users = Container::getInstance()->get('roleAdmin')->listUsersForRestaurant($restaurantId);
         $attUsers = array_values(array_filter(
             $users,
@@ -518,9 +523,11 @@ final class DashboardController
             'discipline_anchor_date' => $anchorYmd,
             'discipline_period_label' => (string) ($periodWindow['label'] ?? ''),
             'discipline_schedule' => $staffDisc->disciplineWorkScheduleForRestaurant($restaurantId),
-            'alerts' => $loadAlerts ? $staffDisc->listDisciplinaryAlerts($restaurantId) : [],
-            'gauge_rows' => $staffDisc->gaugesSnapshotRestaurantOperational($restaurantId, $preset, $anchorYmd),
-            'discipline_heavy_loaded' => true,
+            'alerts' => ($loadHeavy && $loadAlerts) ? $staffDisc->listDisciplinaryAlerts($restaurantId) : [],
+            'gauge_rows' => $loadHeavy
+                ? $staffDisc->gaugesSnapshotRestaurantOperational($restaurantId, $preset, $anchorYmd)
+                : $staffDisc->gaugesSnapshotRestaurantDailyLight($restaurantId, $anchorYmd),
+            'discipline_heavy_loaded' => $loadHeavy,
             'discipline_alerts_loaded' => $loadAlerts,
             'staff_users' => $attUsers,
             'payroll_profiles' => $payrollProfiles,

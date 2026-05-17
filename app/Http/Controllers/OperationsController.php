@@ -1563,7 +1563,7 @@ final class OperationsController
             'title' => 'Ma discipline',
             'user' => $actor,
             'restaurant' => Container::getInstance()->get('restaurantAdmin')->findRestaurant($restaurantId),
-            'my_gauges' => $staffDisc->gaugesForUserOperationalPanel($restaurantId, (int) ($actor['id'] ?? 0), 'today', $todayY),
+            'my_gauges' => $staffDisc->gaugesForUserOperationalPanelLight($restaurantId, (int) ($actor['id'] ?? 0), $todayY),
             'discipline_schedule' => $staffDisc->disciplineWorkScheduleForRestaurant($restaurantId),
             'staff_audit_highlights' => $highlights,
         ]));

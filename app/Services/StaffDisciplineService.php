@@ -841,7 +841,6 @@ final class StaffDisciplineService
     public function gaugesSnapshotRestaurantDailyLight(int $restaurantId, string $todayYmd): array
     {
         $this->ensureSchema();
-        $tz = Container::getInstance()->get('reportService')->timezoneForRestaurantReports($restaurantId);
         $users = Container::getInstance()->get('roleAdmin')->listUsersForRestaurant($restaurantId);
         $out = [];
 
@@ -855,93 +854,205 @@ final class StaffDisciplineService
                 continue;
             }
 
-            $gauges = [
-                'daily' => null,
-                'weekly_avg' => null,
-                'monthly_avg' => null,
-                'zone' => 'non_evalue',
-                'ledger_preview' => [],
-                'dash_preset' => 'today',
-                'dash_anchor_ymd' => $todayYmd,
-                'active_period' => [
-                    'titre' => 'Aujourd hui',
-                    'jour' => $todayYmd,
-                    'score' => null,
-                    'zone' => 'non_evalue',
-                    'points_detail' => [],
-                    'score_breakdown' => ['evaluated' => false, 'action_count' => 0],
-                    'note' => 'Lecture discipline indisponible pour cet agent.',
-                ],
-                'row_metrics' => [],
-            ];
-
-            try {
-                $active = $this->snapshotDayGauge($restaurantId, $uid, $todayYmd, 'Aujourd hui', $tz);
-                $weekly = $this->averageLastDaysNullable($restaurantId, $uid, $todayYmd, 7, $tz);
-                $globalStart = $this->effectiveGlobalStartYmd($restaurantId);
-                $engagementStart = $this->effectiveAgentEngagementStartYmd($restaurantId, $uid, $tz);
-                $monthStart = substr($todayYmd, 0, 7) . '-01';
-                $periodStart = max($monthStart, $globalStart, $engagementStart);
-                $dayBreakdown = is_array($active['score_breakdown'] ?? null) ? $active['score_breakdown'] : [];
-                $dayKind = (string) ($dayBreakdown['evaluation_kind'] ?? '');
-                $dayActions = (int) ($dayBreakdown['action_count'] ?? 0);
-                $monthScore = null;
-                $monthZone = (string) ($active['zone'] ?? 'non_evalue');
-                $monthEvalDays = 0;
-                $monthActions = $dayActions;
-                $unjustified = $dayKind === 'absence_unjustified' ? 1 : 0;
-                $softAbsence = in_array($dayKind, ['absence_authorized', 'absence_illness', 'late_justified'], true) ? 1 : 0;
-                $zeroActivity = ($dayActions === 0 && !in_array($dayKind, ['neutral_rest', 'neutral_exempt', 'manager_present_confirm'], true)) ? 1 : 0;
-
-                $shortfallHits = $roleCode === 'cashier_server'
-                    ? $this->ledgerReasonCountForUserDayRange(
-                        $restaurantId,
-                        $uid,
-                        $periodStart,
-                        $todayYmd,
-                        ['server_shortfall_today', 'server_shortfall_legacy']
-                    )
-                    : 0;
-                $lateRemittance = $roleCode === 'cashier_server'
-                    ? $this->serverLateRemittanceMetricsForRange($restaurantId, $uid, $periodStart, $todayYmd)
-                    : ['late_count' => 0, 'max_delay_days' => 0];
-
-                $gauges = [
-                    'daily' => ($active['score'] ?? null),
-                    'weekly_avg' => $weekly,
-                    'monthly_avg' => $monthScore,
-                    'zone' => $monthZone,
-                    'ledger_preview' => array_slice((array) ($active['points_detail'] ?? []), -12),
-                    'dash_preset' => 'today',
-                    'dash_anchor_ymd' => $todayYmd,
-                    'active_period' => $active,
-                    'row_metrics' => [
-                        'activite_actions' => (int) (($active['score_breakdown']['action_count'] ?? 0)),
-                        'activite_pct_moyenne_periode' => null,
-                        'jours_evalues_periode' => $monthEvalDays,
-                        'absences_injustifiees' => $unjustified,
-                        'absences_justifiees_maladie' => $softAbsence,
-                        'jours_sans_activite_mesuree' => $zeroActivity,
-                        'manquants_caisse_hits' => $shortfallHits,
-                        'late_remittance_hits' => (int) ($lateRemittance['late_count'] ?? 0),
-                        'late_remittance_max_delay_days' => (int) ($lateRemittance['max_delay_days'] ?? 0),
-                        'actions_mois' => $monthActions,
-                    ],
-                ];
-            } catch (\Throwable) {
-            }
-
             $out[] = [
                 'user_id' => $uid,
                 'full_name' => (string) ($u['full_name'] ?? ''),
                 'role_code' => $u['role_code'] ?? null,
-                'gauges' => $gauges,
+                'gauges' => $this->gaugesForUserOperationalPanelLight($restaurantId, $uid, $todayYmd),
             ];
         }
 
         $this->sortOperationalGaugeSnapshotRows($out);
 
         return $out;
+    }
+
+    /**
+     * Version legere : score jour + moyenne 7 jours, sans calcul complet mensuel.
+     *
+     * @return array<string, mixed>
+     */
+    public function gaugesForUserOperationalPanelLight(int $restaurantId, int $userId, string $dayYmd): array
+    {
+        $this->ensureSchema();
+        $tz = Container::getInstance()->get('reportService')->timezoneForRestaurantReports($restaurantId);
+        $roleCode = $this->resolveRoleCodeForUser($restaurantId, $userId);
+        $gauges = [
+            'daily' => null,
+            'weekly_avg' => null,
+            'monthly_avg' => null,
+            'zone' => 'non_evalue',
+            'ledger_preview' => [],
+            'dash_preset' => 'today',
+            'dash_anchor_ymd' => $dayYmd,
+            'active_period' => [
+                'titre' => 'Aujourd hui',
+                'jour' => $dayYmd,
+                'score' => null,
+                'zone' => 'non_evalue',
+                'points_detail' => [],
+                'score_breakdown' => ['evaluated' => false, 'action_count' => 0],
+                'note' => 'Lecture discipline indisponible pour cet agent.',
+            ],
+            'row_metrics' => [],
+        ];
+
+        try {
+            $active = $this->snapshotDayGauge($restaurantId, $userId, $dayYmd, 'Aujourd hui', $tz);
+            $weekly = $this->averageLastDaysNullable($restaurantId, $userId, $dayYmd, 7, $tz);
+            $globalStart = $this->effectiveGlobalStartYmd($restaurantId);
+            $engagementStart = $this->effectiveAgentEngagementStartYmd($restaurantId, $userId, $tz);
+            $monthStart = substr($dayYmd, 0, 7) . '-01';
+            $periodStart = max($monthStart, $globalStart, $engagementStart);
+            $dayBreakdown = is_array($active['score_breakdown'] ?? null) ? $active['score_breakdown'] : [];
+            $dayKind = (string) ($dayBreakdown['evaluation_kind'] ?? '');
+            $dayActions = (int) ($dayBreakdown['action_count'] ?? 0);
+            $unjustified = $dayKind === 'absence_unjustified' ? 1 : 0;
+            $softAbsence = in_array($dayKind, ['absence_authorized', 'absence_illness', 'late_justified'], true) ? 1 : 0;
+            $zeroActivity = ($dayActions === 0 && !in_array($dayKind, ['neutral_rest', 'neutral_exempt', 'manager_present_confirm'], true)) ? 1 : 0;
+
+            $shortfallHits = $roleCode === 'cashier_server'
+                ? $this->ledgerReasonCountForUserDayRange(
+                    $restaurantId,
+                    $userId,
+                    $periodStart,
+                    $dayYmd,
+                    ['server_shortfall_today', 'server_shortfall_legacy']
+                )
+                : 0;
+            $lateRemittance = $roleCode === 'cashier_server'
+                ? $this->serverLateRemittanceMetricsForRange($restaurantId, $userId, $periodStart, $dayYmd)
+                : ['late_count' => 0, 'max_delay_days' => 0];
+
+            $gauges = [
+                'daily' => ($active['score'] ?? null),
+                'weekly_avg' => $weekly,
+                'monthly_avg' => null,
+                'zone' => (string) ($active['zone'] ?? 'non_evalue'),
+                'ledger_preview' => array_slice((array) ($active['points_detail'] ?? []), -12),
+                'dash_preset' => 'today',
+                'dash_anchor_ymd' => $dayYmd,
+                'active_period' => $active,
+                'row_metrics' => [
+                    'activite_actions' => (int) (($active['score_breakdown']['action_count'] ?? 0)),
+                    'activite_pct_moyenne_periode' => null,
+                    'jours_evalues_periode' => 0,
+                    'absences_injustifiees' => $unjustified,
+                    'absences_justifiees_maladie' => $softAbsence,
+                    'jours_sans_activite_mesuree' => $zeroActivity,
+                    'manquants_caisse_hits' => $shortfallHits,
+                    'late_remittance_hits' => (int) ($lateRemittance['late_count'] ?? 0),
+                    'late_remittance_max_delay_days' => (int) ($lateRemittance['max_delay_days'] ?? 0),
+                    'actions_mois' => $dayActions,
+                ],
+            ];
+        } catch (\Throwable) {
+        }
+
+        return $gauges;
+    }
+
+    /**
+     * Apercu paie rapide pour garder la page exploitable en prod meme sur un restaurant charge.
+     *
+     * @param list<array<string, mixed>> $disciplineRows
+     * @return array{month:string, period_label:string, period_start:string, period_end:string, rows:list<array<string,mixed>>}
+     */
+    public function payrollMonthPreviewLight(int $restaurantId, string $monthInput, array $disciplineRows = []): array
+    {
+        $this->ensureSchema();
+        $rs = Container::getInstance()->get('reportService');
+        $todayY = $rs->todayForRestaurant($restaurantId);
+        $trim = trim($monthInput);
+        $monthKey = preg_match('/^(\d{4}-\d{2})/', $trim, $m) ? $m[1] : substr($todayY, 0, 7);
+        $start = $monthKey . '-01';
+        $end = substr($todayY, 0, 7) === $monthKey ? $todayY : $monthKey . '-31';
+
+        $disciplineByUser = [];
+        foreach ($disciplineRows as $disciplineRow) {
+            if (!is_array($disciplineRow)) {
+                continue;
+            }
+            $disciplineByUser[(int) ($disciplineRow['user_id'] ?? 0)] = $disciplineRow;
+        }
+
+        $pdo = $this->database->pdo();
+        $profSt = $pdo->prepare(
+            'SELECT user_id, base_salary_monthly, bonus_monthly, currency, service_start_ymd, profile_note
+             FROM staff_payroll_profiles WHERE restaurant_id = :rid'
+        );
+        $profSt->execute(['rid' => $restaurantId]);
+        $profiles = [];
+        foreach ($profSt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            $profiles[(int) ($row['user_id'] ?? 0)] = $row;
+        }
+
+        $rows = [];
+        foreach (Container::getInstance()->get('roleAdmin')->listUsersForRestaurant($restaurantId) as $u) {
+            $uid = (int) ($u['id'] ?? 0);
+            if ($uid <= 0 || $this->isOwnerDisciplineRole((string) ($u['role_code'] ?? ''))) {
+                continue;
+            }
+            if (($u['status'] ?? '') !== 'active') {
+                continue;
+            }
+
+            $profile = $profiles[$uid] ?? [];
+            $disciplineRow = is_array($disciplineByUser[$uid] ?? null) ? $disciplineByUser[$uid] : [];
+            $gauges = is_array($disciplineRow['gauges'] ?? null) ? $disciplineRow['gauges'] : [];
+            $activePeriod = is_array($gauges['active_period'] ?? null) ? $gauges['active_period'] : [];
+            $metrics = is_array($gauges['row_metrics'] ?? null) ? $gauges['row_metrics'] : [];
+            $base = (float) ($profile['base_salary_monthly'] ?? 0);
+            $bonus = max(0.0, (float) ($profile['bonus_monthly'] ?? 0));
+            $currency = (string) ($profile['currency'] ?? 'USD');
+
+            $rows[] = [
+                'user_id' => $uid,
+                'full_name' => (string) ($u['full_name'] ?? ''),
+                'role_code' => (string) ($u['role_code'] ?? ''),
+                'base_salary_monthly' => $base,
+                'currency' => $currency,
+                'monthly_score_avg' => null,
+                'monthly_score_raw_avg' => null,
+                'monthly_score_cap' => null,
+                'monthly_score_zone' => (string) ($activePeriod['zone'] ?? 'non_evalue'),
+                'retention_proposed_pct' => 0,
+                'retention_amount_est' => 0,
+                'bonus_monthly' => $bonus,
+                'unjustified_absence_days' => (int) ($metrics['absences_injustifiees'] ?? 0),
+                'justified_absence_days' => (int) ($metrics['absences_justifiees_maladie'] ?? 0),
+                'rest_days_recorded' => 0,
+                'deduction_absence_est' => 0,
+                'service_start_ymd' => $profile['service_start_ymd'] ?? null,
+                'profile_note' => $profile['profile_note'] ?? null,
+                'net_pay_proposed' => round(max(0, $base + $bonus), 2),
+                'attendance_days_recorded' => 0,
+                'measured_activity_days' => 0,
+                'ledger_penalty_points_month' => 0,
+                'cash_shortfall_hits' => (int) ($metrics['manquants_caisse_hits'] ?? 0),
+                'late_remittance_hits' => (int) ($metrics['late_remittance_hits'] ?? 0),
+                'late_remittance_max_delay_days' => (int) ($metrics['late_remittance_max_delay_days'] ?? 0),
+                'activity_pct_vs_role_avg' => $metrics['activite_pct_moyenne_periode'] ?? null,
+                'discipline_cap_reasons' => [],
+                'period_effective_start' => $profile['service_start_ymd'] ?? null,
+                'restaurant_start_ymd' => $this->restaurantActivityStartYmd($restaurantId),
+                'day_score' => $gauges['daily'] ?? null,
+                'week_score' => $gauges['weekly_avg'] ?? null,
+                'month_score' => $gauges['monthly_avg'] ?? null,
+                'month_note' => 'Vue rapide active : retenues detaillees deferrees pour eviter un blocage en plein service.',
+                'non_evaluated_reason' => (($activePeriod['score'] ?? null) === null) ? (string) ($activePeriod['note'] ?? 'Non evalue.') : '',
+            ];
+        }
+
+        $this->sortPayrollPreviewRows($rows);
+
+        return [
+            'month' => $monthKey,
+            'period_label' => 'Mois ' . $monthKey . ' (vue rapide)',
+            'period_start' => $start,
+            'period_end' => $end,
+            'rows' => $rows,
+        ];
     }
 
     /**
