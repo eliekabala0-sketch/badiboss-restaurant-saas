@@ -899,12 +899,16 @@ final class ReportService
         $closedOnly = (bool) ($viewFilters['closed_sales_only'] ?? false);
         $userId = (int) ($viewFilters['user_id'] ?? 0);
         $financeScope = $serverReportScopeUserId > 0 ? $serverReportScopeUserId : null;
-        $salesByServer = $this->salesByServer($restaurantId, $startAt, $endAt, $closedOnly, $userId);
+        $salesByServer = $this->salesByServer($restaurantId, $startAt, $endAt, $closedOnly, $userId, $viewFilters);
         $reportActivityIndex = $this->activityIndex($restaurantId, $startAt, $endAt, $viewFilters);
         $servedWithoutSale = $this->servedRequestsWithoutSaleForReport($restaurantId, $startAt, $endAt, $viewFilters);
         $salesByServer = $this->mergeServedWithoutSaleIntoSalesByServer($salesByServer, $servedWithoutSale);
         $reportSalesDetailByServer = $this->salesDetailByServerProduct($restaurantId, $startAt, $endAt, $closedOnly, $userId, $viewFilters);
         $reportSalesDetailByServer = $this->mergeServedWithoutSaleIntoSalesDetail($reportSalesDetailByServer, $servedWithoutSale);
+        $needleArt = mb_strtolower(trim((string) ($viewFilters['article_search'] ?? '')), 'UTF-8');
+        if ($needleArt !== '') {
+            $reportSalesDetailByServer = $this->filterSalesDetailByArticleSubstring($reportSalesDetailByServer, $needleArt);
+        }
         $reportExecutiveSummary = $this->executiveSummaryRollup($restaurantId, $startAt, $endAt, $label, $viewFilters, $reportSalesDetailByServer, $reportActivityIndex);
         $servedWithoutSaleSummary = $this->summarizeServedRequestsWithoutSale($servedWithoutSale);
         $summary = ['period' => $period, 'period_label' => $label, 'selected_date' => $selectedDate->format('Y-m-d'), 'timezone' => $timezone->getName(), 'range_start' => $startAt->format('Y-m-d H:i:s'), 'range_end' => $displayEndAt->format('Y-m-d H:i:s'), 'opening_stock_total' => $this->openingStock($restaurantId, $startAt, $currentStock), 'current_stock_total' => $currentStock, 'kitchen_outputs' => $this->sumMovement($restaurantId, $startAt, $endAt, 'SORTIE_CUISINE'), 'stock_returns' => $this->sumMovement($restaurantId, $startAt, $endAt, 'RETOUR_STOCK'), 'kitchen_production' => $this->sumProduction($restaurantId, $startAt, $endAt), 'stock_report' => $this->stockReport($restaurantId, $startAt, $endAt), 'kitchen_report' => $this->kitchenReport($restaurantId, $startAt, $endAt), 'server_report' => $this->serverReport($restaurantId, $startAt, $endAt), 'financial_report' => $this->financialReport($restaurantId, $startAt, $endAt, $displayEndAt, $financeScope), 'product_margins' => $this->productMargins($restaurantId, $startAt, $endAt), 'sales_by_server' => $salesByServer, 'sales_by_type' => $this->salesByType($restaurantId, $startAt, $endAt), 'material_losses' => $this->sumLosses($restaurantId, $startAt, $endAt, 'MATIERE_PREMIERE'), 'financial_losses' => $this->sumLosses($restaurantId, $startAt, $endAt, 'ARGENT'), 'dish_yields' => $this->dishYields($restaurantId, $startAt, $endAt), 'product_issues' => $this->productIssues($restaurantId, $startAt, $endAt), 'incident_statuses' => $this->incidentsByField($restaurantId, $startAt, $endAt, 'status'), 'incident_qualifications' => $this->incidentsByField($restaurantId, $startAt, $endAt, 'final_qualification'), 'incident_responsibilities' => $this->incidentsByField($restaurantId, $startAt, $endAt, 'responsibility_scope'), 'incident_cases' => $this->incidentCases($restaurantId, $startAt, $endAt), 'fraud_alerts' => $this->fraudAlerts($restaurantId, $startAt, $endAt), 'view_filters' => $viewFilters, 'people_overview' => $loadHeavyReport ? $this->peopleOverview($restaurantId, $startAt, $endAt, $userId, $salesByServer, $viewFilters) : ['sales_by_server_rows' => [], 'kitchen_by_cook' => [], 'stock_by_staff' => [], 'cash_touchpoints' => [], 'grand_totals' => []], 'activity_index' => $reportActivityIndex, 'nominative_timeline' => $loadHeavyReport ? $this->nominativeTimeline($restaurantId, $startAt, $endAt, $viewFilters) : [], 'sales_detail_by_server' => $reportSalesDetailByServer, 'executive_summary' => $reportExecutiveSummary, 'kitchen_detail_by_cook' => $loadHeavyReport ? $this->kitchenDetailByCook($restaurantId, $startAt, $endAt, $userId, $viewFilters) : ['cooks' => [], 'grand_total_qty' => 0, 'grand_total_value' => 0], 'stock_detail_by_person' => $loadHeavyReport ? $this->stockDetailByPerson($restaurantId, $startAt, $endAt, $userId, $viewFilters) : ['people' => [], 'grand_total_movements' => 0], 'heavy_loaded' => $loadHeavyReport];
@@ -939,10 +943,6 @@ final class ReportService
             $servedWithoutSale
         );
         $summary['server_remittance_shortfall'] = $this->serverRemittanceShortfallBreakdown($restaurantId, $startAt, $endAt, $userId);
-        $needleArt = mb_strtolower(trim((string) ($viewFilters['article_search'] ?? '')), 'UTF-8');
-        if ($needleArt !== '') {
-            $summary['sales_detail_by_server'] = $this->filterSalesDetailByArticleSubstring($summary['sales_detail_by_server'], $needleArt);
-        }
 
         if ($serverReportScopeUserId > 0) {
             $summary = $this->applyServerFinancialIsolationToReportSummary(
@@ -1183,8 +1183,10 @@ final class ReportService
         foreach ($rows as &$row) { $row['unit_margin'] = (float) $row['average_sale_price'] - (float) $row['unit_real_cost']; $row['total_margin'] = (float) $row['total_sales_value'] - (float) $row['total_real_cost']; } unset($row);
         return $rows;
     }
-    private function salesByServer(int $restaurantId, DateTimeImmutable $startAt, DateTimeImmutable $endAt, bool $closedOnly = false, int $userId = 0): array
+    private function salesByServer(int $restaurantId, DateTimeImmutable $startAt, DateTimeImmutable $endAt, bool $closedOnly = false, int $userId = 0, array $viewFilters = []): array
     {
+        $menuItemId = (int) ($viewFilters['menu_item_id'] ?? 0);
+        $articleNeedle = mb_strtolower(trim((string) ($viewFilters['article_search'] ?? '')), 'UTF-8');
         $extra = '';
         if ($closedOnly) {
             $extra .= ' AND s.status IN ("VALIDE","CLOTURE","VENDU_TOTAL","VENDU_PARTIEL")';
@@ -1192,6 +1194,46 @@ final class ReportService
         if ($userId > 0) {
             $extra .= ' AND s.server_id = ' . $userId;
         }
+        if ($menuItemId > 0 || $articleNeedle !== '') {
+            $articleExtra = '';
+            if ($menuItemId > 0) {
+                $articleExtra .= ' AND mi.id = :menu_item_id';
+            }
+            if ($articleNeedle !== '') {
+                $articleExtra .= ' AND LOWER(mi.name) LIKE :article_search';
+            }
+            $statement = $this->database->pdo()->prepare(
+                'SELECT COALESCE(u.full_name, "Vente automatique") AS server_name,
+                        COUNT(DISTINCT s.id) AS sales_count,
+                        COALESCE(SUM(si.quantity * si.unit_price), 0) AS total_amount
+                 FROM sale_items si
+                 INNER JOIN sales s ON s.id = si.sale_id
+                 INNER JOIN menu_items mi ON mi.id = si.menu_item_id
+                 ' . sql_sale_activity_left_join_server_request('s', 'sr') . '
+                 LEFT JOIN users u ON u.id = s.server_id
+                 WHERE s.restaurant_id = :restaurant_id
+                   AND ' . sql_sale_activity_datetime_expr('s', 'sr') . ' >= :start_at
+                   AND ' . sql_sale_activity_datetime_expr('s', 'sr') . ' < :end_at'
+                   . $extra . $articleExtra . '
+                 GROUP BY COALESCE(u.full_name, "Vente automatique")
+                 ORDER BY total_amount DESC'
+            );
+            $params = [
+                'restaurant_id' => $restaurantId,
+                'start_at' => $startAt->format('Y-m-d H:i:s'),
+                'end_at' => $endAt->format('Y-m-d H:i:s'),
+            ];
+            if ($menuItemId > 0) {
+                $params['menu_item_id'] = $menuItemId;
+            }
+            if ($articleNeedle !== '') {
+                $params['article_search'] = '%' . $articleNeedle . '%';
+            }
+            $statement->execute($params);
+
+            return $statement->fetchAll(PDO::FETCH_ASSOC);
+        }
+
         $statement = $this->database->pdo()->prepare('SELECT COALESCE(u.full_name, "Vente automatique") AS server_name, COUNT(s.id) AS sales_count, COALESCE(SUM(s.total_amount), 0) AS total_amount FROM sales s ' . sql_sale_activity_left_join_server_request('s', 'sr') . ' LEFT JOIN users u ON u.id = s.server_id WHERE s.restaurant_id = :restaurant_id AND ' . sql_sale_activity_datetime_expr('s', 'sr') . ' >= :start_at AND ' . sql_sale_activity_datetime_expr('s', 'sr') . ' < :end_at' . $extra . ' GROUP BY COALESCE(u.full_name, "Vente automatique") ORDER BY total_amount DESC');
         $statement->execute(['restaurant_id' => $restaurantId, 'start_at' => $startAt->format('Y-m-d H:i:s'), 'end_at' => $endAt->format('Y-m-d H:i:s')]); return $statement->fetchAll(PDO::FETCH_ASSOC);
     }
@@ -2129,6 +2171,7 @@ final class ReportService
     private function salesByCategoryReport(int $restaurantId, DateTimeImmutable $startAt, DateTimeImmutable $endAt, bool $closedOnly, int $filterUserId, array $viewFilters): array
     {
         $menuItemId = (int) ($viewFilters['menu_item_id'] ?? 0);
+        $articleNeedle = mb_strtolower(trim((string) ($viewFilters['article_search'] ?? '')), 'UTF-8');
         $roleCode = trim((string) ($viewFilters['role_code'] ?? ''));
         $extra = '';
         if ($closedOnly) {
@@ -2142,6 +2185,9 @@ final class ReportService
         }
         if ($menuItemId > 0) {
             $extra .= ' AND mi.id = ' . $menuItemId;
+        }
+        if ($articleNeedle !== '') {
+            $extra .= ' AND LOWER(mi.name) LIKE ' . $this->database->pdo()->quote('%' . $articleNeedle . '%');
         }
         $statement = $this->database->pdo()->prepare(
             'SELECT COALESCE(mc.id, 0) AS category_id,
