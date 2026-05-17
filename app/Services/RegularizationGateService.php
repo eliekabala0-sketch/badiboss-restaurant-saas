@@ -309,10 +309,10 @@ final class RegularizationGateService
                 continue;
             }
             $status = (string) ($r['status'] ?? '');
-            if (in_array($status, ['ANNULE', 'REFUSE_STOCK', 'CLOTURE', 'FOURNI_TOTAL'], true)) {
+            if (in_array($status, ['ANNULE', 'REFUSE_STOCK', 'CLOTURE', 'FOURNI_TOTAL', 'FOURNI_PARTIEL'], true)) {
                 continue;
             }
-            if (!empty($r['has_any_received_item']) && in_array($status, ['FOURNI_PARTIEL', 'NON_FOURNI'], true)) {
+            if (!empty($r['has_any_received_item']) && $status === 'NON_FOURNI') {
                 continue;
             }
             $createdAt = (string) ($r['created_at'] ?? '');
@@ -637,10 +637,10 @@ final class RegularizationGateService
                 continue;
             }
             $status = (string) ($row['status'] ?? '');
-            if (in_array($status, ['ANNULE', 'REFUSE_STOCK', 'CLOTURE', 'FOURNI_TOTAL'], true)) {
+            if (in_array($status, ['ANNULE', 'REFUSE_STOCK', 'CLOTURE', 'FOURNI_TOTAL', 'FOURNI_PARTIEL'], true)) {
                 continue;
             }
-            if (!empty($row['has_any_received_item']) && in_array($status, ['FOURNI_PARTIEL', 'NON_FOURNI'], true)) {
+            if (!empty($row['has_any_received_item']) && $status === 'NON_FOURNI') {
                 continue;
             }
             $createdAt = (string) ($row['created_at'] ?? '');

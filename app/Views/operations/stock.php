@@ -591,6 +591,7 @@ require base_path('app/Views/partials/module_quick_nav.php');
             <div style="padding:0 22px 22px;" class="section-stack">
                 <?php foreach ($section['requests'] as $index => $request): ?>
                     <?php $requestItems = $kitchenStockRequestItemsByRequest[(int) $request['id']] ?? []; ?>
+                    <?php $hasRealKitchenReceipt = !empty($request['received_at']) || !empty($request['received_by_name']); ?>
                     <details class="<?= $index >= $activePreviewLimit ? 'history-extra' : '' ?>" data-history-group="<?= e($section['dom_id']) ?>" <?= $index === 0 ? 'open' : '' ?> style="<?= $index >= $activePreviewLimit ? 'display:none;' : '' ?>border-top:1px solid var(--line); padding-top:16px;" id="op-focus-kitchen_stock_request-<?= e((string) $request['id']) ?>" data-operation-focus="kitchen_stock_request:<?= e((string) $request['id']) ?>">
                         <summary style="cursor:pointer; list-style:none; display:flex; justify-content:space-between; gap:12px; align-items:flex-start;">
                             <div>
@@ -638,7 +639,9 @@ require base_path('app/Views/partials/module_quick_nav.php');
                         <div style="margin-top:14px;">
                             <div><strong>Demande :</strong> <?= e(signed_actor_line('Demande', $request['requested_by_name'] ?: null, 'kitchen', $request['created_at'] ?? null, $restaurant, $historyTimezone)) ?></div>
                             <div><strong>Prise en charge :</strong> <?= e(signed_actor_line('Pris en charge', $request['responded_by_name'] ?: null, 'stock_manager', $request['responded_at'] ?? null, $restaurant, $historyTimezone)) ?></div>
-                            <div><strong>Reception cuisine :</strong> <?= e(signed_actor_line('Recu', $request['received_by_name'] ?: null, 'kitchen', $request['received_at'] ?? null, $restaurant, $historyTimezone)) ?></div>
+                            <div><strong>Reception cuisine :</strong> <?= e($hasRealKitchenReceipt
+                                ? signed_actor_line('Recu', $request['received_by_name'] ?: null, 'kitchen', $request['received_at'] ?? null, $restaurant, $historyTimezone)
+                                : 'En attente de reception cuisine') ?></div>
                             <div><strong>Note generale :</strong> <?= e((string) ($request['note'] ?: '-')) ?></div>
                         </div>
 
