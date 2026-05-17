@@ -410,7 +410,7 @@ final class OperationsController
                 Container::getInstance()->get('stockService')->listItems($restaurantId),
                 static fn (array $row): bool => empty($row['archived_at'])
             )),
-            'kitchen_inventory' => Container::getInstance()->get('stockService')->listKitchenInventoryDashboard($restaurantId),
+            'kitchen_inventory' => Container::getInstance()->get('stockService')->listKitchenInventoryDashboard($restaurantId, false),
             'kitchen_evolution' => Container::getInstance()->get('stockService')->listKitchenEvolution($restaurantId),
             'menu_categories' => Container::getInstance()->get('menuAdmin')->listCategories($restaurantId),
             'menu_items' => Container::getInstance()->get('menuAdmin')->listItems($restaurantId),

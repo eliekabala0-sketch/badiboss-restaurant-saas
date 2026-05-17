@@ -1178,7 +1178,7 @@ final class StockService
      *
      * @return list<array<string, mixed>>
      */
-    public function listKitchenInventoryDashboard(int $restaurantId): array
+    public function listKitchenInventoryDashboard(int $restaurantId, bool $withActivityMeta = true): array
     {
         $rows = $this->listKitchenInventory($restaurantId);
         if ($rows === []) {
@@ -1214,45 +1214,53 @@ final class StockService
             $usedByItem[(int) $u['stock_item_id']] = (float) ($u['total_used'] ?? 0);
         }
 
-        $lastRecvStmt = $pdo->prepare(
-            'SELECT ksri.received_at,
-                    ksri.responded_by,
-                    ksri.received_by,
-                    su.full_name AS stock_responder_name,
-                    ku.full_name AS kitchen_receiver_name
-             FROM kitchen_stock_request_items ksri
-             LEFT JOIN users su ON su.id = ksri.responded_by
-             LEFT JOIN users ku ON ku.id = ksri.received_by
-             WHERE ksri.restaurant_id = :restaurant_id
-               AND ksri.stock_item_id = :stock_item_id
-               AND ksri.received_at IS NOT NULL
-             ORDER BY ksri.received_at DESC, ksri.id DESC
-             LIMIT 1'
-        );
+        $lastRecvStmt = null;
+        $lastUseStmt = null;
+        if ($withActivityMeta) {
+            $lastRecvStmt = $pdo->prepare(
+                'SELECT ksri.received_at,
+                        ksri.responded_by,
+                        ksri.received_by,
+                        su.full_name AS stock_responder_name,
+                        ku.full_name AS kitchen_receiver_name
+                 FROM kitchen_stock_request_items ksri
+                 LEFT JOIN users su ON su.id = ksri.responded_by
+                 LEFT JOIN users ku ON ku.id = ksri.received_by
+                 WHERE ksri.restaurant_id = :restaurant_id
+                   AND ksri.stock_item_id = :stock_item_id
+                   AND ksri.received_at IS NOT NULL
+                 ORDER BY ksri.received_at DESC, ksri.id DESC
+                 LIMIT 1'
+            );
 
-        $lastUseStmt = $pdo->prepare(
-            'SELECT kpm.created_at,
-                    kpm.quantity_used,
-                    mi.name AS menu_item_name,
-                    kp.dish_type,
-                    u.full_name AS cook_name
-             FROM kitchen_production_materials kpm
-             INNER JOIN kitchen_production kp ON kp.id = kpm.kitchen_production_id
-             LEFT JOIN menu_items mi ON mi.id = kp.menu_item_id
-             INNER JOIN users u ON u.id = kp.created_by
-             WHERE kpm.restaurant_id = :restaurant_id
-               AND kpm.stock_item_id = :stock_item_id
-             ORDER BY kpm.created_at DESC, kpm.id DESC
-             LIMIT 1'
-        );
+            $lastUseStmt = $pdo->prepare(
+                'SELECT kpm.created_at,
+                        kpm.quantity_used,
+                        mi.name AS menu_item_name,
+                        kp.dish_type,
+                        u.full_name AS cook_name
+                 FROM kitchen_production_materials kpm
+                 INNER JOIN kitchen_production kp ON kp.id = kpm.kitchen_production_id
+                 LEFT JOIN menu_items mi ON mi.id = kp.menu_item_id
+                 INNER JOIN users u ON u.id = kp.created_by
+                 WHERE kpm.restaurant_id = :restaurant_id
+                   AND kpm.stock_item_id = :stock_item_id
+                 ORDER BY kpm.created_at DESC, kpm.id DESC
+                 LIMIT 1'
+            );
+        }
 
         $out = [];
         foreach ($rows as $row) {
             $sid = (int) ($row['stock_item_id'] ?? 0);
-            $lastRecvStmt->execute(['restaurant_id' => $restaurantId, 'stock_item_id' => $sid]);
-            $lr = $lastRecvStmt->fetch(PDO::FETCH_ASSOC) ?: [];
-            $lastUseStmt->execute(['restaurant_id' => $restaurantId, 'stock_item_id' => $sid]);
-            $lu = $lastUseStmt->fetch(PDO::FETCH_ASSOC) ?: [];
+            $lr = [];
+            $lu = [];
+            if ($withActivityMeta && $lastRecvStmt !== null && $lastUseStmt !== null) {
+                $lastRecvStmt->execute(['restaurant_id' => $restaurantId, 'stock_item_id' => $sid]);
+                $lr = $lastRecvStmt->fetch(PDO::FETCH_ASSOC) ?: [];
+                $lastUseStmt->execute(['restaurant_id' => $restaurantId, 'stock_item_id' => $sid]);
+                $lu = $lastUseStmt->fetch(PDO::FETCH_ASSOC) ?: [];
+            }
 
             $dishLabel = (string) ($lu['menu_item_name'] ?? '');
             if ($dishLabel === '' && ($lu['dish_type'] ?? '') !== '') {

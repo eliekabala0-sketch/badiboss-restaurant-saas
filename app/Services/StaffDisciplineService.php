@@ -894,8 +894,6 @@ final class StaffDisciplineService
     public function gaugesForUserOperationalPanelLight(int $restaurantId, int $userId, string $dayYmd): array
     {
         $this->ensureSchema();
-        $tz = Container::getInstance()->get('reportService')->timezoneForRestaurantReports($restaurantId);
-        $roleCode = $this->resolveRoleCodeForUser($restaurantId, $userId);
         $gauges = [
             'daily' => null,
             'weekly_avg' => null,
@@ -917,35 +915,31 @@ final class StaffDisciplineService
         ];
 
         try {
+            $tz = Container::getInstance()->get('reportService')->timezoneForRestaurantReports($restaurantId);
             $active = $this->snapshotDayGauge($restaurantId, $userId, $dayYmd, 'Aujourd hui', $tz);
-            $weekly = $this->averageLastDaysNullable($restaurantId, $userId, $dayYmd, 7, $tz);
-            $globalStart = $this->effectiveGlobalStartYmd($restaurantId);
-            $engagementStart = $this->effectiveAgentEngagementStartYmd($restaurantId, $userId, $tz);
-            $monthStart = substr($dayYmd, 0, 7) . '-01';
-            $periodStart = max($monthStart, $globalStart, $engagementStart);
             $dayBreakdown = is_array($active['score_breakdown'] ?? null) ? $active['score_breakdown'] : [];
             $dayKind = (string) ($dayBreakdown['evaluation_kind'] ?? '');
             $dayActions = (int) ($dayBreakdown['action_count'] ?? 0);
             $unjustified = $dayKind === 'absence_unjustified' ? 1 : 0;
             $softAbsence = in_array($dayKind, ['absence_authorized', 'absence_illness', 'late_justified'], true) ? 1 : 0;
             $zeroActivity = ($dayActions === 0 && !in_array($dayKind, ['neutral_rest', 'neutral_exempt', 'manager_present_confirm'], true)) ? 1 : 0;
-
-            $shortfallHits = $roleCode === 'cashier_server'
-                ? $this->ledgerReasonCountForUserDayRange(
-                    $restaurantId,
-                    $userId,
-                    $periodStart,
-                    $dayYmd,
-                    ['server_shortfall_today', 'server_shortfall_legacy']
-                )
-                : 0;
-            $lateRemittance = $roleCode === 'cashier_server'
-                ? $this->serverLateRemittanceMetricsForRange($restaurantId, $userId, $periodStart, $dayYmd)
-                : ['late_count' => 0, 'max_delay_days' => 0];
+            $ledgerLines = is_array($dayBreakdown['ledger_lines'] ?? null) ? $dayBreakdown['ledger_lines'] : [];
+            $ledgerReasonCodes = [];
+            foreach ($ledgerLines as $ledgerLine) {
+                if (!is_array($ledgerLine)) {
+                    continue;
+                }
+                $reasonCode = trim((string) ($ledgerLine['reason_code'] ?? ''));
+                if ($reasonCode !== '') {
+                    $ledgerReasonCodes[$reasonCode] = true;
+                }
+            }
+            $shortfallHits = (isset($ledgerReasonCodes['server_shortfall_today']) || isset($ledgerReasonCodes['server_shortfall_legacy'])) ? 1 : 0;
+            $lateRemittanceHits = isset($ledgerReasonCodes['server_remittance_rejected']) ? 1 : 0;
 
             $gauges = [
                 'daily' => ($active['score'] ?? null),
-                'weekly_avg' => $weekly,
+                'weekly_avg' => ($active['score'] ?? null),
                 'monthly_avg' => null,
                 'zone' => (string) ($active['zone'] ?? 'non_evalue'),
                 'ledger_preview' => array_slice((array) ($active['points_detail'] ?? []), -12),
@@ -960,8 +954,8 @@ final class StaffDisciplineService
                     'absences_justifiees_maladie' => $softAbsence,
                     'jours_sans_activite_mesuree' => $zeroActivity,
                     'manquants_caisse_hits' => $shortfallHits,
-                    'late_remittance_hits' => (int) ($lateRemittance['late_count'] ?? 0),
-                    'late_remittance_max_delay_days' => (int) ($lateRemittance['max_delay_days'] ?? 0),
+                    'late_remittance_hits' => $lateRemittanceHits,
+                    'late_remittance_max_delay_days' => 0,
                     'actions_mois' => $dayActions,
                 ],
             ];
