@@ -434,33 +434,30 @@ final class DashboardController
         $loadHeavy = (string) ($request->query['heavy'] ?? '') === '1';
         $loadAlerts = $loadHeavy && (string) ($request->query['alerts'] ?? '') === '1';
         $todayY = Container::getInstance()->get('reportService')->todayForRestaurant($restaurantId);
+        $disciplinePreset = strtolower(trim((string) ($request->query['preset'] ?? 'today')));
+        $disciplineAllowed = ['today', 'yesterday', 'date', 'week', 'month', 'prev_month'];
+        if (!in_array($disciplinePreset, $disciplineAllowed, true)) {
+            $disciplinePreset = 'today';
+        }
+        $disciplineDateRaw = trim((string) ($request->query['date'] ?? ''));
+        $disciplineDate = preg_match('/^\d{4}-\d{2}-\d{2}$/', $disciplineDateRaw) ? $disciplineDateRaw : $todayY;
+        $disciplineWindow = Container::getInstance()->get('reportService')->operationalPeriodWindow($restaurantId, $disciplinePreset, $disciplineDate);
         $monthIn = trim((string) ($request->query['month'] ?? ''));
         if ($monthIn === '') {
             $monthIn = substr($todayY, 0, 7);
         }
-        if ($loadHeavy) {
-            $preview = $staffDisc->payrollMonthPreview($restaurantId, $monthIn, true);
-        } else {
-            $periodStart = $monthIn . '-01';
-            try {
-                $periodEndMonth = (new DateTimeImmutable($periodStart . ' 00:00:00'))->modify('last day of this month')->format('Y-m-d');
-            } catch (\Throwable) {
-                $periodEndMonth = $todayY;
-            }
-            $preview = [
-                'month' => $monthIn,
-                'period_label' => 'Mois ' . $monthIn,
-                'period_start' => $periodStart,
-                'period_end' => substr($todayY, 0, 7) === $monthIn ? $todayY : $periodEndMonth,
-                'rows' => [],
-            ];
-        }
+        $preview = $staffDisc->payrollMonthPreview($restaurantId, $monthIn, $loadHeavy);
+        $disciplineRows = $staffDisc->gaugesSnapshotRestaurantOperational($restaurantId, $disciplinePreset, $disciplineDate);
 
         view('owner/prepare-payroll', [
             'title' => 'Préparer la paie',
             'user' => $actor,
             'restaurant' => $restaurant,
             'payroll_preview' => $preview,
+            'payroll_discipline_rows' => $disciplineRows,
+            'payroll_discipline_preset' => $disciplinePreset,
+            'payroll_discipline_date' => $disciplineDate,
+            'payroll_discipline_period_label' => (string) ($disciplineWindow['label'] ?? ''),
             'month_query' => $preview['month'],
             'payroll_heavy_loaded' => $loadHeavy,
             'flash_success' => $flashSuccess,
@@ -480,8 +477,16 @@ final class DashboardController
         session_release_read_lock();
         $staffDisc = Container::getInstance()->get('staffDiscipline');
         $staffDisc->ensureSchema();
-        $loadHeavy = (string) ($request->query['heavy'] ?? '') === '1';
         $todayY = Container::getInstance()->get('reportService')->todayForRestaurant($restaurantId);
+        $preset = strtolower(trim((string) ($request->query['preset'] ?? 'today')));
+        $allowed = ['today', 'yesterday', 'date', 'week', 'month', 'prev_month'];
+        if (!in_array($preset, $allowed, true)) {
+            $preset = 'today';
+        }
+        $anchorRaw = trim((string) ($request->query['date'] ?? ''));
+        $anchorYmd = preg_match('/^\d{4}-\d{2}-\d{2}$/', $anchorRaw) ? $anchorRaw : $todayY;
+        $periodWindow = Container::getInstance()->get('reportService')->operationalPeriodWindow($restaurantId, $preset, $anchorYmd);
+        $loadAlerts = (string) ($request->query['alerts'] ?? '') === '1';
         $users = Container::getInstance()->get('roleAdmin')->listUsersForRestaurant($restaurantId);
         $attUsers = array_values(array_filter(
             $users,
@@ -503,10 +508,13 @@ final class DashboardController
             'user' => $actor,
             'restaurant' => Container::getInstance()->get('restaurantAdmin')->findRestaurant($restaurantId),
             'today_ymd' => $todayY,
+            'discipline_preset' => $preset,
+            'discipline_anchor_date' => $anchorYmd,
+            'discipline_period_label' => (string) ($periodWindow['label'] ?? ''),
             'discipline_schedule' => $staffDisc->disciplineWorkScheduleForRestaurant($restaurantId),
             'alerts' => $loadAlerts ? $staffDisc->listDisciplinaryAlerts($restaurantId) : [],
-            'gauge_rows' => $loadHeavy ? $staffDisc->gaugesSnapshotRestaurantDailyLight($restaurantId, $todayY) : [],
-            'discipline_heavy_loaded' => $loadHeavy,
+            'gauge_rows' => $staffDisc->gaugesSnapshotRestaurantOperational($restaurantId, $preset, $anchorYmd),
+            'discipline_heavy_loaded' => true,
             'discipline_alerts_loaded' => $loadAlerts,
             'staff_users' => $attUsers,
             'payroll_profiles' => $payrollProfiles,

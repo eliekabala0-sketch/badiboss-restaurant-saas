@@ -319,6 +319,33 @@ declare(strict_types=1);
             flex-wrap: wrap;
             gap: 10px;
         }
+        .live-banner {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            padding: 14px 16px;
+            margin-bottom: 18px;
+            border-radius: var(--radius-md);
+            border: 1px solid rgba(59, 130, 246, 0.28);
+            background: rgba(37, 99, 235, 0.14);
+            color: #dbeafe;
+        }
+        .live-banner[data-level="warning"] {
+            border-color: rgba(251, 191, 36, 0.3);
+            background: rgba(217, 119, 6, 0.16);
+            color: #fde68a;
+        }
+        .live-banner[data-level="danger"] {
+            border-color: rgba(248, 113, 113, 0.34);
+            background: rgba(127, 29, 29, 0.24);
+            color: #fee2e2;
+        }
+        .live-banner button {
+            padding: 8px 12px;
+            background: rgba(255,255,255,0.08);
+            box-shadow: none;
+        }
         .nav a {
             background: rgba(255,255,255,0.04);
             border-color: rgba(212, 175, 55, 0.12);
@@ -669,16 +696,63 @@ declare(strict_types=1);
             .quantity-stepper { width: 100%; grid-template-columns: 40px minmax(64px, 1fr) 40px; }
         }
     </style>
+    <script>
+    document.addEventListener('DOMContentLoaded', function () {
+        document.querySelectorAll('img[data-fallback-src]').forEach(function (img) {
+            img.addEventListener('error', function () {
+                var fallback = img.getAttribute('data-fallback-src');
+                if (!fallback || img.dataset.fallbackApplied === '1' || img.src === fallback) {
+                    return;
+                }
+                img.dataset.fallbackApplied = '1';
+                img.src = fallback;
+            });
+        });
+
+        var banner = document.getElementById('app-live-banner');
+        window.BadibossNotify = {
+            push: function (message, level, timeoutMs) {
+                if (!banner || !message) {
+                    return;
+                }
+                banner.hidden = false;
+                banner.setAttribute('data-level', level || 'info');
+                var textNode = banner.querySelector('[data-live-banner-text]');
+                if (textNode) {
+                    textNode.textContent = message;
+                }
+                var delay = typeof timeoutMs === 'number' ? timeoutMs : 8000;
+                if (banner._timer) {
+                    window.clearTimeout(banner._timer);
+                }
+                if (delay > 0) {
+                    banner._timer = window.setTimeout(function () {
+                        banner.hidden = true;
+                    }, delay);
+                }
+            }
+        };
+    });
+    </script>
 </head>
 <body>
 <div class="shell">
     <div class="container">
+        <div id="app-live-banner" class="live-banner" data-level="info" hidden>
+            <strong data-live-banner-text>Nouvelle alerte</strong>
+            <button type="button" class="button-muted" onclick="this.parentElement.hidden = true;">Masquer</button>
+        </div>
         <?php if (current_user() !== null): ?>
             <?php $restaurantNotice = flash('restaurant_notice'); ?>
             <?php if ((current_user()['scope'] ?? null) !== 'super_admin' && !empty($current_restaurant_context ?? null)): ?>
                 <section class="context-bar">
                     <div class="context-identity">
-                        <img src="<?= e(restaurant_media_url_or_default($current_restaurant_context['logo_url'] ?? null, 'logo')) ?>" alt="Logo restaurant" class="context-logo">
+                        <img
+                            src="<?= e(restaurant_media_url_or_default($current_restaurant_context['logo_url'] ?? null, 'logo')) ?>"
+                            alt="Logo restaurant"
+                            class="context-logo"
+                            data-fallback-src="<?= e(restaurant_media_fallback_url('logo')) ?>"
+                        >
                         <div>
                         <strong><?= e($current_restaurant_context['public_name'] ?? $current_restaurant_context['name'] ?? current_user()['restaurant_name'] ?? 'Restaurant') ?></strong>
                         <div class="muted">

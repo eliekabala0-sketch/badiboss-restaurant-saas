@@ -8,6 +8,7 @@ $movements = $cash['movements'] ?? [];
 $pendingServerSales = $cash['pending_server_sales'] ?? [];
 $cashiers = $cash['cashiers'] ?? [];
 $cashTodaySnapC = $cash_today_snapshot ?? null;
+$cashClarityToday = is_array($cashTodaySnapC['cash_clarity_today'] ?? null) ? $cashTodaySnapC['cash_clarity_today'] : [];
 $dayHoldCash = $day_start_hold ?? ['blocked' => false, 'reasons' => []];
 $cashPulse = $module_today_pulse ?? [];
 $cashRegBack = $regularization_backlog ?? [];
@@ -40,6 +41,28 @@ $canReclassifyCash = in_array((string) (current_user()['role_code'] ?? ''), ['ow
         <article class="card stat"><span>Écart vendu − reçu</span><strong><?= e(format_money((float) ($cashTodaySnapC['real_gap_sold_closed_minus_received'] ?? 0), $restaurantCurrency)) ?></strong></article>
         <article class="card stat"><span>Manquant</span><strong><?= e(format_money((float) ($cashTodaySnapC['shortfall_today_total'] ?? 0), $restaurantCurrency)) ?></strong></article>
     </div>
+</section>
+<?php endif; ?>
+
+<?php if ($cashClarityToday !== []): ?>
+<section class="card" style="padding:16px 18px; margin-bottom:20px;">
+    <strong>Lecture caisse</strong>
+    <p class="muted" style="margin:8px 0 0;">La vente reste rattachÃ©e au jour dâ€™activitÃ©. La remise et la rÃ©ception caisse gardent leur date physique pour Ã©viter les faux dÃ©calages.</p>
+    <?php if (!empty($cashClarityToday['clarity_notes']) && is_array($cashClarityToday['clarity_notes'])): ?>
+        <ul style="margin:10px 0 0; padding-left:18px; line-height:1.6;">
+            <?php foreach ($cashClarityToday['clarity_notes'] as $note): ?>
+                <li><?= e((string) $note) ?></li>
+            <?php endforeach; ?>
+        </ul>
+    <?php endif; ?>
+    <?php if (!empty($cashClarityToday['explanations']) && is_array($cashClarityToday['explanations'])): ?>
+        <ul style="margin:10px 0 0; padding-left:18px; line-height:1.6;">
+            <?php foreach ($cashClarityToday['explanations'] as $explanation): ?>
+                <?php if (!is_array($explanation)) { continue; } ?>
+                <li><?= e((string) ($explanation['label'] ?? 'Explication')) ?> : <?= e(format_money((float) ($explanation['amount'] ?? 0), $restaurantCurrency)) ?><?php if (!empty($explanation['note'])): ?> Â· <?= e((string) $explanation['note']) ?><?php endif; ?></li>
+            <?php endforeach; ?>
+        </ul>
+    <?php endif; ?>
 </section>
 <?php endif; ?>
 
@@ -99,6 +122,17 @@ $rbCash = (int) (($cashRegBack['overdue_remis_a_caisse'] ?? 0) + ($cashRegBack['
             <li><strong>Solde gérant</strong> (reçu − déclaré vers propriétaire) : <?= e(format_money((float) ($ccp['manager_net_period'] ?? 0), $restaurantCurrency)) ?></li>
             <li><strong>Écarts signalés</strong> : <?= e(format_money((float) ($ccp['discrepancy_total'] ?? 0), $restaurantCurrency)) ?></li>
         </ul>
+        <?php if (!empty($ccp['explanations']) && is_array($ccp['explanations'])): ?>
+            <div class="compact-empty" style="margin-top:14px;">
+                <strong>Exceptions expliquÃ©es</strong>
+                <ul style="margin:8px 0 0; padding-left:18px; line-height:1.6;">
+                    <?php foreach ($ccp['explanations'] as $explanation): ?>
+                        <?php if (!is_array($explanation)) { continue; } ?>
+                        <li><?= e((string) ($explanation['label'] ?? 'Explication')) ?> : <?= e(format_money((float) ($explanation['amount'] ?? 0), $restaurantCurrency)) ?><?php if (!empty($explanation['note'])): ?> Â· <?= e((string) $explanation['note']) ?><?php endif; ?></li>
+                    <?php endforeach; ?>
+                </ul>
+            </div>
+        <?php endif; ?>
     <?php else: ?>
         <p class="muted">Chargez les données de caisse pour voir la synthèse.</p>
     <?php endif; ?>

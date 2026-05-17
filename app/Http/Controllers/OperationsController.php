@@ -1370,7 +1370,7 @@ final class OperationsController
         $date = (string) ($request->query['date'] ?? Container::getInstance()->get('reportService')->todayForRestaurant($restaurantId));
         $period = (string) ($request->query['period'] ?? 'daily');
         $todayYmd = Container::getInstance()->get('reportService')->todayForRestaurant($restaurantId);
-        if (in_array($reportPreset, ['today', 'yesterday', 'week', 'month'], true)) {
+        if (in_array($reportPreset, ['today', 'yesterday', 'week', 'month', 'year'], true)) {
             $restaurantRow = Container::getInstance()->get('restaurantAdmin')->findRestaurant($restaurantId);
             $tzName = (string) ($restaurantRow['timezone'] ?? config('app.timezone', 'Africa/Lagos'));
             try {
@@ -1391,9 +1391,12 @@ final class OperationsController
             } elseif ($reportPreset === 'month') {
                 $date = $todayYmd;
                 $period = 'monthly';
+            } elseif ($reportPreset === 'year') {
+                $date = $todayYmd;
+                $period = 'annual';
             }
         }
-        if (!in_array($period, ['daily', 'weekly', 'monthly'], true)) {
+        if (!in_array($period, ['daily', 'weekly', 'monthly', 'annual'], true)) {
             $period = 'daily';
         }
 
@@ -1443,6 +1446,7 @@ final class OperationsController
         $title = match ($period) {
             'weekly' => 'Rapport hebdomadaire',
             'monthly' => 'Rapport mensuel',
+            'annual' => 'Rapport annuel',
             default => 'Rapport journalier',
         };
 

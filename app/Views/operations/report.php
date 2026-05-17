@@ -204,6 +204,21 @@ $disciplinary_alerts = $disciplinary_alerts ?? [];
         <article class="card stat"><span>Solde caisse</span><strong><?= e(format_money((float) ($cashTodaySnap['cash_balance_current'] ?? 0), $restaurantCurrency)) ?></strong></article>
         <article class="card stat"><span>Écarts</span><strong><?= e(format_money((float) ($cashTodaySnap['discrepancies_today'] ?? 0), $restaurantCurrency)) ?></strong></article>
     </div>
+    <?php $todayClarity = is_array($cashTodaySnap['cash_clarity_today'] ?? null) ? $cashTodaySnap['cash_clarity_today'] : []; ?>
+    <?php if ($todayClarity !== []): ?>
+    <div class="compact-empty" style="margin-top:14px;">
+        <strong>Lecture de cohÃ©rence</strong>
+        <div style="margin-top:8px;">Les ventes gardent le jour dâ€™activitÃ©. Les remises et rÃ©ceptions caisse gardent leur date opÃ©rationnelle propre.</div>
+        <?php if (!empty($todayClarity['explanations']) && is_array($todayClarity['explanations'])): ?>
+            <ul style="margin:8px 0 0; padding-left:18px; line-height:1.6;">
+                <?php foreach ($todayClarity['explanations'] as $explanation): ?>
+                    <?php if (!is_array($explanation)) { continue; } ?>
+                    <li><?= e((string) ($explanation['label'] ?? 'Explication')) ?> : <?= e(format_money((float) ($explanation['amount'] ?? 0), $restaurantCurrency)) ?><?php if (!empty($explanation['note'])): ?> Â· <?= e((string) $explanation['note']) ?><?php endif; ?></li>
+                <?php endforeach; ?>
+            </ul>
+        <?php endif; ?>
+    </div>
+    <?php endif; ?>
     <?php $sfd = $cashTodaySnap['server_shortfall']['agents'] ?? []; ?>
     <?php if (array_filter($sfd, static fn (array $a): bool => ((float) ($a['shortfall'] ?? 0)) > 0.0001)): ?>
     <details class="compact-card no-print" style="margin-top:14px;" data-autoclose-details>
@@ -439,6 +454,7 @@ $reportCanDecideLateRemittance = in_array((string) (current_user()['role_code'] 
             <a href="/rapport?report_preset=yesterday<?= e($rptUserQ . $ridQsa) ?>">Hier</a>
             <a href="/rapport?report_preset=week<?= e($rptUserQ . $ridQsa) ?>">Semaine en cours</a>
             <a href="/rapport?report_preset=month<?= e($rptUserQ . $ridQsa) ?>">Mois en cours</a>
+            <a href="/rapport?report_preset=year<?= e($rptUserQ . $ridQsa) ?>">AnnÃ©e en cours</a>
         </div>
     </details>
     <form method="get" action="/rapport" style="margin-top:14px;">
@@ -452,6 +468,7 @@ $reportCanDecideLateRemittance = in_array((string) (current_user()['role_code'] 
             <option value="daily" <?= ($period ?? 'daily') === 'daily' ? 'selected' : '' ?>>Journalier</option>
             <option value="weekly" <?= ($period ?? 'daily') === 'weekly' ? 'selected' : '' ?>>Hebdomadaire</option>
             <option value="monthly" <?= ($period ?? 'daily') === 'monthly' ? 'selected' : '' ?>>Mensuel</option>
+            <option value="annual" <?= ($period ?? 'daily') === 'annual' ? 'selected' : '' ?>>Annuel</option>
         </select>
         <label>Agent</label>
         <?php if ($reportAgentFilterLocked): ?>

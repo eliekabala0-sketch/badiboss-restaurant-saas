@@ -8,12 +8,36 @@ $alerts = is_array($alerts ?? null) ? $alerts : [];
 $gaugeRows = is_array($gauge_rows ?? null) ? $gauge_rows : [];
 $staffUsers = is_array($staff_users ?? null) ? $staff_users : [];
 $payrollProfiles = is_array($payroll_profiles ?? null) ? $payroll_profiles : [];
-$disciplineHeavyLoaded = !empty($discipline_heavy_loaded);
 $disciplineAlertsLoaded = !empty($discipline_alerts_loaded);
+$disciplinePreset = (string) ($discipline_preset ?? 'today');
+$disciplineAnchorDate = (string) ($discipline_anchor_date ?? $todayYmd);
+$disciplinePeriodLabel = (string) ($discipline_period_label ?? '');
 $cur = $restaurant['currency'] ?? 'USD';
 
-$disciplineZoneLabel = static function (?string $z): string {
-    return match ((string) $z) {
+$periodHref = static function (string $preset, string $date, bool $alertsLoaded): string {
+    $query = ['preset' => $preset];
+    if ($preset === 'date') {
+        $query['date'] = $date;
+    }
+    if ($alertsLoaded) {
+        $query['alerts'] = '1';
+    }
+
+    return '/owner/discipline?' . http_build_query($query);
+};
+
+$zoneClass = static function (?string $zone): string {
+    return match ((string) $zone) {
+        'vert' => 'badge-closed',
+        'jaune' => 'badge-ready',
+        'orange' => 'badge-progress',
+        'rouge', 'rouge_critique' => 'badge-bad',
+        default => 'badge-neutral',
+    };
+};
+
+$zoneLabel = static function (?string $zone): string {
+    return match ((string) $zone) {
         'vert' => 'Excellent',
         'jaune' => 'Bon',
         'orange' => 'Moyen',
@@ -22,25 +46,17 @@ $disciplineZoneLabel = static function (?string $z): string {
         default => 'Non evalue',
     };
 };
-$disciplineZonePill = static function (?string $z): string {
-    return match ((string) $z) {
-        'vert' => 'badge-closed',
-        'jaune' => 'badge-ready',
-        'orange' => 'badge-progress',
-        'rouge', 'rouge_critique' => 'badge-bad',
-        default => 'badge-neutral',
-    };
-};
-$dayStatusLabel = static function (array $activePeriod): string {
-    $sb = is_array($activePeriod['score_breakdown'] ?? null) ? $activePeriod['score_breakdown'] : [];
-    return match ((string) ($sb['evaluation_kind'] ?? '')) {
-        'audit_activity' => 'Actif',
+
+$statusLabel = static function (array $activePeriod): string {
+    $kind = (string) (($activePeriod['score_breakdown']['evaluation_kind'] ?? $activePeriod['evaluation_kind'] ?? ''));
+
+    return match ($kind) {
         'absence_unjustified' => 'Absence / inactivite',
         'absence_authorized' => 'Absence autorisee',
         'absence_illness' => 'Maladie',
+        'late_justified' => 'Retard justifie',
         'neutral_rest' => 'Repos',
         'neutral_exempt' => 'Exonere',
-        'late_justified' => 'Retard justifie',
         'manager_present_confirm' => 'Presence confirmee',
         'not_yet_active' => 'Pas encore actif',
         'never_active' => 'Jamais actif',
@@ -49,145 +65,207 @@ $dayStatusLabel = static function (array $activePeriod): string {
         default => (($activePeriod['score'] ?? null) === null ? 'Non evalue' : 'Observe'),
     };
 };
-$sanctionHint = static function (array $activePeriod, array $metrics): string {
-    $score = $activePeriod['score'] ?? null;
-    $absUnj = (int) ($metrics['absences_injustifiees'] ?? 0);
-    $absSoft = (int) ($metrics['absences_justifiees_maladie'] ?? 0);
-    $shortfalls = (int) ($metrics['manquants_caisse_hits'] ?? 0);
+
+$signalSummary = static function (array $activePeriod, array $metrics): string {
+    $signals = [];
+    $kind = (string) (($activePeriod['score_breakdown']['evaluation_kind'] ?? $activePeriod['evaluation_kind'] ?? ''));
+    if ($kind === 'absence_unjustified') {
+        $signals[] = 'Absence non justifiee';
+    } elseif ($kind === 'absence_authorized') {
+        $signals[] = 'Absence autorisee';
+    } elseif ($kind === 'absence_illness') {
+        $signals[] = 'Maladie';
+    } elseif ($kind === 'late_justified') {
+        $signals[] = 'Retard justifie';
+    } elseif ($kind === 'neutral_rest') {
+        $signals[] = 'Repos';
+    }
+    if ((int) ($metrics['activite_actions'] ?? 0) > 0) {
+        $signals[] = (int) $metrics['activite_actions'] . ' action(s)';
+    }
+    if ((int) ($metrics['late_remittance_hits'] ?? 0) > 0) {
+        $signals[] = (int) $metrics['late_remittance_hits'] . ' remise(s) tardive(s)';
+    }
+    if ((int) ($metrics['manquants_caisse_hits'] ?? 0) > 0) {
+        $signals[] = (int) $metrics['manquants_caisse_hits'] . ' manquant(s)';
+    }
+    if ((int) ($metrics['jours_sans_activite_mesuree'] ?? 0) > 0) {
+        $signals[] = (int) $metrics['jours_sans_activite_mesuree'] . ' jour(s) sans activite';
+    }
     $rolePct = $metrics['activite_pct_moyenne_periode'] ?? null;
-    $penaltyPts = 0;
-    foreach (($activePeriod['points_detail'] ?? []) as $row) {
-        if (is_array($row)) {
-            $penaltyPts += (int) ($row['delta_points'] ?? 0);
-        }
-    }
-    if ($shortfalls > 0 || $absUnj >= 3 || ($score !== null && (float) $score < 40)) {
-        return 'Retenue / sanction forte';
-    }
-    if ($absUnj >= 2 || ($rolePct !== null && is_numeric($rolePct) && (float) $rolePct < 60) || $penaltyPts < -20 || ($score !== null && (float) $score < 75)) {
-        return 'Avertissement / surveillance';
-    }
-    if ($absSoft > 0) {
-        return 'Justification / clemence possible';
+    if ($rolePct !== null && is_numeric($rolePct) && (float) $rolePct < 60) {
+        $signals[] = 'Faible activite vs collegues';
     }
 
-    return 'Rappel simple';
+    return $signals === [] ? 'Aucun signal critique visible' : implode(' · ', array_unique($signals));
+};
+
+$sanctionHint = static function (array $activePeriod, array $metrics): string {
+    $score = $activePeriod['score'] ?? null;
+    $kind = (string) (($activePeriod['score_breakdown']['evaluation_kind'] ?? $activePeriod['evaluation_kind'] ?? ''));
+    $shortfalls = (int) ($metrics['manquants_caisse_hits'] ?? 0);
+    $lateRemittances = (int) ($metrics['late_remittance_hits'] ?? 0);
+    $daysNoActivity = (int) ($metrics['jours_sans_activite_mesuree'] ?? 0);
+    $rolePct = $metrics['activite_pct_moyenne_periode'] ?? null;
+
+    if ($kind === 'absence_unjustified' || $shortfalls > 0) {
+        return 'Sanction forte';
+    }
+    if ($lateRemittances > 0 || $daysNoActivity > 0) {
+        return 'Sanction a appliquer';
+    }
+    if ($score !== null && (float) $score < 50) {
+        return 'Surveillance renforcee';
+    }
+    if ($rolePct !== null && is_numeric($rolePct) && (float) $rolePct < 60) {
+        return 'Avertissement';
+    }
+    if (in_array($kind, ['absence_authorized', 'absence_illness', 'late_justified', 'neutral_rest'], true)) {
+        return 'Clemence possible';
+    }
+
+    return 'RAS / suivi normal';
 };
 ?>
 
 <section class="topbar">
     <div class="brand">
         <h1>Discipline et presences</h1>
-        <p class="muted">Jauges, presences, profils paie et alertes avec lecture quotidienne exploitable par le gerant.</p>
+        <p class="muted">Vue terrain par jour, hier, date precise, semaine, mois ou mois precedent, avec signaux visibles, sanction proposee et historique traçable.</p>
     </div>
 </section>
 
 <?php if (!empty($flash_success)): ?><div class="flash-ok"><?= e($flash_success) ?></div><?php endif; ?>
 <?php if (!empty($flash_error)): ?><div class="flash-bad"><?= e($flash_error) ?></div><?php endif; ?>
 
-<section class="card no-print" style="padding:14px 16px; margin-bottom:16px;">
-    <?php if ($disciplineHeavyLoaded): ?>
-        <p class="muted" style="margin:0;">Mode actif : <strong>version detaillee</strong>. Les jauges du jour, profils et alertes sont charges. <a href="/owner/discipline">Revenir a la vue rapide</a>.</p>
-    <?php else: ?>
-        <p class="muted" style="margin:0;">Mode actif : <strong>vue rapide</strong>. Pour charger les jauges du jour et les alertes detaillees : <a href="/owner/discipline?heavy=1">ouvrir la version detaillee</a>.</p>
-    <?php endif; ?>
+<section class="card no-print" style="padding:18px 22px; margin-bottom:18px;">
+    <form method="get" action="/owner/discipline" class="grid" style="gap:14px; grid-template-columns:repeat(auto-fit, minmax(180px, 1fr)); align-items:end;">
+        <label>
+            <span class="muted">Periode</span>
+            <select name="preset">
+                <option value="today" <?= $disciplinePreset === 'today' ? 'selected' : '' ?>>Aujourd hui</option>
+                <option value="yesterday" <?= $disciplinePreset === 'yesterday' ? 'selected' : '' ?>>Hier</option>
+                <option value="date" <?= $disciplinePreset === 'date' ? 'selected' : '' ?>>Date precise</option>
+                <option value="week" <?= $disciplinePreset === 'week' ? 'selected' : '' ?>>Semaine</option>
+                <option value="month" <?= $disciplinePreset === 'month' ? 'selected' : '' ?>>Mois</option>
+                <option value="prev_month" <?= $disciplinePreset === 'prev_month' ? 'selected' : '' ?>>Mois precedent</option>
+            </select>
+        </label>
+        <label>
+            <span class="muted">Date d ancrage</span>
+            <input type="date" name="date" value="<?= e($disciplineAnchorDate) ?>">
+        </label>
+        <label style="display:flex; align-items:center; gap:8px; margin:0;">
+            <input type="checkbox" name="alerts" value="1" <?= $disciplineAlertsLoaded ? 'checked' : '' ?> style="width:auto; margin:0;">
+            <span>Charger alertes actives</span>
+        </label>
+        <button type="submit">Actualiser</button>
+    </form>
+    <p class="muted" style="margin:12px 0 0;">Période lue: <?= e($disciplinePeriodLabel) ?>.</p>
+</section>
+
+<section class="card no-print" style="padding:16px 18px; margin-bottom:18px;">
+    <div class="nav" style="margin-bottom:0;">
+        <a href="<?= e($periodHref('today', $disciplineAnchorDate, $disciplineAlertsLoaded)) ?>">Aujourd hui</a>
+        <a href="<?= e($periodHref('yesterday', $disciplineAnchorDate, $disciplineAlertsLoaded)) ?>">Hier</a>
+        <a href="<?= e($periodHref('week', $disciplineAnchorDate, $disciplineAlertsLoaded)) ?>">Semaine</a>
+        <a href="<?= e($periodHref('month', $disciplineAnchorDate, $disciplineAlertsLoaded)) ?>">Mois</a>
+        <a href="<?= e($periodHref('prev_month', $disciplineAnchorDate, $disciplineAlertsLoaded)) ?>">Mois precedent</a>
+        <a href="/owner/paie/preparer?<?= e(http_build_query(['preset' => $disciplinePreset, 'date' => $disciplineAnchorDate])) ?>">Ouvrir Paie</a>
+    </div>
 </section>
 
 <?php if (!empty($sched['notice_unset'])): ?>
     <section class="status-banner status-warning no-print" style="margin-bottom:18px;">
-        <strong>Horaire par defaut</strong>
-        <p class="muted" style="margin:8px 0 0;">Parametres debut travail / tolerance / limite caisse non definis. Les valeurs par defaut restent appliquees.</p>
+        <strong>Horaires discipline par defaut</strong>
+        <p class="muted" style="margin:8px 0 0;">Debut <?= e((string) ($sched['work_start'] ?? '08:00')) ?> · tolerance <?= e((string) ($sched['arrival_grace_minutes'] ?? '15')) ?> min · remise caisse <?= e((string) ($sched['cash_deadline'] ?? '22:00')) ?>.</p>
     </section>
 <?php endif; ?>
 
-<details class="card no-print" style="padding:14px 16px; margin-bottom:16px;" <?= $disciplineHeavyLoaded ? 'open' : '' ?> data-autoclose-details>
-    <summary style="font-weight:600; cursor:pointer;">Jauges agents (aujourd hui)</summary>
-    <p class="muted" style="margin:10px 0 0; font-size:0.9rem;">Tous les agents actifs du jour doivent apparaitre ici avec leur etat, leur activite, les signaux visibles et une proposition de suivi.</p>
-    <div style="overflow:auto; margin-top:12px;">
-        <table>
-            <thead>
+<section class="card" style="padding:0; margin-bottom:24px; overflow:auto;">
+    <table>
+        <thead>
+        <tr>
+            <th>Agent</th>
+            <th>Role</th>
+            <th>Statut</th>
+            <th>Score / periode</th>
+            <th>Signaux visibles</th>
+            <th>Sanction proposee</th>
+            <th>Impact salaire</th>
+        </tr>
+        </thead>
+        <tbody>
+        <?php if ($gaugeRows === []): ?>
             <tr>
-                <th>Agent</th>
-                <th>Role</th>
-                <th>Statut du jour</th>
-                <th>Activite / score</th>
-                <th>Signaux visibles</th>
-                <th>Sanction proposee</th>
+                <td colspan="7" class="muted">Aucune jauge disponible pour cette periode.</td>
             </tr>
-            </thead>
-            <tbody>
-            <?php if ($gaugeRows === []): ?>
+        <?php endif; ?>
+        <?php foreach ($gaugeRows as $row): ?>
+            <?php if (!is_array($row)) { continue; } ?>
+            <?php
+            $gauges = is_array($row['gauges'] ?? null) ? $row['gauges'] : [];
+            $active = is_array($gauges['active_period'] ?? null) ? $gauges['active_period'] : [];
+            $metrics = is_array($gauges['row_metrics'] ?? null) ? $gauges['row_metrics'] : [];
+            $score = $active['score'] ?? null;
+            $detailRows = is_array($active['points_detail'] ?? null) ? $active['points_detail'] : [];
+            $salaryImpact = [];
+            if ((int) ($metrics['manquants_caisse_hits'] ?? 0) > 0) {
+                $salaryImpact[] = 'Retenue forte possible';
+            }
+            if ((int) ($metrics['late_remittance_hits'] ?? 0) > 0) {
+                $salaryImpact[] = 'Retenue / rappel caisse';
+            }
+            if ((string) (($active['score_breakdown']['evaluation_kind'] ?? $active['evaluation_kind'] ?? '')) === 'absence_unjustified') {
+                $salaryImpact[] = 'Impact absence';
+            }
+            if ($salaryImpact === []) {
+                $salaryImpact[] = 'A confirmer selon paie';
+            }
+            ?>
+            <tr>
+                <td><strong><?= e((string) ($row['full_name'] ?? '')) ?></strong></td>
+                <td><?= e(restaurant_role_label($row['role_code'] ?? null)) ?></td>
+                <td>
+                    <span class="pill <?= e($zoneClass($active['zone'] ?? 'non_evalue')) ?>"><?= e($statusLabel($active)) ?></span>
+                    <div class="muted" style="font-size:0.84rem; margin-top:6px;"><?= e($disciplinePeriodLabel) ?></div>
+                </td>
+                <td>
+                    <strong><?= $score === null ? 'Non evalue' : e((string) $score) . ' %' ?></strong>
+                    <div class="muted" style="font-size:0.84rem; margin-top:6px;">Zone <?= e($zoneLabel($active['zone'] ?? 'non_evalue')) ?></div>
+                    <?php if (!empty($active['note'])): ?>
+                        <div class="muted" style="font-size:0.84rem; margin-top:6px;"><?= e((string) $active['note']) ?></div>
+                    <?php endif; ?>
+                </td>
+                <td class="muted" style="font-size:0.9rem;"><?= e($signalSummary($active, $metrics)) ?></td>
+                <td>
+                    <strong><?= e($sanctionHint($active, $metrics)) ?></strong>
+                    <div class="muted" style="font-size:0.84rem; margin-top:6px;">Clémence totale ou partielle possible si justification.</div>
+                </td>
+                <td class="muted" style="font-size:0.9rem;"><?= e(implode(' · ', $salaryImpact)) ?></td>
+            </tr>
+            <?php if ($detailRows !== []): ?>
                 <tr>
-                    <td colspan="6" class="muted">Aucune jauge agent chargee pour aujourd hui.</td>
+                    <td colspan="7" class="muted" style="font-size:0.9rem;">
+                        <strong>Trace détaillée</strong>
+                        <ul style="margin:8px 0 0; padding-left:18px;">
+                            <?php foreach ($detailRows as $detailRow): ?>
+                                <?php if (!is_array($detailRow)) { continue; } ?>
+                                <li><?= e((string) ($detailRow['label'] ?? 'Point')) ?> · <?= e((string) ($detailRow['delta_points'] ?? 0)) ?> pts</li>
+                            <?php endforeach; ?>
+                        </ul>
+                    </td>
                 </tr>
             <?php endif; ?>
-            <?php foreach ($gaugeRows as $row): ?>
-                <?php if (!is_array($row)) { continue; } ?>
-                <?php
-                $g = is_array($row['gauges'] ?? null) ? $row['gauges'] : [];
-                $active = is_array($g['active_period'] ?? null) ? $g['active_period'] : [];
-                $metrics = is_array($g['row_metrics'] ?? null) ? $g['row_metrics'] : [];
-                $scoreBreakdown = is_array($active['score_breakdown'] ?? null) ? $active['score_breakdown'] : [];
-                $dayZone = (string) ($active['zone'] ?? 'non_evalue');
-                $monthZone = (string) ($g['zone'] ?? 'non_evalue');
-                $actions = (int) ($metrics['activite_actions'] ?? ($scoreBreakdown['action_count'] ?? 0));
-                $rolePct = $metrics['activite_pct_moyenne_periode'] ?? null;
-                $signals = [];
-                $absUnj = (int) ($metrics['absences_injustifiees'] ?? 0);
-                $absSoft = (int) ($metrics['absences_justifiees_maladie'] ?? 0);
-                $daysNoAct = (int) ($metrics['jours_sans_activite_mesuree'] ?? 0);
-                $shortfalls = (int) ($metrics['manquants_caisse_hits'] ?? 0);
-                if ($absUnj > 0) { $signals[] = $absUnj . ' abs. non just.'; }
-                if ($absSoft > 0) { $signals[] = $absSoft . ' abs. just./mal.'; }
-                if ($daysNoAct > 0) { $signals[] = $daysNoAct . ' j sans activite'; }
-                if ($shortfalls > 0) { $signals[] = $shortfalls . ' manquant caisse'; }
-                if ($rolePct !== null && is_numeric($rolePct) && (float) $rolePct < 60) { $signals[] = 'faible activite vs role'; }
-                foreach (($active['points_detail'] ?? []) as $pointRow) {
-                    if (!is_array($pointRow)) { continue; }
-                    $lbl = strtolower((string) ($pointRow['label'] ?? ''));
-                    if (str_contains($lbl, 'remise') || str_contains($lbl, 'caisse')) {
-                        $signals[] = 'retard / penalite caisse';
-                        break;
-                    }
-                }
-                if ($signals === []) {
-                    $signals[] = 'aucun signal critique visible';
-                }
-                $activityLine = $actions . ' action(s)';
-                if (($active['score'] ?? null) !== null) {
-                    $activityLine .= ' · score jour ' . (string) $active['score'] . ' %';
-                }
-                if (($g['monthly_avg'] ?? null) !== null) {
-                    $activityLine .= ' · mois ' . (string) $g['monthly_avg'] . ' %';
-                }
-                if ($rolePct !== null && is_numeric($rolePct)) {
-                    $activityLine .= ' · ' . (string) $rolePct . ' % role';
-                }
-                ?>
-                <tr>
-                    <td><?= e((string) ($row['full_name'] ?? '')) ?></td>
-                    <td><?= e(restaurant_role_label($row['role_code'] ?? null)) ?></td>
-                    <td>
-                        <span class="pill <?= e($disciplineZonePill($dayZone)) ?>"><?= e($dayStatusLabel($active)) ?></span>
-                        <div class="muted" style="font-size:0.85rem; margin-top:6px;">Jour <?= e($disciplineZoneLabel($dayZone)) ?> · mois <?= e($disciplineZoneLabel($monthZone)) ?></div>
-                    </td>
-                    <td class="muted" style="font-size:0.9rem;"><?= e($activityLine) ?></td>
-                    <td class="muted" style="font-size:0.9rem;"><?= e(implode(' · ', array_values(array_unique($signals)))) ?></td>
-                    <td>
-                        <strong><?= e($sanctionHint($active, $metrics)) ?></strong>
-                        <div class="muted" style="font-size:0.85rem; margin-top:6px;">La clemence reste possible via les alertes ou la justification du gerant, sans effacer l historique.</div>
-                    </td>
-                </tr>
-            <?php endforeach; ?>
-            </tbody>
-        </table>
-    </div>
-</details>
+        <?php endforeach; ?>
+        </tbody>
+    </table>
+</section>
 
-<details class="card no-print" style="padding:14px 16px; margin-bottom:16px;" data-autoclose-details>
+<details class="card no-print" style="padding:14px 16px; margin-bottom:18px;" data-autoclose-details>
     <summary style="font-weight:600; cursor:pointer;">Exceptions presence (gerant)</summary>
-    <p class="muted" style="margin:10px 0 14px;">La presence normale suit l activite. Saisissez ici seulement repos, maladie, absence autorisee, exonere, retard justifie, ou travail attendu sans activite.</p>
-    <form method="post" action="/owner/discipline/attendance" class="grid" style="gap:12px; margin-top:14px; max-width:720px;">
+    <p class="muted" style="margin:10px 0 14px;">Utilisez cette section pour absence justifiee, maladie, repos, retard justifie, exemption ou travail attendu sans activite.</p>
+    <form method="post" action="/owner/discipline/attendance" class="grid" style="gap:12px; max-width:720px;">
         <label>Agent
             <select name="target_user_id" required>
                 <?php foreach ($staffUsers as $u): ?>
@@ -197,7 +275,7 @@ $sanctionHint = static function (array $activePeriod, array $metrics): string {
             </select>
         </label>
         <label>Date
-            <input type="date" name="day_ymd" value="<?= e($todayYmd) ?>" required>
+            <input type="date" name="day_ymd" value="<?= e($disciplineAnchorDate !== '' ? $disciplineAnchorDate : $todayYmd) ?>" required>
         </label>
         <label>Exception
             <select name="planned_status" required>
@@ -217,9 +295,9 @@ $sanctionHint = static function (array $activePeriod, array $metrics): string {
     </form>
 </details>
 
-<details class="card no-print" style="padding:14px 16px; margin-bottom:16px;" data-autoclose-details>
-    <summary style="font-weight:600; cursor:pointer;">Profil paie et date de debut de service</summary>
-    <p class="muted" style="margin:10px 0 12px;">Salaire mensuel, prime, et date a partir de laquelle la discipline doit compter pour l agent.</p>
+<details class="card no-print" style="padding:14px 16px; margin-bottom:18px;" data-autoclose-details>
+    <summary style="font-weight:600; cursor:pointer;">Profil paie et debut de service</summary>
+    <p class="muted" style="margin:10px 0 12px;">Base mensuelle, prime et date de debut reelle pour éviter les “non évalué” injustifiés.</p>
     <?php foreach ($staffUsers as $u): ?>
         <?php if (!is_array($u) || (string) ($u['role_code'] ?? '') === 'owner') { continue; } ?>
         <?php
@@ -251,12 +329,10 @@ $sanctionHint = static function (array $activePeriod, array $metrics): string {
     <?php endforeach; ?>
 </details>
 
-<details class="card no-print" style="padding:14px 16px; margin-bottom:16px;" <?= ($disciplineAlertsLoaded && $alerts !== []) ? 'open' : '' ?> data-autoclose-details>
+<details class="card no-print" style="padding:14px 16px; margin-bottom:18px;" <?= ($disciplineAlertsLoaded && $alerts !== []) ? 'open' : '' ?> data-autoclose-details>
     <summary style="font-weight:600; cursor:pointer;">Alertes disciplinaires</summary>
-    <?php if (!$disciplineHeavyLoaded): ?>
-        <p class="muted" style="margin-top:12px;">Vue rapide : les alertes detaillees ne sont pas chargees ici. <a href="/owner/discipline?heavy=1">Afficher les alertes actives</a>.</p>
-    <?php elseif (!$disciplineAlertsLoaded): ?>
-        <p class="muted" style="margin-top:12px;">Mode detaille charge pour les jauges du jour. Les alertes disciplinaires lourdes restent repliees pour proteger l ouverture de page : <a href="/owner/discipline?heavy=1&amp;alerts=1">charger aussi les alertes actives</a>.</p>
+    <?php if (!$disciplineAlertsLoaded): ?>
+        <p class="muted" style="margin-top:12px;">Les alertes détaillées restent à la demande pour garder l’ouverture fluide. <a href="/owner/discipline?<?= e(http_build_query(['preset' => $disciplinePreset, 'date' => $disciplineAnchorDate, 'alerts' => 1])) ?>">Charger aussi les alertes actives</a>.</p>
     <?php elseif ($alerts === []): ?>
         <p class="muted" style="margin-top:12px;">Aucune alerte active.</p>
     <?php else: ?>

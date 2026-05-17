@@ -306,7 +306,11 @@ final class RegularizationGateService
             'SELECT ksr.id, ksr.status, ksr.created_at, ksr.note
              FROM kitchen_stock_requests ksr
              WHERE ksr.restaurant_id = :rid
-               AND ksr.status NOT IN ("ANNULE", "REFUSE_STOCK", "CLOTURE")
+               AND ksr.status NOT IN ("ANNULE", "REFUSE_STOCK", "CLOTURE", "FOURNI_TOTAL")
+               AND NOT (
+                   ksr.received_at IS NOT NULL
+                   AND ksr.status IN ("FOURNI_TOTAL", "FOURNI_PARTIEL", "NON_FOURNI", "CLOTURE")
+               )
                AND NOT EXISTS (
                    SELECT 1
                    FROM operation_cases oc

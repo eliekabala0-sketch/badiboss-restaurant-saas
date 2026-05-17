@@ -79,23 +79,132 @@ final class CashService
         $filters = ['date_from' => $dateFromYmd, 'date_to' => $dateToYmd];
         $summary = $this->summary($restaurantId, $filters);
         $managerNet = (float) ($row['manager_received'] ?? 0) - (float) ($row['declared_to_owner'] ?? 0);
+        $salesActivity = $this->salesActivitySnapshot($restaurantId, $dateFromYmd, $dateToYmd, $onlySaleRemittancesFromUserId);
+        $currency = (string) ($summary['currency'] ?? restaurant_currency($restaurantId));
+
+        $physicalStatement = $this->database->pdo()->prepare(
+            'SELECT
+                COALESCE(SUM(CASE WHEN ct.source_type = "sale" THEN ct.amount ELSE 0 END), 0) AS server_remittance_total_physical,
+                COALESCE(SUM(CASE WHEN ct.source_type = "sale"
+                    AND ct.status IN ("RECU_CAISSE", "ECART_SIGNALE")
+                    AND ct.received_at IS NOT NULL
+                    THEN COALESCE(ct.amount_received, ct.amount) ELSE 0 END), 0) AS cashier_received_sales_physical,
+                COALESCE(SUM(CASE WHEN ct.source_type = "sale"
+                    AND ct.sale_day_ymd IS NOT NULL
+                    AND ct.sale_day_ymd < :dfrom
+                    AND COALESCE(ct.requested_at, ct.created_at) >= :start_at
+                    AND COALESCE(ct.requested_at, ct.created_at) <= :end_at
+                    THEN ct.amount ELSE 0 END), 0) AS remittance_from_previous_sales,
+                COALESCE(SUM(CASE WHEN ct.source_type = "sale"
+                    AND IFNULL(ct.late_remittance_basis, "") = "RESOLUTION_DAY"
+                    THEN ct.amount ELSE 0 END), 0) AS resolution_day_total,
+                COALESCE(SUM(CASE WHEN ct.source_type = "sale"
+                    AND IFNULL(ct.late_remittance_basis, "") = "PENDING"
+                    AND COALESCE(ct.requested_at, ct.created_at) >= :start_at
+                    AND COALESCE(ct.requested_at, ct.created_at) <= :end_at
+                    THEN ct.amount ELSE 0 END), 0) AS pending_attribution_total
+             FROM cash_transfers ct
+             WHERE ct.restaurant_id = :restaurant_id'
+            . $scopeSql
+        );
+        $physicalStatement->execute(array_merge([
+            'restaurant_id' => $restaurantId,
+            'start_at' => $dateFromYmd . ' 00:00:00',
+            'end_at' => $dateToYmd . ' 23:59:59',
+            'dfrom' => $dateFromYmd,
+        ], $scopeParams));
+        $physicalRow = $physicalStatement->fetch(PDO::FETCH_ASSOC) ?: [];
+
+        $serverRemittanceAttributed = round((float) ($row['server_remittance_total'] ?? 0), 2);
+        $serverRemittancePhysical = round((float) ($physicalRow['server_remittance_total_physical'] ?? 0), 2);
+        $cashierReceivedAttributed = round((float) ($row['cashier_received_sales'] ?? 0), 2);
+        $cashierReceivedPhysical = round((float) ($physicalRow['cashier_received_sales_physical'] ?? 0), 2);
+        $salesClosedTotal = round((float) ($salesActivity['sales_closed_total'] ?? 0), 2);
+        $servedWithoutSaleTotal = round((float) ($salesActivity['served_without_sale_total'] ?? 0), 2);
+        $salesActivityTotal = round((float) ($salesActivity['sales_activity_total'] ?? 0), 2);
+        $previousSalesPhysical = round((float) ($physicalRow['remittance_from_previous_sales'] ?? 0), 2);
+        $resolutionDayTotal = round((float) ($physicalRow['resolution_day_total'] ?? 0), 2);
+        $pendingAttributionTotal = round((float) ($physicalRow['pending_attribution_total'] ?? 0), 2);
+        $activityGap = round($salesActivityTotal - $serverRemittanceAttributed, 2);
+        $receiptGap = round($serverRemittancePhysical - $cashierReceivedPhysical, 2);
+
+        $explanations = [];
+        if ($previousSalesPhysical > 0.0001) {
+            $explanations[] = [
+                'kind' => 'previous_sales',
+                'label' => 'Remises liées à des ventes d un jour précédent',
+                'amount' => $previousSalesPhysical,
+                'detail' => 'La remise est physique sur la période, mais la vente d origine est antérieure.',
+            ];
+        }
+        if ($resolutionDayTotal > 0.0001) {
+            $explanations[] = [
+                'kind' => 'manager_imputation',
+                'label' => 'Imputation gérant / régularisation tardive',
+                'amount' => $resolutionDayTotal,
+                'detail' => 'Le rattachement comptable a été fixé au jour de résolution.',
+            ];
+        }
+        if ($pendingAttributionTotal > 0.0001) {
+            $explanations[] = [
+                'kind' => 'pending_imputation',
+                'label' => 'Remises tardives en attente d imputation',
+                'amount' => $pendingAttributionTotal,
+                'detail' => 'Une décision gérant est encore attendue pour le bon jour comptable.',
+            ];
+        }
+        if ($servedWithoutSaleTotal > 0.0001) {
+            $explanations[] = [
+                'kind' => 'served_without_sale',
+                'label' => 'Servi non clôturé sur la date d activité',
+                'amount' => $servedWithoutSaleTotal,
+                'detail' => 'Activité réellement servie, sans vente comptable encore liée.',
+            ];
+        }
+        if ($receiptGap > 0.0001) {
+            $explanations[] = [
+                'kind' => 'cash_receipt_pending',
+                'label' => 'Remises physiques non encore réceptionnées en caisse',
+                'amount' => $receiptGap,
+                'detail' => 'Le serveur a remis l argent, mais la réception caisse n est pas encore confirmée.',
+            ];
+        }
+
+        $clarityNotes = [];
+        foreach ($explanations as $explanation) {
+            $clarityNotes[] = $explanation['label'] . ' : ' . format_money((float) ($explanation['amount'] ?? 0), $currency) . '. ' . (string) ($explanation['detail'] ?? '');
+        }
 
         return [
             'period_from' => $dateFromYmd,
             'period_to' => $dateToYmd,
-            'server_remittance_total' => (float) ($row['server_remittance_total'] ?? 0),
-            'cashier_received_sales' => (float) ($row['cashier_received_sales'] ?? 0),
+            'sales_activity_closed_total' => $salesClosedTotal,
+            'served_without_sale_total' => $servedWithoutSaleTotal,
+            'sales_activity_total' => $salesActivityTotal,
+            'server_remittance_total' => $serverRemittanceAttributed,
+            'server_remittance_total_attributed' => $serverRemittanceAttributed,
+            'server_remittance_total_physical' => $serverRemittancePhysical,
+            'cashier_received_sales' => $cashierReceivedAttributed,
+            'cashier_received_sales_attributed' => $cashierReceivedAttributed,
+            'cashier_received_sales_physical' => $cashierReceivedPhysical,
             'declared_to_manager' => (float) ($row['declared_to_manager'] ?? 0),
             'manager_received' => (float) ($row['manager_received'] ?? 0),
             'declared_to_owner' => (float) ($row['declared_to_owner'] ?? 0),
             'owner_received' => (float) ($row['owner_received'] ?? 0),
             'discrepancy_total' => (float) ($row['discrepancy_total'] ?? 0),
+            'remittance_from_previous_sales' => $previousSalesPhysical,
+            'resolution_day_total' => $resolutionDayTotal,
+            'pending_attribution_total' => $pendingAttributionTotal,
+            'activity_gap_sales_vs_attributed_remittance' => $activityGap,
+            'physical_receipt_gap' => $receiptGap,
             'cash_balance' => (float) ($summary['cash_balance'] ?? 0),
             'cash_entries' => (float) ($summary['cash_entries'] ?? 0),
             'cash_expenses' => (float) ($summary['cash_expenses'] ?? 0),
             'cash_outputs' => (float) ($summary['cash_outputs'] ?? 0),
             'manager_net_period' => round($managerNet, 2),
-            'currency' => (string) ($summary['currency'] ?? restaurant_currency($restaurantId)),
+            'currency' => $currency,
+            'explanations' => $explanations,
+            'clarity_notes' => $clarityNotes,
         ];
     }
 
@@ -1134,27 +1243,90 @@ final class CashService
         return $statement->fetchAll(PDO::FETCH_ASSOC);
     }
 
+    /**
+     * @return array{sales_closed_total: float, served_without_sale_total: float, sales_activity_total: float}
+     */
+    private function salesActivitySnapshot(
+        int $restaurantId,
+        string $dateFromYmd,
+        string $dateToYmd,
+        ?int $serverId = null,
+    ): array {
+        $timezone = $this->reportTimezone($restaurantId);
+        $startAt = new DateTimeImmutable($dateFromYmd . ' 00:00:00', $timezone);
+        $endAt = (new DateTimeImmutable($dateToYmd . ' 00:00:00', $timezone))->modify('+1 day');
+        $params = [
+            'rid' => $restaurantId,
+            's' => $startAt->format('Y-m-d H:i:s'),
+            'e' => $endAt->format('Y-m-d H:i:s'),
+        ];
+        $serverSql = '';
+        if ($serverId !== null && $serverId > 0) {
+            $serverSql = ' AND s.server_id = :srv';
+            $params['srv'] = $serverId;
+        }
+
+        $soldStatement = $this->database->pdo()->prepare(
+            'SELECT COALESCE(SUM(s.total_amount), 0) AS t
+             FROM sales s
+             ' . sql_sale_activity_left_join_server_request('s', 'sr') . '
+             WHERE s.restaurant_id = :rid
+               AND s.status IN ("VALIDE", "CLOTURE", "VENDU_TOTAL", "VENDU_PARTIEL")'
+               . $serverSql . '
+               AND ' . sql_sale_activity_datetime_expr('s', 'sr') . ' >= :s
+               AND ' . sql_sale_activity_datetime_expr('s', 'sr') . ' < :e'
+        );
+        $soldStatement->execute($params);
+        $salesClosedTotal = round((float) ($soldStatement->fetch(PDO::FETCH_ASSOC)['t'] ?? 0), 2);
+
+        $servedWithoutSaleRows = Container::getInstance()->get('salesService')->listServedRequestsWithoutSaleForPeriod(
+            $restaurantId,
+            $startAt,
+            $endAt,
+            $serverId !== null && $serverId > 0 ? $serverId : null,
+        );
+        $servedWithoutSaleTotal = 0.0;
+        foreach ($servedWithoutSaleRows as $row) {
+            $servedWithoutSaleTotal += (float) ($row['total_virtual_sold_amount'] ?? 0);
+        }
+        $servedWithoutSaleTotal = round($servedWithoutSaleTotal, 2);
+
+        return [
+            'sales_closed_total' => $salesClosedTotal,
+            'served_without_sale_total' => $servedWithoutSaleTotal,
+            'sales_activity_total' => round($salesClosedTotal + $servedWithoutSaleTotal, 2),
+        ];
+    }
+
     private function summary(int $restaurantId, array $filters): array
     {
         $transfers = $this->listTransfers($restaurantId, $filters);
         $movements = $this->listMovements($restaurantId, $filters);
 
         $scopeSrv = (int) ($filters['scope_closed_sales_server_user_id'] ?? 0);
-        if ($scopeSrv > 0 && !empty($filters['date_from']) && !empty($filters['date_to'])) {
-            $soldStatement = $this->database->pdo()->prepare(
-                'SELECT COALESCE(SUM(s.total_amount), 0) FROM sales s
+        $hasDateWindow = !empty($filters['date_from']) && !empty($filters['date_to']);
+        if ($hasDateWindow) {
+            $soldSql = 'SELECT COALESCE(SUM(s.total_amount), 0) FROM sales s
                  ' . sql_sale_activity_left_join_server_request('s', 'sr') . '
-                 WHERE s.restaurant_id = :restaurant_id AND s.server_id = :srv
+                 WHERE s.restaurant_id = :restaurant_id
                    AND s.status IN ("VALIDE", "CLOTURE", "VENDU_TOTAL", "VENDU_PARTIEL")
                    AND ' . sql_sale_activity_datetime_expr('s', 'sr') . ' >= :sfrom
-                   AND ' . sql_sale_activity_datetime_expr('s', 'sr') . ' <= :sto'
+                   AND ' . sql_sale_activity_datetime_expr('s', 'sr') . ' <= :sto';
+            if ($scopeSrv > 0) {
+                $soldSql .= ' AND s.server_id = :srv';
+            }
+            $soldStatement = $this->database->pdo()->prepare(
+                $soldSql
             );
-            $soldStatement->execute([
+            $soldParams = [
                 'restaurant_id' => $restaurantId,
-                'srv' => $scopeSrv,
                 'sfrom' => (string) $filters['date_from'] . ' 00:00:00',
                 'sto' => (string) $filters['date_to'] . ' 23:59:59',
-            ]);
+            ];
+            if ($scopeSrv > 0) {
+                $soldParams['srv'] = $scopeSrv;
+            }
+            $soldStatement->execute($soldParams);
             $soldTotal = (float) $soldStatement->fetchColumn();
         } else {
             $soldStatement = $this->database->pdo()->prepare(

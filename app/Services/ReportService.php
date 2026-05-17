@@ -98,46 +98,12 @@ final class ReportService
         [$startAt, $endAt, $label] = $this->periodBounds($selectedDate, 'daily', $timezone);
         $s = $startAt->format('Y-m-d H:i:s');
         $e = $endAt->format('Y-m-d H:i:s');
-        $closedIn = '"VALIDE","CLOTURE","VENDU_TOTAL","VENDU_PARTIEL"';
-
-        $soldStmt = $this->database->pdo()->prepare(
-            'SELECT COALESCE(SUM(s.total_amount), 0) AS t
-             FROM sales s
-             ' . sql_sale_activity_left_join_server_request('s', 'sr') . '
-             WHERE s.restaurant_id = :rid
-               AND s.status IN (' . $closedIn . ')
-               AND ' . sql_sale_activity_datetime_expr('s', 'sr') . ' >= :s AND ' . sql_sale_activity_datetime_expr('s', 'sr') . ' < :e'
-        );
-        $soldStmt->execute(['rid' => $restaurantId, 's' => $s, 'e' => $e]);
-        $totalSoldClosed = (float) ($soldStmt->fetch(PDO::FETCH_ASSOC)['t'] ?? 0);
         $servedWithoutSaleRows = Container::getInstance()->get('salesService')->listServedRequestsWithoutSaleForPeriod(
             $restaurantId,
             $startAt,
             $endAt,
         );
         $servedWithoutSaleSummary = $this->summarizeServedRequestsWithoutSale($servedWithoutSaleRows);
-
-        $remisStmt = $this->database->pdo()->prepare(
-            'SELECT COALESCE(SUM(ct.amount), 0) AS t
-             FROM cash_transfers ct
-             WHERE ct.restaurant_id = :rid AND ct.source_type = "sale"
-               AND ct.status NOT IN ("REMISE_REJETEE_CAISSE", "REMISE_REJETEE_GERANT")
-               AND COALESCE(ct.received_at, ct.requested_at, ct.created_at) >= :s
-               AND COALESCE(ct.received_at, ct.requested_at, ct.created_at) < :e'
-        );
-        $remisStmt->execute(['rid' => $restaurantId, 's' => $s, 'e' => $e]);
-        $remisAuCaisse = (float) ($remisStmt->fetch(PDO::FETCH_ASSOC)['t'] ?? 0);
-
-        $recuStmt = $this->database->pdo()->prepare(
-            'SELECT COALESCE(SUM(COALESCE(ct.amount_received, ct.amount)), 0) AS t
-             FROM cash_transfers ct
-             WHERE ct.restaurant_id = :rid AND ct.source_type = "sale"
-               AND ct.status IN ("RECU_CAISSE", "ECART_SIGNALE")
-               AND ct.received_at IS NOT NULL
-               AND ct.received_at >= :s AND ct.received_at < :e'
-        );
-        $recuStmt->execute(['rid' => $restaurantId, 's' => $s, 'e' => $e]);
-        $recuCaisse = (float) ($recuStmt->fetch(PDO::FETCH_ASSOC)['t'] ?? 0);
 
         $expStmt = $this->database->pdo()->prepare(
             'SELECT COALESCE(SUM(cm.amount), 0) AS t FROM cash_movements cm
@@ -173,10 +139,12 @@ final class ReportService
         $rejStmt->execute(['rid' => $restaurantId, 's' => $s, 'e' => $e]);
         $rejetes = (float) ($rejStmt->fetch(PDO::FETCH_ASSOC)['t'] ?? 0);
 
-        $realGap = round($totalSoldClosed - $recuCaisse, 2);
-
         $cashSvc = Container::getInstance()->get('cashService');
         $clarity = $cashSvc->periodCashClarity($restaurantId, $todayYmd, $todayYmd);
+        $totalSoldClosed = round((float) ($clarity['sales_activity_closed_total'] ?? 0), 2);
+        $remisAttribues = round((float) ($clarity['server_remittance_total_attributed'] ?? 0), 2);
+        $remisPhysiques = round((float) ($clarity['server_remittance_total_physical'] ?? 0), 2);
+        $recuCaisse = round((float) ($clarity['cashier_received_sales_physical'] ?? 0), 2);
         $balanceFull = (float) ($cashSvc->summaryData($restaurantId, [])['cash_balance'] ?? 0);
 
         return [
@@ -186,10 +154,13 @@ final class ReportService
             'served_without_sale_total_today' => (float) ($servedWithoutSaleSummary['total_amount'] ?? 0),
             'served_without_sale_count_today' => (int) ($servedWithoutSaleSummary['count'] ?? 0),
             'activity_day_sales_total_today' => round($totalSoldClosed + (float) ($servedWithoutSaleSummary['total_amount'] ?? 0), 2),
-            'remitted_to_cash_physical' => round($remisAuCaisse, 2),
+            'remitted_to_cash_activity_attributed' => $remisAttribues,
+            'remitted_to_cash_physical' => $remisPhysiques,
             'cashier_received_today' => round($recuCaisse, 2),
             'rejected_remittances_today' => round($rejetes, 2),
-            'real_gap_sold_closed_minus_received' => $realGap,
+            'activity_gap_sales_vs_attributed_remittance' => round((float) ($clarity['activity_gap_sales_vs_attributed_remittance'] ?? 0), 2),
+            'physical_receipt_gap' => round((float) ($clarity['physical_receipt_gap'] ?? 0), 2),
+            'real_gap_sold_closed_minus_received' => round($totalSoldClosed - $recuCaisse, 2),
             'shortfall_today_total' => round($manquantJour, 2),
             'expenses_today' => round($depenses, 2),
             'cash_balance_current' => round($balanceFull, 2),
@@ -1115,6 +1086,7 @@ final class ReportService
         return match ($period) {
             'weekly' => [$base->modify('monday this week')->setTime(0, 0, 0), $base->modify('monday next week')->setTime(0, 0, 0), 'Semaine du ' . $base->modify('monday this week')->format('d/m/Y')],
             'monthly' => [$base->modify('first day of this month')->setTime(0, 0, 0), $base->modify('first day of next month')->setTime(0, 0, 0), 'Mois de ' . $base->format('m/Y')],
+            'annual' => [$base->modify('first day of january')->setTime(0, 0, 0), $base->modify('first day of january next year')->setTime(0, 0, 0), 'Année ' . $base->format('Y')],
             default => [$base->setTime(0, 0, 0), $base->setTime(0, 0, 0)->add(new DateInterval('P1D')), 'Journée du ' . $base->format('d/m/Y')],
         };
     }

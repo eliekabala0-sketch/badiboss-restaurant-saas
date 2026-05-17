@@ -1324,6 +1324,7 @@ final class SalesService
                    AND source_type = "sale"
                    AND from_user_id = :fid
                    AND status = "REMIS_A_CAISSE"
+                   AND COALESCE(responsible_outcome_code, "") = ""
                    AND COALESCE(requested_at, created_at) < :today_start'
             );
             $st->execute(['rid' => $restaurantId, 'fid' => $restrictToServerUserId, 'today_start' => $todayStart]);
@@ -1352,6 +1353,7 @@ final class SalesService
              WHERE restaurant_id = :rid
                AND source_type = "sale"
                AND status = "REMIS_A_CAISSE"
+               AND COALESCE(responsible_outcome_code, "") = ""
                AND COALESCE(requested_at, created_at) < :today_start'
         );
         $st->execute(['rid' => $restaurantId, 'today_start' => $todayStart]);

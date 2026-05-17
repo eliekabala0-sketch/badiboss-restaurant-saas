@@ -5,7 +5,9 @@ $subscriptionTimezone = safe_timezone($subscription['timezone'] ?? ($restaurant[
 $restaurantCurrency = restaurant_currency($restaurant);
 $restaurantLogo = restaurant_media_url_or_default($restaurant['logo_url'] ?? null, 'logo');
 $restaurantCover = restaurant_media_url_or_default($restaurant['cover_image_url'] ?? null, 'photo');
+$restaurantLogoFallback = restaurant_media_fallback_url('logo');
 $cashTodaySnapshot = $cash_today_snapshot ?? null;
+$cashClarityToday = is_array($cashTodaySnapshot['cash_clarity_today'] ?? null) ? $cashTodaySnapshot['cash_clarity_today'] : [];
 $pendingLateRemittance = $pending_late_remittance_attributions ?? [];
 $printQuery = http_build_query(['print' => '1']);
 $decisionBadgeClass = static function (?string $status): string {
@@ -23,6 +25,18 @@ $decisionBadgeClass = static function (?string $status): string {
     .card { box-shadow:none !important; border:1px solid #d6d6d6; }
 }
 </style>
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+    document.querySelectorAll('section.card h2').forEach(function (heading) {
+        if (heading.textContent && heading.textContent.trim() === 'Orientation rapide') {
+            var section = heading.closest('section.card');
+            if (section) {
+                section.remove();
+            }
+        }
+    });
+});
+</script>
 <section class="topbar">
     <div class="brand">
         <h1><?= e(($user['role_code'] ?? '') === 'manager' ? 'Pilotage opérationnel' : 'Pilotage du restaurant') ?></h1>
@@ -81,7 +95,12 @@ $disciplineDashboardLoaded = !empty($discipline_dashboard_loaded);
 <?php endif; ?>
 <section class="card brand-visual" style="margin-bottom:24px; background-image:url('<?= e($restaurantCover) ?>');">
     <div class="brand-visual-body">
-        <img src="<?= e($restaurantLogo) ?>" alt="Logo restaurant" class="brand-visual-logo">
+        <img
+            src="<?= e($restaurantLogo) ?>"
+            alt="Logo restaurant"
+            class="brand-visual-logo"
+            data-fallback-src="<?= e($restaurantLogoFallback) ?>"
+        >
         <div class="brand-visual-copy">
             <span class="pill badge-gold">Dashboard owner</span>
             <h2 style="margin:10px 0 8px;"><?= e($restaurant['public_name'] ?? $restaurant['name'] ?? 'Restaurant') ?></h2>
@@ -132,6 +151,27 @@ $disciplineDashboardLoaded = !empty($discipline_dashboard_loaded);
         <article class="card stat"><span>Solde caisse (cumul)</span><strong><?= e(format_money((float) ($cashTodaySnapshot['cash_balance_current'] ?? 0), $restaurantCurrency)) ?></strong></article>
         <article class="card stat"><span>Écarts (jour)</span><strong><?= e(format_money((float) ($cashTodaySnapshot['discrepancies_today'] ?? 0), $restaurantCurrency)) ?></strong></article>
     </div>
+    <?php if ($cashClarityToday !== []): ?>
+    <div class="compact-empty" style="margin-top:16px;">
+        <strong>Lecture de cohÃ©rence</strong>
+        <div style="margin-top:8px;">Vente = jour dâ€™activitÃ©, remise = jour physique de versement, rÃ©ception caisse = jour de validation caisse.</div>
+        <?php if (!empty($cashClarityToday['clarity_notes']) && is_array($cashClarityToday['clarity_notes'])): ?>
+            <ul style="margin:8px 0 0; padding-left:18px; line-height:1.6;">
+                <?php foreach ($cashClarityToday['clarity_notes'] as $note): ?>
+                    <li><?= e((string) $note) ?></li>
+                <?php endforeach; ?>
+            </ul>
+        <?php endif; ?>
+        <?php if (!empty($cashClarityToday['explanations']) && is_array($cashClarityToday['explanations'])): ?>
+            <ul style="margin:8px 0 0; padding-left:18px; line-height:1.6;">
+                <?php foreach ($cashClarityToday['explanations'] as $explanation): ?>
+                    <?php if (!is_array($explanation)) { continue; } ?>
+                    <li><?= e((string) ($explanation['label'] ?? 'Explication')) ?> : <?= e(format_money((float) ($explanation['amount'] ?? 0), $restaurantCurrency)) ?><?php if (!empty($explanation['note'])): ?> Â· <?= e((string) $explanation['note']) ?><?php endif; ?></li>
+                <?php endforeach; ?>
+            </ul>
+        <?php endif; ?>
+    </div>
+    <?php endif; ?>
     <?php $sfAgents = $cashTodaySnapshot['server_shortfall']['agents'] ?? []; ?>
     <?php if (array_filter($sfAgents, static fn (array $a): bool => ((float) ($a['shortfall'] ?? 0)) > 0.0001)): ?>
     <details class="compact-card no-print" data-autoclose-details style="margin-top:16px;">
