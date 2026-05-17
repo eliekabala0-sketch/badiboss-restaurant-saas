@@ -696,6 +696,7 @@ $saleRemittanceHist = $sale_remittance_history ?? [];
 </section>
 <?php endif; ?>
 
+<?php if (false): ?>
 <section class="card" style="padding:24px; margin-top:24px;">
     <h2 style="margin-top:0;">Orientation rapide</h2>
     <div class="nav" style="margin-bottom:0;">
@@ -709,6 +710,7 @@ $saleRemittanceHist = $sale_remittance_history ?? [];
         <?php if (can_access('tenant.access.manage')): ?><a href="/owner/access">Rôles et accès</a><?php endif; ?>
     </div>
 </section>
+<?php endif; ?>
 
 <?php if ($pendingLateRemittance !== [] && in_array((string) ($user['role_code'] ?? ''), ['owner', 'manager'], true)): ?>
 <section class="card no-print" style="padding:24px; margin-top:24px;">
