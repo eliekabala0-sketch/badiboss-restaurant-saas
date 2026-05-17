@@ -11,6 +11,9 @@ $disciplineRows = is_array($payroll_discipline_rows ?? null) ? $payroll_discipli
 $disciplinePreset = (string) ($payroll_discipline_preset ?? 'today');
 $disciplineDate = (string) ($payroll_discipline_date ?? '');
 $disciplinePeriodLabel = (string) ($payroll_discipline_period_label ?? '');
+$staffPage = max(1, (int) ($staff_page ?? 1));
+$staffTotalPages = max(1, (int) ($staff_total_pages ?? 1));
+$staffTotalCount = max(0, (int) ($staff_total_count ?? count($rows)));
 
 $disciplineByUser = [];
 foreach ($disciplineRows as $disciplineRow) {
@@ -121,6 +124,22 @@ $impactSummary = static function (array $row, array $activePeriod): string {
         <p class="muted">Module direct et exploitable sans vue detaillee supplementaire, avec discipline visible sur la meme page.</p>
     </div>
 </section>
+
+<?php if ($staffTotalPages > 1): ?>
+<section class="card no-print" style="padding:14px 18px; margin-bottom:18px;">
+    <div class="topbar" style="margin:0;">
+        <p class="muted" style="margin:0;">Agents affiches : page <?= e((string) $staffPage) ?> / <?= e((string) $staffTotalPages) ?> · total <?= e((string) $staffTotalCount) ?></p>
+        <div class="toolbar-actions">
+            <?php if ($staffPage > 1): ?>
+                <a class="button-muted" href="/owner/paie/preparer?<?= e(http_build_query(['month' => $month_query, 'preset' => $disciplinePreset, 'date' => $disciplineDate, 'page' => $staffPage - 1])) ?>">Page precedente</a>
+            <?php endif; ?>
+            <?php if ($staffPage < $staffTotalPages): ?>
+                <a class="button-muted" href="/owner/paie/preparer?<?= e(http_build_query(['month' => $month_query, 'preset' => $disciplinePreset, 'date' => $disciplineDate, 'page' => $staffPage + 1])) ?>">Page suivante</a>
+            <?php endif; ?>
+        </div>
+    </div>
+</section>
+<?php endif; ?>
 
 <?php if (!empty($flash_success)): ?><div class="flash-ok"><?= e($flash_success) ?></div><?php endif; ?>
 <?php if (!empty($flash_error)): ?><div class="flash-bad"><?= e($flash_error) ?></div><?php endif; ?>

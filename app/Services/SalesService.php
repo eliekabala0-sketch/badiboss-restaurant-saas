@@ -20,7 +20,7 @@ final class SalesService
     {
     }
 
-    public function listSales(int $restaurantId, ?int $serverId = null): array
+    public function listSales(int $restaurantId, ?int $serverId = null, ?int $limit = null): array
     {
         $sql = 'SELECT s.*, u.full_name AS server_name, ' . sql_sale_activity_datetime_expr('s', 'sr') . ' AS sale_activity_at
                 FROM sales s
@@ -35,13 +35,16 @@ final class SalesService
         }
 
         $sql .= ' ORDER BY s.id DESC';
+        if ($limit !== null) {
+            $sql .= ' LIMIT ' . max(1, (int) $limit);
+        }
         $statement = $this->database->pdo()->prepare($sql);
         $statement->execute($params);
 
         return $statement->fetchAll(PDO::FETCH_ASSOC);
     }
 
-    public function listSaleItemsForRestaurant(int $restaurantId, ?int $serverId = null): array
+    public function listSaleItemsForRestaurant(int $restaurantId, ?int $serverId = null, ?int $limit = null): array
     {
         $sql = 'SELECT si.*, s.sale_type, s.status AS sale_status, mi.name AS menu_item_name, mi.image_url AS menu_item_image_url, u.full_name AS server_name
                 FROM sale_items si
@@ -57,6 +60,9 @@ final class SalesService
         }
 
         $sql .= ' ORDER BY si.id DESC';
+        if ($limit !== null) {
+            $sql .= ' LIMIT ' . max(1, (int) $limit);
+        }
         $statement = $this->database->pdo()->prepare($sql);
         $statement->execute($params);
 
@@ -82,7 +88,7 @@ final class SalesService
         return $statement->fetchAll(PDO::FETCH_ASSOC);
     }
 
-    public function listServerRequests(int $restaurantId, ?int $serverId = null): array
+    public function listServerRequests(int $restaurantId, ?int $serverId = null, ?int $limit = null): array
     {
         $resolutionBySelect = 'NULL AS resolution_by_name';
         $resolutionByJoin = '';
@@ -109,13 +115,16 @@ final class SalesService
         }
 
         $sql .= ' ORDER BY sr.id DESC';
+        if ($limit !== null) {
+            $sql .= ' LIMIT ' . max(1, (int) $limit);
+        }
         $statement = $this->database->pdo()->prepare($sql);
         $statement->execute($params);
 
         return $statement->fetchAll(PDO::FETCH_ASSOC);
     }
 
-    public function listServerRequestItems(int $restaurantId, ?int $serverId = null): array
+    public function listServerRequestItems(int $restaurantId, ?int $serverId = null, ?int $limit = null): array
     {
         $resolutionNoteSelect = 'NULL AS request_resolution_note';
         $resolutionAtSelect = 'NULL AS request_resolution_at';
@@ -163,6 +172,9 @@ final class SalesService
         }
 
         $sql .= ' ORDER BY sri.id DESC';
+        if ($limit !== null) {
+            $sql .= ' LIMIT ' . max(1, (int) $limit);
+        }
         $statement = $this->database->pdo()->prepare($sql);
         $statement->execute($params);
 

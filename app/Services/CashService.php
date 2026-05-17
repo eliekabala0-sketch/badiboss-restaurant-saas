@@ -262,10 +262,10 @@ final class CashService
         return $transferId;
     }
 
-    public function listServerRemittanceCandidates(int $restaurantId, ?int $serverId = null): array
+    public function listServerRemittanceCandidates(int $restaurantId, ?int $serverId = null, ?int $limit = null): array
     {
         return array_values(array_filter(
-            $this->listSaleRemittanceTracking($restaurantId, $serverId),
+            $this->listSaleRemittanceTracking($restaurantId, $serverId, $limit),
             function (array $row): bool {
                 $saleStatus = (string) ($row['sale_status'] ?? '');
                 $transferId = (int) ($row['transfer_id'] ?? 0);
@@ -287,7 +287,7 @@ final class CashService
         ));
     }
 
-    public function listSaleRemittanceTracking(int $restaurantId, ?int $serverId = null): array
+    public function listSaleRemittanceTracking(int $restaurantId, ?int $serverId = null, ?int $limit = null): array
     {
         Container::getInstance()->get('managerResolution')->ensureResponsibleOutcomeColumns();
         $sql = 'SELECT s.id AS sale_id,
@@ -345,6 +345,9 @@ final class CashService
         }
 
         $sql .= ' ORDER BY ' . sql_sale_activity_datetime_expr('s', 'sr') . ' DESC, s.id DESC';
+        if ($limit !== null) {
+            $sql .= ' LIMIT ' . max(1, (int) $limit);
+        }
         $statement = $this->database->pdo()->prepare($sql);
         $statement->execute($params);
 

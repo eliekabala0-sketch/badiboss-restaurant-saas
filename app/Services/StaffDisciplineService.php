@@ -15,6 +15,8 @@ use PDO;
  */
 final class StaffDisciplineService
 {
+    private bool $schemaEnsured = false;
+
     /** @var array<string, ?string> */
     private array $userFirstActivityYmdCache = [];
 
@@ -30,6 +32,9 @@ final class StaffDisciplineService
 
     public function ensureSchema(): void
     {
+        if ($this->schemaEnsured) {
+            return;
+        }
         $pdo = $this->database->pdo();
         $pdo->exec(
             'CREATE TABLE IF NOT EXISTS staff_payroll_profiles (
@@ -78,6 +83,7 @@ final class StaffDisciplineService
         );
         $this->ensureStaffDisciplinePermissions();
         $this->ensureStaffPayrollProfileExtras();
+        $this->schemaEnsured = true;
     }
 
     /**
@@ -838,10 +844,20 @@ final class StaffDisciplineService
      *
      * @return list<array{user_id:int, full_name:string, role_code:?string, gauges: array<string,mixed>}>
      */
-    public function gaugesSnapshotRestaurantDailyLight(int $restaurantId, string $todayYmd): array
+    public function gaugesSnapshotRestaurantDailyLight(int $restaurantId, string $todayYmd, ?array $onlyUserIds = null): array
     {
         $this->ensureSchema();
         $users = Container::getInstance()->get('roleAdmin')->listUsersForRestaurant($restaurantId);
+        $allowedUserIds = null;
+        if (is_array($onlyUserIds)) {
+            $allowedUserIds = [];
+            foreach ($onlyUserIds as $candidateId) {
+                $candidateId = (int) $candidateId;
+                if ($candidateId > 0) {
+                    $allowedUserIds[$candidateId] = true;
+                }
+            }
+        }
         $out = [];
 
         foreach ($users as $u) {
@@ -851,6 +867,9 @@ final class StaffDisciplineService
                 continue;
             }
             if (($u['status'] ?? '') !== 'active') {
+                continue;
+            }
+            if (is_array($allowedUserIds) && !isset($allowedUserIds[$uid])) {
                 continue;
             }
 
@@ -958,7 +977,7 @@ final class StaffDisciplineService
      * @param list<array<string, mixed>> $disciplineRows
      * @return array{month:string, period_label:string, period_start:string, period_end:string, rows:list<array<string,mixed>>}
      */
-    public function payrollMonthPreviewLight(int $restaurantId, string $monthInput, array $disciplineRows = []): array
+    public function payrollMonthPreviewLight(int $restaurantId, string $monthInput, array $disciplineRows = [], ?array $onlyUserIds = null): array
     {
         $this->ensureSchema();
         $rs = Container::getInstance()->get('reportService');
@@ -974,6 +993,16 @@ final class StaffDisciplineService
                 continue;
             }
             $disciplineByUser[(int) ($disciplineRow['user_id'] ?? 0)] = $disciplineRow;
+        }
+        $allowedUserIds = null;
+        if (is_array($onlyUserIds)) {
+            $allowedUserIds = [];
+            foreach ($onlyUserIds as $candidateId) {
+                $candidateId = (int) $candidateId;
+                if ($candidateId > 0) {
+                    $allowedUserIds[$candidateId] = true;
+                }
+            }
         }
 
         $pdo = $this->database->pdo();
@@ -994,6 +1023,9 @@ final class StaffDisciplineService
                 continue;
             }
             if (($u['status'] ?? '') !== 'active') {
+                continue;
+            }
+            if (is_array($allowedUserIds) && !isset($allowedUserIds[$uid])) {
                 continue;
             }
 

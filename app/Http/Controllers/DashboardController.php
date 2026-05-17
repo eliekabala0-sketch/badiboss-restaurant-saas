@@ -337,6 +337,7 @@ final class DashboardController
         $subscription = Container::getInstance()->get('subscriptionService')->summaryForRestaurant($restaurantId);
         $settings = Container::getInstance()->get('platformSettings')->listSystemSettings();
         $incidentService = Container::getInstance()->get('incidentService');
+        $loadOwnerDetails = (string) ($request->query['details'] ?? '') === '1';
 
         $canAccessReports = can_access('reports.view');
 
@@ -359,17 +360,17 @@ final class DashboardController
             'user' => $actor,
             'restaurant' => $restaurant,
             'subscription' => $subscription,
-            'pending_manager_sale_remittances' => $cashSvc->listPendingManagerSaleRemittances($restaurantId),
-            'pending_late_remittance_attributions' => $cashSvc->listPendingLateRemittanceAttributions($restaurantId),
-            'sale_remittance_history' => $cashSvc->listSaleRemittanceHistory($restaurantId, 45),
+            'pending_manager_sale_remittances' => $loadOwnerDetails ? $cashSvc->listPendingManagerSaleRemittances($restaurantId) : [],
+            'pending_late_remittance_attributions' => $loadOwnerDetails ? $cashSvc->listPendingLateRemittanceAttributions($restaurantId) : [],
+            'sale_remittance_history' => $loadOwnerDetails ? $cashSvc->listSaleRemittanceHistory($restaurantId, 24) : [],
             'cash_today_snapshot' => $canAccessReports
                 ? Container::getInstance()->get('reportService')->cashTodayOperationalSnapshot($restaurantId)
                 : null,
-            'correction_requests_pending' => Container::getInstance()->get('correctionService')->listPendingForRestaurant($restaurantId),
-            'correction_requests_recent' => Container::getInstance()->get('correctionService')->listRecentForRestaurant($restaurantId, 12),
-            'manager_queue_cases' => $incidentService->listManagerDecisionQueue($restaurantId),
-            'case_decision_history' => $incidentService->listRecentDecisions($restaurantId, 8),
-            'sales_period_totals' => Container::getInstance()->get('salesService')->salesTotalsByServerForPeriods($restaurantId),
+            'correction_requests_pending' => $loadOwnerDetails ? Container::getInstance()->get('correctionService')->listPendingForRestaurant($restaurantId) : [],
+            'correction_requests_recent' => $loadOwnerDetails ? Container::getInstance()->get('correctionService')->listRecentForRestaurant($restaurantId, 12) : [],
+            'manager_queue_cases' => $loadOwnerDetails ? $incidentService->listManagerDecisionQueue($restaurantId) : [],
+            'case_decision_history' => $loadOwnerDetails ? $incidentService->listRecentDecisions($restaurantId, 8) : [],
+            'sales_period_totals' => $loadOwnerDetails ? Container::getInstance()->get('salesService')->salesTotalsByServerForPeriods($restaurantId) : [],
             'final_qualifications' => $settings['global_final_qualifications_json'] ?? [],
             'can_access_stock' => can_access('stock.view'),
             'can_access_kitchen' => can_access('kitchen.view'),
@@ -377,7 +378,7 @@ final class DashboardController
             'can_access_cash' => can_access('cash.view'),
             'can_access_reports' => $canAccessReports,
             'report_detail_summary' => $canAccessReports
-                ? Container::getInstance()->get('reportService')->reportDetailSummaryForDashboard($restaurantId)
+                ? ($loadOwnerDetails ? Container::getInstance()->get('reportService')->reportDetailSummaryForDashboard($restaurantId) : null)
                 : null,
             'regularization_backlog' => Container::getInstance()->get('salesService')->regularizationBacklogCounts($restaurantId),
             'restaurant_reg_tasks' => $wideTasks,
@@ -394,6 +395,7 @@ final class DashboardController
                 : [],
             'flash_success' => $flashSuccess,
             'flash_error' => $flashError,
+            'owner_details_loaded' => $loadOwnerDetails,
         ]));
 
         audit_access('dashboard', $restaurantId, 'screens', 'owner-dashboard', 'Consultation tableau de bord restaurant');
@@ -435,8 +437,6 @@ final class DashboardController
         $restaurant = Container::getInstance()->get('restaurantAdmin')->findRestaurant($restaurantId);
         $staffDisc = Container::getInstance()->get('staffDiscipline');
         $staffDisc->ensureSchema();
-        $loadHeavy = (string) ($request->query['heavy'] ?? '') === '1';
-        $loadAlerts = $loadHeavy && (string) ($request->query['alerts'] ?? '') === '1';
         $todayY = Container::getInstance()->get('reportService')->todayForRestaurant($restaurantId);
         $disciplinePreset = strtolower(trim((string) ($request->query['preset'] ?? 'today')));
         $disciplineAllowed = ['today', 'yesterday', 'date', 'week', 'month', 'prev_month'];
@@ -450,12 +450,21 @@ final class DashboardController
         if ($monthIn === '') {
             $monthIn = substr($todayY, 0, 7);
         }
-        $disciplineRows = $loadHeavy
-            ? $staffDisc->gaugesSnapshotRestaurantOperational($restaurantId, $disciplinePreset, $disciplineDate)
-            : $staffDisc->gaugesSnapshotRestaurantDailyLight($restaurantId, $disciplineDate);
-        $preview = $loadHeavy
-            ? $staffDisc->payrollMonthPreview($restaurantId, $monthIn, true)
-            : $staffDisc->payrollMonthPreviewLight($restaurantId, $monthIn, $disciplineRows);
+        $allStaffUsers = array_values(array_filter(
+            Container::getInstance()->get('roleAdmin')->listUsersForRestaurant($restaurantId),
+            static fn (array $u): bool => ($u['status'] ?? '') === 'active' && (string) ($u['role_code'] ?? '') !== 'owner',
+        ));
+        $page = max(1, (int) ($request->query['page'] ?? 1));
+        $perPage = 12;
+        $totalStaff = count($allStaffUsers);
+        $totalPages = max(1, (int) ceil(max(1, $totalStaff) / $perPage));
+        if ($page > $totalPages) {
+            $page = $totalPages;
+        }
+        $pagedUsers = array_slice($allStaffUsers, ($page - 1) * $perPage, $perPage);
+        $pagedUserIds = array_values(array_map(static fn (array $u): int => (int) ($u['id'] ?? 0), $pagedUsers));
+        $disciplineRows = $staffDisc->gaugesSnapshotRestaurantDailyLight($restaurantId, $disciplineDate, $pagedUserIds);
+        $preview = $staffDisc->payrollMonthPreviewLight($restaurantId, $monthIn, $disciplineRows, $pagedUserIds);
 
         view('owner/prepare-payroll', [
             'title' => 'Préparer la paie',
@@ -467,7 +476,11 @@ final class DashboardController
             'payroll_discipline_date' => $disciplineDate,
             'payroll_discipline_period_label' => (string) ($disciplineWindow['label'] ?? ''),
             'month_query' => $preview['month'],
-            'payroll_heavy_loaded' => $loadHeavy,
+            'payroll_heavy_loaded' => false,
+            'staff_page' => $page,
+            'staff_per_page' => $perPage,
+            'staff_total_count' => $totalStaff,
+            'staff_total_pages' => $totalPages,
             'flash_success' => $flashSuccess,
             'flash_error' => $flashError,
         ]);
@@ -497,12 +510,20 @@ final class DashboardController
         $anchorYmd = preg_match('/^\d{4}-\d{2}-\d{2}$/', $anchorRaw) ? $anchorRaw : $todayY;
         $periodWindow = Container::getInstance()->get('reportService')->operationalPeriodWindow($restaurantId, $preset, $anchorYmd);
         $loadAlerts = (string) ($request->query['alerts'] ?? '') === '1';
-        $loadHeavy = (string) ($request->query['heavy'] ?? '') === '1';
         $users = Container::getInstance()->get('roleAdmin')->listUsersForRestaurant($restaurantId);
         $attUsers = array_values(array_filter(
             $users,
             static fn (array $u): bool => ($u['status'] ?? '') === 'active' && (string) ($u['role_code'] ?? '') !== 'owner',
         ));
+        $page = max(1, (int) ($request->query['page'] ?? 1));
+        $perPage = 12;
+        $totalStaff = count($attUsers);
+        $totalPages = max(1, (int) ceil(max(1, $totalStaff) / $perPage));
+        if ($page > $totalPages) {
+            $page = $totalPages;
+        }
+        $pagedUsers = array_slice($attUsers, ($page - 1) * $perPage, $perPage);
+        $pagedUserIds = array_values(array_map(static fn (array $u): int => (int) ($u['id'] ?? 0), $pagedUsers));
         $pdo = Container::getInstance()->get('db')->pdo();
         $payrollProfiles = [];
         $ps = $pdo->prepare(
@@ -511,7 +532,11 @@ final class DashboardController
         );
         $ps->execute(['rid' => $restaurantId]);
         foreach ($ps->fetchAll(PDO::FETCH_ASSOC) as $pr) {
-            $payrollProfiles[(int) ($pr['user_id'] ?? 0)] = $pr;
+            $uid = (int) ($pr['user_id'] ?? 0);
+            if ($pagedUserIds !== [] && !in_array($uid, $pagedUserIds, true)) {
+                continue;
+            }
+            $payrollProfiles[$uid] = $pr;
         }
 
         view('owner/discipline-hub', [
@@ -523,14 +548,16 @@ final class DashboardController
             'discipline_anchor_date' => $anchorYmd,
             'discipline_period_label' => (string) ($periodWindow['label'] ?? ''),
             'discipline_schedule' => $staffDisc->disciplineWorkScheduleForRestaurant($restaurantId),
-            'alerts' => ($loadHeavy && $loadAlerts) ? $staffDisc->listDisciplinaryAlerts($restaurantId) : [],
-            'gauge_rows' => $loadHeavy
-                ? $staffDisc->gaugesSnapshotRestaurantOperational($restaurantId, $preset, $anchorYmd)
-                : $staffDisc->gaugesSnapshotRestaurantDailyLight($restaurantId, $anchorYmd),
-            'discipline_heavy_loaded' => $loadHeavy,
+            'alerts' => $loadAlerts ? $staffDisc->listDisciplinaryAlerts($restaurantId) : [],
+            'gauge_rows' => $staffDisc->gaugesSnapshotRestaurantDailyLight($restaurantId, $anchorYmd, $pagedUserIds),
+            'discipline_heavy_loaded' => false,
             'discipline_alerts_loaded' => $loadAlerts,
             'staff_users' => $attUsers,
             'payroll_profiles' => $payrollProfiles,
+            'staff_page' => $page,
+            'staff_per_page' => $perPage,
+            'staff_total_count' => $totalStaff,
+            'staff_total_pages' => $totalPages,
             'flash_success' => $flashSuccess,
             'flash_error' => $flashError,
         ]);

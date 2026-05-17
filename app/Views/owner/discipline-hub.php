@@ -13,6 +13,9 @@ $disciplinePreset = (string) ($discipline_preset ?? 'today');
 $disciplineAnchorDate = (string) ($discipline_anchor_date ?? $todayYmd);
 $disciplinePeriodLabel = (string) ($discipline_period_label ?? '');
 $cur = $restaurant['currency'] ?? 'USD';
+$staffPage = max(1, (int) ($staff_page ?? 1));
+$staffTotalPages = max(1, (int) ($staff_total_pages ?? 1));
+$staffTotalCount = max(0, (int) ($staff_total_count ?? count($gaugeRows)));
 
 $periodHref = static function (string $preset, string $date, bool $alertsLoaded): string {
     $query = ['preset' => $preset];
@@ -179,6 +182,22 @@ $managerActionHint = static function (array $activePeriod, array $metrics): stri
         <p class="muted">Vue terrain par jour, hier, date precise, semaine, mois ou mois precedent, avec signaux visibles, sanction proposee et historique tracable.</p>
     </div>
 </section>
+
+<?php if ($staffTotalPages > 1): ?>
+<section class="card no-print" style="padding:14px 18px; margin-bottom:18px;">
+    <div class="topbar" style="margin:0;">
+        <p class="muted" style="margin:0;">Agents affiches : page <?= e((string) $staffPage) ?> / <?= e((string) $staffTotalPages) ?> · total <?= e((string) $staffTotalCount) ?></p>
+        <div class="toolbar-actions">
+            <?php if ($staffPage > 1): ?>
+                <a class="button-muted" href="/owner/discipline?<?= e(http_build_query(['preset' => $disciplinePreset, 'date' => $disciplineAnchorDate, 'alerts' => $disciplineAlertsLoaded ? '1' : null, 'page' => $staffPage - 1])) ?>">Page precedente</a>
+            <?php endif; ?>
+            <?php if ($staffPage < $staffTotalPages): ?>
+                <a class="button-muted" href="/owner/discipline?<?= e(http_build_query(['preset' => $disciplinePreset, 'date' => $disciplineAnchorDate, 'alerts' => $disciplineAlertsLoaded ? '1' : null, 'page' => $staffPage + 1])) ?>">Page suivante</a>
+            <?php endif; ?>
+        </div>
+    </div>
+</section>
+<?php endif; ?>
 
 <?php if (!empty($flash_success)): ?><div class="flash-ok"><?= e($flash_success) ?></div><?php endif; ?>
 <?php if (!empty($flash_error)): ?><div class="flash-bad"><?= e($flash_error) ?></div><?php endif; ?>

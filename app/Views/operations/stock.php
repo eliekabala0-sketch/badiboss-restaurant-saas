@@ -146,6 +146,9 @@ $activeSimpleRequests = array_values(array_filter(
         if (!empty($request['received_at']) && in_array((string) ($request['status'] ?? ''), ['FOURNI_TOTAL', 'FOURNI_PARTIEL', 'NON_FOURNI', 'CLOTURE'], true)) {
             return false;
         }
+        if (!empty($request['has_any_received_item']) && in_array((string) ($request['status'] ?? ''), ['FOURNI_TOTAL', 'FOURNI_PARTIEL', 'NON_FOURNI', 'CLOTURE'], true)) {
+            return false;
+        }
 
         return !in_array((string) ($request['status'] ?? ''), ['CLOTURE', 'ANNULE', 'REFUSE_STOCK'], true);
     }

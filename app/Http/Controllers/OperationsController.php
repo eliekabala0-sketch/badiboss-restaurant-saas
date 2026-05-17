@@ -76,7 +76,7 @@ final class OperationsController
             'kitchen_stock_request_items_by_request' => $kitchenStockBlocks['items_by_request'],
             'correction_requests' => Container::getInstance()->get('correctionService')->listRecentForRestaurant($restaurantId, 12),
             'stock_audits' => Container::getInstance()->get('stockService')->recentAudits($restaurantId, 12),
-            'productions' => Container::getInstance()->get('kitchenService')->listProductions($restaurantId),
+            'productions' => Container::getInstance()->get('kitchenService')->listProductions($restaurantId, 80),
             'cases' => Container::getInstance()->get('incidentService')->listCases($restaurantId, 'stock'),
             'incident_types' => $incidentCatalog['incident_types'],
             'final_qualifications' => $incidentCatalog['final_qualifications'],
@@ -401,9 +401,9 @@ final class OperationsController
         view('operations/kitchen', array_merge($dash, $disc, [
             'title' => 'Cuisine',
             'restaurant' => Container::getInstance()->get('restaurantAdmin')->findRestaurant($restaurantId),
-            'productions' => Container::getInstance()->get('kitchenService')->listProductions($restaurantId),
+            'productions' => Container::getInstance()->get('kitchenService')->listProductions($restaurantId, 80),
             'server_request_items' => Container::getInstance()->get('kitchenService')->listPendingServerRequestItems($restaurantId),
-            'server_request_history_items' => Container::getInstance()->get('salesService')->listServerRequestItems($restaurantId),
+            'server_request_history_items' => Container::getInstance()->get('salesService')->listServerRequestItems($restaurantId, null, 220),
             'kitchen_stock_requests' => $kitchenStockBlocks['requests'],
             'kitchen_stock_request_items_by_request' => $kitchenStockBlocks['items_by_request'],
             'stock_items' => array_values(array_filter(
@@ -637,6 +637,7 @@ final class OperationsController
         $flashSuccess = flash('success');
         $flashError = flash('error');
         $incidentCatalog = $this->incidentCatalog();
+        $loadFullHistory = (string) ($request->query['history'] ?? '') === '1';
 
         $actor = current_user();
         session_release_read_lock();
@@ -660,19 +661,24 @@ final class OperationsController
             $salesPeriodWindow['end'],
             $serverScopeId,
         );
+        $salesHistoryLimit = $loadFullHistory ? null : 120;
+        $saleItemsLimit = $loadFullHistory ? null : 220;
+        $requestHistoryLimit = $loadFullHistory ? null : 160;
+        $requestItemsLimit = $loadFullHistory ? null : 260;
+        $trackingLimit = $loadFullHistory ? null : 160;
 
         view('operations/sales', array_merge($dash, $selfDisc, [
             'title' => 'Ventes',
             'restaurant' => Container::getInstance()->get('restaurantAdmin')->findRestaurant($restaurantId),
-            'sales' => Container::getInstance()->get('salesService')->listSales($restaurantId, $this->salesActorIdFilter()),
-            'sale_items' => Container::getInstance()->get('salesService')->listSaleItemsForRestaurant($restaurantId, $this->salesActorIdFilter()),
-            'server_requests' => Container::getInstance()->get('salesService')->listServerRequests($restaurantId, $this->salesActorIdFilter()),
-            'server_request_items' => Container::getInstance()->get('salesService')->listServerRequestItems($restaurantId, $this->salesActorIdFilter()),
+            'sales' => Container::getInstance()->get('salesService')->listSales($restaurantId, $this->salesActorIdFilter(), $salesHistoryLimit),
+            'sale_items' => Container::getInstance()->get('salesService')->listSaleItemsForRestaurant($restaurantId, $this->salesActorIdFilter(), $saleItemsLimit),
+            'server_requests' => Container::getInstance()->get('salesService')->listServerRequests($restaurantId, $this->salesActorIdFilter(), $requestHistoryLimit),
+            'server_request_items' => Container::getInstance()->get('salesService')->listServerRequestItems($restaurantId, $this->salesActorIdFilter(), $requestItemsLimit),
             'server_cashiers' => Container::getInstance()->get('cashService')->dashboard($restaurantId)['cashiers'] ?? [],
-            'sale_remittance_tracking' => Container::getInstance()->get('cashService')->listSaleRemittanceTracking($restaurantId, $this->salesActorIdFilter()),
-            'pending_cash_remittances' => Container::getInstance()->get('cashService')->listServerRemittanceCandidates($restaurantId, $this->salesActorIdFilter()),
+            'sale_remittance_tracking' => Container::getInstance()->get('cashService')->listSaleRemittanceTracking($restaurantId, $this->salesActorIdFilter(), $trackingLimit),
+            'pending_cash_remittances' => Container::getInstance()->get('cashService')->listServerRemittanceCandidates($restaurantId, $this->salesActorIdFilter(), $trackingLimit),
             'menu_items' => Container::getInstance()->get('menuAdmin')->listPublicItems($restaurantId),
-            'productions' => Container::getInstance()->get('kitchenService')->listProductions($restaurantId),
+            'productions' => Container::getInstance()->get('kitchenService')->listProductions($restaurantId, 80),
             'sales_overview' => Container::getInstance()->get('salesService')->serverSalesOverview($restaurantId, $this->salesActorIdFilter()),
             'served_requests_without_sale_period' => $servedWithoutSalePeriod,
             'agent_server_cash' => $agentCash,
@@ -683,6 +689,7 @@ final class OperationsController
                 ? null
                 : Container::getInstance()->get('reportService')->cashTodayOperationalSnapshot($restaurantId),
             'sales_view_scope' => $serverScopeId !== null ? 'self' : 'full',
+            'sales_history_full_loaded' => $loadFullHistory,
             'staff_gauges_panel_title' => 'Discipline · service et ventes',
             'flash_success' => $flashSuccess,
             'flash_error' => $flashError,
@@ -1623,10 +1630,9 @@ final class OperationsController
         if (!in_array($role, $rolesAllowed, true)) {
             return ['self_staff_gauges' => null, 'staff_audit_highlights' => []];
         }
-        $g = Container::getInstance()->get('staffDiscipline')->gaugesForUserOperationalPanel(
+        $g = Container::getInstance()->get('staffDiscipline')->gaugesForUserOperationalPanelLight(
             $restaurantId,
             (int) $actor['id'],
-            (string) $dash['dash_preset'],
             (string) $dash['dash_date'],
         );
         $highlights = Container::getInstance()->get('reportService')->userAuditHighlightsForOperationalPreset(

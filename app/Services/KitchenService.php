@@ -14,18 +14,20 @@ final class KitchenService
     {
     }
 
-    public function listProductions(int $restaurantId): array
+    public function listProductions(int $restaurantId, ?int $limit = null): array
     {
-        $statement = $this->database->pdo()->prepare(
-            'SELECT kp.*, mi.name AS menu_item_name, mi.image_url AS menu_item_image_url, si.name AS stock_item_name, si.unit_name AS stock_unit_name, u.full_name AS created_by_name
+        $sql = 'SELECT kp.*, mi.name AS menu_item_name, mi.image_url AS menu_item_image_url, si.name AS stock_item_name, si.unit_name AS stock_unit_name, u.full_name AS created_by_name
              FROM kitchen_production kp
              LEFT JOIN stock_movements sm ON sm.id = kp.stock_movement_id
              LEFT JOIN stock_items si ON si.id = sm.stock_item_id
              LEFT JOIN menu_items mi ON mi.id = kp.menu_item_id
              INNER JOIN users u ON u.id = kp.created_by
              WHERE kp.restaurant_id = :restaurant_id
-             ORDER BY kp.id DESC'
-        );
+             ORDER BY kp.id DESC';
+        if ($limit !== null) {
+            $sql .= ' LIMIT ' . max(1, (int) $limit);
+        }
+        $statement = $this->database->pdo()->prepare($sql);
         $statement->execute(['restaurant_id' => $restaurantId]);
 
         return $statement->fetchAll(PDO::FETCH_ASSOC);

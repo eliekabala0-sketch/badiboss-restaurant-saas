@@ -1115,10 +1115,14 @@ final class StockService
             $header['quantity_supplied_total'] = array_sum(array_map(static fn (array $item): float => (float) ($item['quantity_supplied'] ?? 0), $items));
             $header['unavailable_quantity_total'] = array_sum(array_map(static fn (array $item): float => (float) ($item['unavailable_quantity'] ?? 0), $items));
             $header['status'] = $this->resolveKitchenStockRequestStatus($items, (string) ($header['status'] ?? 'DEMANDE'));
-            $allItemsReceived = $items !== [] && count(array_filter(
+            $receivedItemsCount = count(array_filter(
                 $items,
-                static fn (array $item): bool => !empty($item['received_at'])
-            )) === count($items);
+                static fn (array $item): bool => !empty($item['received_at']) || !empty($item['received_by_name'])
+            ));
+            $allItemsReceived = $items !== [] && $receivedItemsCount === count($items);
+            $hasAnyReceivedItem = $receivedItemsCount > 0;
+            $header['received_item_count'] = $receivedItemsCount;
+            $header['has_any_received_item'] = $hasAnyReceivedItem;
             if (!empty($header['manager_case_decided_at']) && !in_array((string) $header['status'], ['ANNULE', 'REFUSE_STOCK', 'CLOTURE'], true)) {
                 $header['status'] = 'CLOTURE';
                 $header['resolution_note'] = trim((string) ($header['resolution_note'] ?? '')) !== ''
@@ -1136,6 +1140,11 @@ final class StockService
                 $header['status'] = 'CLOTURE';
             } elseif (
                 $allItemsReceived
+                && in_array((string) $header['status'], ['FOURNI_TOTAL', 'FOURNI_PARTIEL', 'NON_FOURNI'], true)
+            ) {
+                $header['status'] = 'CLOTURE';
+            } elseif (
+                $hasAnyReceivedItem
                 && in_array((string) $header['status'], ['FOURNI_TOTAL', 'FOURNI_PARTIEL', 'NON_FOURNI'], true)
             ) {
                 $header['status'] = 'CLOTURE';
