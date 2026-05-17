@@ -35,6 +35,14 @@ $periodHref = static function (string $preset, string $monthQuery, string $disci
     return '/owner/paie/preparer?' . http_build_query($query);
 };
 
+$scoreLine = static function ($score): string {
+    if ($score === null || !is_numeric($score)) {
+        return 'Non evalue';
+    }
+
+    return rtrim(rtrim(number_format((float) $score, 1, '.', ''), '0'), '.') . ' / 100';
+};
+
 $signalSummary = static function (array $activePeriod, array $metrics): string {
     $signals = [];
     $kind = (string) (($activePeriod['score_breakdown']['evaluation_kind'] ?? $activePeriod['evaluation_kind'] ?? ''));
@@ -50,22 +58,17 @@ $signalSummary = static function (array $activePeriod, array $metrics): string {
         $signals[] = 'Repos';
     }
 
-    $actions = (int) ($metrics['activite_actions'] ?? 0);
-    if ($actions > 0) {
-        $signals[] = $actions . ' action(s)';
+    if ((int) ($metrics['activite_actions'] ?? 0) > 0) {
+        $signals[] = (int) $metrics['activite_actions'] . ' action(s)';
     }
     if ((int) ($metrics['late_remittance_hits'] ?? 0) > 0) {
-        $signals[] = (int) $metrics['late_remittance_hits'] . ' remise(s) tardive(s)';
+        $signals[] = (int) ($metrics['late_remittance_hits']) . ' remise(s) tardive(s)';
     }
     if ((int) ($metrics['manquants_caisse_hits'] ?? 0) > 0) {
-        $signals[] = (int) $metrics['manquants_caisse_hits'] . ' manquant(s)';
+        $signals[] = (int) ($metrics['manquants_caisse_hits']) . ' manquant(s)';
     }
     if ((int) ($metrics['jours_sans_activite_mesuree'] ?? 0) > 0) {
-        $signals[] = (int) $metrics['jours_sans_activite_mesuree'] . ' jour(s) sans activite';
-    }
-    $rolePct = $metrics['activite_pct_moyenne_periode'] ?? null;
-    if ($rolePct !== null && is_numeric($rolePct) && (float) $rolePct < 60) {
-        $signals[] = 'Faible activite vs collegues';
+        $signals[] = (int) ($metrics['jours_sans_activite_mesuree']) . ' jour(s) sans activite';
     }
 
     return $signals === [] ? 'Aucun signal critique visible' : implode(' · ', array_unique($signals));
@@ -75,24 +78,20 @@ $sanctionSummary = static function (array $activePeriod, array $metrics): string
     $score = $activePeriod['score'] ?? null;
     $kind = (string) (($activePeriod['score_breakdown']['evaluation_kind'] ?? $activePeriod['evaluation_kind'] ?? ''));
     $shortfalls = (int) ($metrics['manquants_caisse_hits'] ?? 0);
-    $lateRemittances = (int) ($metrics['late_remittance_hits'] ?? 0);
+    $lateDelayDays = (int) ($metrics['late_remittance_max_delay_days'] ?? 0);
     $daysNoActivity = (int) ($metrics['jours_sans_activite_mesuree'] ?? 0);
-    $rolePct = $metrics['activite_pct_moyenne_periode'] ?? null;
 
-    if ($kind === 'absence_unjustified' || $shortfalls > 0) {
-        return 'Sanction forte';
+    if ($shortfalls > 0 || $lateDelayDays >= 2) {
+        return 'Retenue forte ou retrait poste sensible';
     }
-    if ($lateRemittances > 0 || $daysNoActivity > 0) {
-        return 'Sanction a appliquer';
+    if ($kind === 'absence_unjustified') {
+        return 'Avertissement ou retenue salaire';
+    }
+    if ($daysNoActivity > 0) {
+        return 'Avertissement';
     }
     if ($score !== null && (float) $score < 50) {
         return 'Surveillance renforcee';
-    }
-    if ($rolePct !== null && is_numeric($rolePct) && (float) $rolePct < 60) {
-        return 'Avertissement';
-    }
-    if (in_array($kind, ['absence_authorized', 'absence_illness', 'late_justified', 'neutral_rest'], true)) {
-        return 'Clemence possible';
     }
 
     return 'RAS / suivi normal';
@@ -119,7 +118,7 @@ $impactSummary = static function (array $row, array $activePeriod): string {
 <section class="topbar">
     <div class="brand">
         <h1>Preparer la paie</h1>
-        <p class="muted">Lecture paie + discipline sur une vraie periode terrain, sans masquer les absences, retards caisse, manquants ni les besoins de clemence.</p>
+        <p class="muted">Module direct et exploitable sans vue detaillee supplementaire, avec discipline visible sur la meme page.</p>
     </div>
 </section>
 
@@ -156,24 +155,30 @@ $impactSummary = static function (array $row, array $activePeriod): string {
     <p class="muted" style="margin:12px 0 0;">Paie calculee sur <?= e($periodLabel) ?> · <?= e($periodStart) ?> → <?= e($periodEnd) ?>. Discipline visible ici sur <?= e($disciplinePeriodLabel) ?>.</p>
 </section>
 
-<section class="card no-print" style="padding:16px 18px; margin-bottom:20px;">
-    <div class="nav" style="margin-bottom:0;">
-        <a href="<?= e($periodHref('today', (string) $month_query, $disciplineDate, $payrollHeavyLoaded)) ?>">Aujourd hui</a>
-        <a href="<?= e($periodHref('yesterday', (string) $month_query, $disciplineDate, $payrollHeavyLoaded)) ?>">Hier</a>
-        <a href="<?= e($periodHref('week', (string) $month_query, $disciplineDate, $payrollHeavyLoaded)) ?>">Semaine</a>
-        <a href="<?= e($periodHref('month', (string) $month_query, $disciplineDate, $payrollHeavyLoaded)) ?>">Mois</a>
-        <a href="<?= e($periodHref('prev_month', (string) $month_query, $disciplineDate, $payrollHeavyLoaded)) ?>">Mois precedent</a>
-        <a href="/owner/discipline?<?= e(http_build_query(['preset' => $disciplinePreset, 'date' => $disciplineDate, 'alerts' => 1])) ?>">Ouvrir Discipline</a>
-    </div>
-</section>
+<?php
+$module_nav_title = 'Navigation paie';
+$module_nav_intro = 'Preparation directe, liste agents, retenues, primes, net et impression restent dans ce module.';
+$module_nav_items = [
+    ['label' => 'Aujourd hui', 'href' => $periodHref('today', (string) $month_query, $disciplineDate, $payrollHeavyLoaded)],
+    ['label' => 'Hier', 'href' => $periodHref('yesterday', (string) $month_query, $disciplineDate, $payrollHeavyLoaded)],
+    ['label' => 'Semaine', 'href' => $periodHref('week', (string) $month_query, $disciplineDate, $payrollHeavyLoaded)],
+    ['label' => 'Mois', 'href' => $periodHref('month', (string) $month_query, $disciplineDate, $payrollHeavyLoaded)],
+    ['label' => 'Mois precedent', 'href' => $periodHref('prev_month', (string) $month_query, $disciplineDate, $payrollHeavyLoaded)],
+    ['label' => 'Discipline', 'href' => '/owner/discipline?' . http_build_query(['preset' => $disciplinePreset, 'date' => $disciplineDate, 'alerts' => 1])],
+    ['label' => 'Imprimer', 'href' => '#payroll-print'],
+];
+require base_path('app/Views/partials/module_quick_nav.php');
+?>
 
-<section class="card" style="padding:0; margin-bottom:24px; overflow:auto;">
+<section class="card" id="payroll-print" style="padding:0; margin-bottom:24px; overflow:auto;">
     <table>
         <thead>
         <tr>
             <th>Agent</th>
             <th>Role</th>
-            <th>Discipline selectionnee</th>
+            <th>Jour</th>
+            <th>Semaine</th>
+            <th>Mois</th>
             <th>Signaux / sanction</th>
             <th>Impact salaire</th>
             <th>Salaire base</th>
@@ -183,12 +188,13 @@ $impactSummary = static function (array $row, array $activePeriod): string {
             <th>Manquants</th>
             <th>Prime</th>
             <th>Net propose</th>
+            <th>Action</th>
         </tr>
         </thead>
         <tbody>
         <?php if ($rows === []): ?>
             <tr>
-                <td colspan="12" class="muted">Aucune ligne de paie disponible pour ce mois.</td>
+                <td colspan="15" class="muted">Aucune ligne de paie disponible pour ce mois.</td>
             </tr>
         <?php endif; ?>
         <?php foreach ($rows as $row): ?>
@@ -200,7 +206,6 @@ $impactSummary = static function (array $row, array $activePeriod): string {
             $activePeriod = is_array($gauges['active_period'] ?? null) ? $gauges['active_period'] : [];
             $metrics = is_array($gauges['row_metrics'] ?? null) ? $gauges['row_metrics'] : [];
             $score = $activePeriod['score'] ?? null;
-            $scoreLine = $score === null ? 'Non evalue' : ((string) $score . ' %');
             $zone = (string) ($activePeriod['zone'] ?? 'non_evalue');
             $zoneClass = match ($zone) {
                 'vert' => 'badge-closed',
@@ -220,7 +225,6 @@ $impactSummary = static function (array $row, array $activePeriod): string {
             $signals = $signalSummary($activePeriod, $metrics);
             $sanction = $sanctionSummary($activePeriod, $metrics);
             $impact = $impactSummary($row, $activePeriod);
-            $clemence = in_array($sanction, ['Clemence possible', 'RAS / suivi normal'], true) ? 'Oui si motivee' : 'Partielle seulement';
             $detailRows = is_array($activePeriod['points_detail'] ?? null) ? $activePeriod['points_detail'] : [];
             ?>
             <tr>
@@ -231,20 +235,18 @@ $impactSummary = static function (array $row, array $activePeriod): string {
                     <?php endif; ?>
                 </td>
                 <td><?= e(restaurant_role_label($row['role_code'] ?? null)) ?></td>
+                <td><strong><?= e($scoreLine($gauges['daily'] ?? null)) ?></strong></td>
+                <td><strong><?= e($scoreLine($gauges['weekly_avg'] ?? null)) ?></strong></td>
                 <td>
                     <span class="pill <?= e($zoneClass) ?>"><?= e($zoneLabel) ?></span>
-                    <div class="muted" style="font-size:0.84rem; margin-top:6px;"><?= e($disciplinePeriodLabel) ?></div>
-                    <div class="muted" style="font-size:0.84rem;"><?= e($scoreLine) ?></div>
-                    <?php if (!empty($activePeriod['note'])): ?>
-                        <div class="muted" style="font-size:0.84rem; margin-top:6px;"><?= e((string) $activePeriod['note']) ?></div>
-                    <?php elseif (!empty($row['non_evaluated_reason'])): ?>
-                        <div class="muted" style="font-size:0.84rem; margin-top:6px;"><?= e((string) $row['non_evaluated_reason']) ?></div>
-                    <?php endif; ?>
+                    <div class="muted" style="font-size:0.84rem; margin-top:6px;"><?= e($scoreLine($gauges['monthly_avg'] ?? $score)) ?></div>
                 </td>
                 <td>
                     <strong><?= e($sanction) ?></strong>
                     <div class="muted" style="font-size:0.84rem; margin-top:6px;"><?= e($signals) ?></div>
-                    <div class="muted" style="font-size:0.84rem; margin-top:6px;">Clemence: <?= e($clemence) ?></div>
+                    <?php if (!empty($activePeriod['note'])): ?>
+                        <div class="muted" style="font-size:0.84rem; margin-top:6px;"><?= e((string) $activePeriod['note']) ?></div>
+                    <?php endif; ?>
                 </td>
                 <td>
                     <strong><?= e($impact) ?></strong>
@@ -257,11 +259,15 @@ $impactSummary = static function (array $row, array $activePeriod): string {
                 <td><?= e((string) (int) ($row['cash_shortfall_hits'] ?? 0)) ?></td>
                 <td><?= e(format_money((float) ($row['bonus_monthly'] ?? 0), (string) ($row['currency'] ?? 'USD'))) ?></td>
                 <td><strong><?= e(format_money((float) ($row['net_pay_proposed'] ?? 0), (string) ($row['currency'] ?? 'USD'))) ?></strong></td>
+                <td>
+                    <a href="/owner/discipline?<?= e(http_build_query(['preset' => $disciplinePreset, 'date' => $disciplineDate, 'alerts' => 1])) ?>">Discipline</a>
+                    <div class="muted" style="font-size:0.84rem; margin-top:6px;"><a href="#" onclick="window.print(); return false;">Imprimer</a></div>
+                </td>
             </tr>
             <?php if ($detailRows !== []): ?>
                 <tr>
-                    <td colspan="12" class="muted" style="font-size:0.9rem;">
-                        <strong>Détail trace</strong>
+                    <td colspan="15" class="muted" style="font-size:0.9rem;">
+                        <strong>Detail trace</strong>
                         <ul style="margin:8px 0 0; padding-left:18px;">
                             <?php foreach ($detailRows as $detailRow): ?>
                                 <?php if (!is_array($detailRow)) { continue; } ?>
@@ -277,5 +283,5 @@ $impactSummary = static function (array $row, array $activePeriod): string {
 </section>
 
 <section class="card no-print" style="padding:18px 22px; margin-bottom:24px;">
-    <p class="muted" style="margin:0;">Les montants restent indicatifs avant paiement réel. Pour appliquer une sanction, une clémence, une justification ou un report avec trace, utilisez <a href="/owner/discipline?<?= e(http_build_query(['preset' => $disciplinePreset, 'date' => $disciplineDate, 'alerts' => 1])) ?>">Discipline</a>.</p>
+    <p class="muted" style="margin:0;">Les montants restent indicatifs avant paiement reel. Pour appliquer une sanction, une clemence, une justification ou un report avec trace, utilisez <a href="/owner/discipline?<?= e(http_build_query(['preset' => $disciplinePreset, 'date' => $disciplineDate, 'alerts' => 1])) ?>">Discipline</a>.</p>
 </section>

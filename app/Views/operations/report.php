@@ -152,6 +152,22 @@ window.addEventListener('beforeprint', function () {
         <p>Suivi détaillé du stock, de la cuisine, des ventes, des pertes et des incidents sur une vraie période calendrier.</p>
     </div>
 </section>
+<?php
+$module_nav_title = 'Navigation rapport';
+$module_nav_intro = 'Journalier, hebdomadaire, mensuel, ventes, caisse, stock et agents restent dans le rapport.';
+$module_nav_items = [
+    ['label' => 'Aujourd hui', 'href' => '#report-today'],
+    ['label' => 'Hebdo', 'href' => '#report-finance'],
+    ['label' => 'Mensuel', 'href' => '#report-finance'],
+    ['label' => 'Vente serveur', 'href' => '#report-sales'],
+    ['label' => 'Vente article', 'href' => '#report-sales'],
+    ['label' => 'Vente categorie', 'href' => '#report-sales'],
+    ['label' => 'Caisse', 'href' => '#report-finance'],
+    ['label' => 'Stock', 'href' => '#report-stock'],
+    ['label' => 'Agents', 'href' => '#report-agents'],
+];
+require base_path('app/Views/partials/module_quick_nav.php');
+?>
 
 <?php if (!$reportHeavyLoaded): ?>
 <section class="card no-print" style="padding:14px 16px; margin-bottom:16px;">
@@ -184,7 +200,7 @@ $disciplinary_alerts = $disciplinary_alerts ?? [];
 <?php endif; ?>
 
 <?php if (!empty($cashTodaySnap)): ?>
-<section class="card" style="padding:22px; margin-top:24px;">
+<section class="card" id="report-today" style="padding:22px; margin-top:24px;">
     <div class="topbar" style="margin-bottom:14px;">
         <div>
             <h2 style="margin:0;">Situation actuelle / Aujourd’hui</h2>
@@ -244,7 +260,7 @@ $disciplinary_alerts = $disciplinary_alerts ?? [];
 <?php endif; ?>
 
 <?php if (!empty($activityDaySalesSnap['served_without_sale_count'])): ?>
-<section class="card" style="padding:18px; margin-top:16px;">
+<section class="card" id="report-sales" style="padding:18px; margin-top:16px;">
     <h3 style="margin:0 0 8px;">Lecture métier · ventes du jour d’activité</h3>
     <p class="muted" style="margin:0 0 14px;">Option A retenue: on montre les demandes réellement servies sans vente liée à côté des ventes enregistrées, sans créer de vente comptable automatiquement et sans redéduire le stock.</p>
     <div class="grid stats">
@@ -353,8 +369,8 @@ $reportCanDecideLateRemittance = in_array((string) (current_user()['role_code'] 
 <div class="report-section-body" style="padding:16px;">
 
 <?php if (!empty($report['financial_report']['summary'] ?? [])): ?>
-<section class="card" style="padding:0; margin-top:24px;">
-    <details class="report-section-details">
+<section class="card" id="report-finance" style="padding:0; margin-top:24px;">
+<details class="report-section-details" id="report-agents">
         <summary><strong>Caisse</strong> — synthèse financière et remises</summary>
         <div class="report-section-body">
         <?php if (!empty($cashClarity)): ?>
@@ -551,7 +567,7 @@ $reportCanDecideLateRemittance = in_array((string) (current_user()['role_code'] 
 
 <?php if (!empty($salesByCategory['categories'] ?? [])): ?>
 <section class="card" style="padding:0; margin-bottom:24px;">
-    <details class="report-section-details">
+<details class="report-section-details" id="report-stock">
         <summary><strong>Ventes par catégorie</strong> · <?= e(format_money((float) ($salesByCategory['grand_total'] ?? 0), $restaurantCurrency)) ?> sur la période filtrée</summary>
         <div class="report-section-body">
             <div class="table-wrap" style="margin-top:8px;">

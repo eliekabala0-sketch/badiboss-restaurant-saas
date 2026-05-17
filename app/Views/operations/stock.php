@@ -353,9 +353,22 @@ $priorityBadgeClass = static function (?string $priority): string {
 
 <?php require base_path('app/Views/partials/regularization_hold_banner.php'); ?>
 <?php require base_path('app/Views/partials/operational_period_tabs.php'); ?>
+<?php
+$module_nav_title = 'Navigation stock';
+$module_nav_intro = 'Stock actuel, entrees, sorties, cuisine, controle stock et historique restent dans ce module.';
+$module_nav_items = [
+    ['label' => 'Stock actuel', 'href' => '#stock-summary'],
+    ['label' => 'Entrees', 'href' => '#stock-history'],
+    ['label' => 'Sorties', 'href' => '#stock-history'],
+    ['label' => 'Cuisine', 'href' => '#stock-kitchen'],
+    ['label' => 'Controle stock', 'href' => '#stock-control'],
+    ['label' => 'Historique', 'href' => '#stock-history'],
+];
+require base_path('app/Views/partials/module_quick_nav.php');
+?>
 
 <?php if ($module_today_pulse !== []): ?>
-<section class="card" style="padding:18px; margin-bottom:20px;">
+<section class="card" id="stock-summary" style="padding:18px; margin-bottom:20px;">
     <h2 style="margin:0 0 8px;">Stock · situation opérationnelle</h2>
     <p class="muted" style="margin:0 0 12px;"><?= e((string) ($module_today_pulse['period_label'] ?? '')) ?><?php if (!empty($module_today_pulse['range_start_ymd']) && !empty($module_today_pulse['range_end_ymd'])): ?> · <?= e((string) $module_today_pulse['range_start_ymd']) ?> → <?= e((string) $module_today_pulse['range_end_ymd']) ?><?php endif; ?></p>
     <div class="grid stats">
@@ -372,11 +385,13 @@ $priorityBadgeClass = static function (?string $priority): string {
 </section>
 <?php endif; ?>
 
+<section id="stock-control">
 <?php require base_path('app/Views/partials/stock_control_report_section.php'); ?>
+</section>
 
 <?php require base_path('app/Views/partials/staff_discipline_gauges_foldable.php'); ?>
 
-<details class="card no-print" style="padding:18px 22px; margin-bottom:20px;">
+<details class="card no-print" id="stock-history" style="padding:18px 22px; margin-bottom:20px;">
 <summary><strong>Historique / Vue globale</strong> — filtres &amp; niveaux</summary>
 <div style="padding-top:12px;">
 <details class="compact-card no-print" style="margin-bottom:20px;">
@@ -414,7 +429,7 @@ $priorityBadgeClass = static function (?string $priority): string {
 </section>
 
 <?php if (can_access('stock.create')): ?>
-    <section class="card" style="padding:22px; margin-bottom:24px;">
+<section class="card" id="stock-kitchen" style="padding:22px; margin-bottom:24px;">
         <details class="compact-card" data-autoclose-details>
             <summary><strong>Ajouter article stock</strong></summary>
         <h2 style="margin-top:0;">Creer un article de stock</h2>

@@ -474,9 +474,21 @@ $stockBadgeClass = static function (?string $status): string {
 
 <?php require base_path('app/Views/partials/regularization_hold_banner.php'); ?>
 <?php require base_path('app/Views/partials/operational_period_tabs.php'); ?>
+<?php
+$module_nav_title = 'Navigation cuisine';
+$module_nav_intro = 'Demandes, preparations, retours et historique restent dans ce module.';
+$module_nav_items = [
+    ['label' => 'Demandes', 'href' => '#kitchen-summary'],
+    ['label' => 'Preparations', 'href' => '#kitchen-summary'],
+    ['label' => 'Retours', 'href' => '#kitchen-returns'],
+    ['label' => 'Historique', 'href' => '#kitchen-history'],
+    ['label' => 'Demande stock', 'href' => '#kitchen-stock'],
+];
+require base_path('app/Views/partials/module_quick_nav.php');
+?>
 
 <?php if ($module_today_pulse !== []): ?>
-<section class="card" style="padding:18px; margin-bottom:20px;">
+<section class="card" id="kitchen-summary" style="padding:18px; margin-bottom:20px;">
     <h2 style="margin:0 0 8px;">Cuisine · situation opérationnelle</h2>
     <p class="muted" style="margin:0 0 12px;"><?= e((string) ($module_today_pulse['period_label'] ?? '')) ?><?php if (!empty($module_today_pulse['range_start_ymd']) && !empty($module_today_pulse['range_end_ymd'])): ?> · <?= e((string) $module_today_pulse['range_start_ymd']) ?> → <?= e((string) $module_today_pulse['range_end_ymd']) ?><?php endif; ?></p>
     <div class="grid stats">
@@ -798,7 +810,7 @@ foreach (array_merge($waitingServerItems, $preparingServerItems) as $item) {
     </section>
 <?php endforeach; ?>
 
-<section class="card" style="margin-top:24px;">
+<section class="card" id="kitchen-returns" style="margin-top:24px;">
     <div style="padding:22px 22px 12px;">
         <div class="topbar">
             <div>
@@ -867,7 +879,7 @@ foreach (array_merge($waitingServerItems, $preparingServerItems) as $item) {
     <?php endif; ?>
 </section>
 
-<section class="card" style="margin-top:24px;">
+<section class="card" id="kitchen-stock" style="margin-top:24px;">
     <div style="padding:22px 22px 12px;">
         <div class="topbar">
             <div>
@@ -912,7 +924,7 @@ foreach (array_merge($waitingServerItems, $preparingServerItems) as $item) {
     <?php endif; ?>
 </section>
 
-<section class="card" style="margin-top:24px;">
+<section class="card" id="kitchen-history" style="margin-top:24px;">
     <div style="padding:22px 22px 12px;">
         <div class="topbar">
             <div>

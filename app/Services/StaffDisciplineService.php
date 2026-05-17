@@ -2049,6 +2049,7 @@ final class StaffDisciplineService
         $toD = $win['end']->modify('-1 day')->format('Y-m-d');
 
         $prepAvg = null;
+        $lateRemittance = ['late_count' => 0, 'max_delay_days' => 0];
         if ($roleCode === 'kitchen') {
             $prepAvg = $this->kitchenAvgPrepMinutesForUser($restaurantId, $userId, $s, $e);
         }
@@ -2062,6 +2063,7 @@ final class StaffDisciplineService
                 $toD,
                 ['server_shortfall_today', 'server_shortfall_legacy'],
             );
+            $lateRemittance = $this->serverLateRemittanceMetricsForRange($restaurantId, $userId, $fromD, $toD);
         }
 
         return [
@@ -2079,6 +2081,8 @@ final class StaffDisciplineService
             'jours_sans_activite_mesuree' => $ms['days_without_measured_activity'] ?? null,
             'preparation_moy_min' => $prepAvg,
             'manquants_caisse_hits' => $shortfalls,
+            'late_remittance_hits' => (int) ($lateRemittance['late_count'] ?? 0),
+            'late_remittance_max_delay_days' => (int) ($lateRemittance['max_delay_days'] ?? 0),
         ];
     }
 
@@ -3044,24 +3048,6 @@ final class StaffDisciplineService
             }
         }
 
-        if (!$hasExplicitAttendance && $roleCode === 'manager') {
-            return [
-                'evaluated' => false,
-                'score' => null,
-                'action_count' => 0,
-                'activity_breakdown' => [],
-                'ledger_delta' => $ledgerDelta,
-                'ledger_lines' => $ledgerLines,
-                'extra_penalties' => [],
-                'base_score' => 100,
-                'evaluation_kind' => 'implicit_neutral_no_override',
-                'synthetic_adjustment' => 0,
-                'peer_activity_ratio' => null,
-                'role_activity_mean' => null,
-                'activite_pct_vs_role' => null,
-            ];
-        }
-
         $planned = $this->attendancePlannedStatusForDay($restaurantId, $userId, $dayYmd);
         if ($planned === 'REPOS') {
             $bd = [['label' => 'Jour de repos (planning) · neutre', 'count' => 0]];
@@ -3081,17 +3067,17 @@ final class StaffDisciplineService
         if ($planned === 'RETARD_JUSTIFIE') {
             $bd = [['label' => 'Retard justifié (planning)', 'count' => 0]];
 
-            return $this->finalizeEvaluatedDay(0, $bd, $ledgerDelta, $ledgerLines, [], 'late_justified', -6);
+            return $this->finalizeEvaluatedDay(0, $bd, $ledgerDelta, $ledgerLines, [], 'late_justified', -8);
         }
         if ($planned === 'ABSENCE_AUTORISEE') {
             $bd = [['label' => 'Absence autorisée (planning) · pénalité légère', 'count' => 0]];
 
-            return $this->finalizeEvaluatedDay(0, $bd, $ledgerDelta, $ledgerLines, [], 'absence_authorized', -12);
+            return $this->finalizeEvaluatedDay(0, $bd, $ledgerDelta, $ledgerLines, [], 'absence_authorized', -15);
         }
         if ($planned === 'MALADIE') {
             $bd = [['label' => 'Maladie (planning) · pénalité légère', 'count' => 0]];
 
-            return $this->finalizeEvaluatedDay(0, $bd, $ledgerDelta, $ledgerLines, [], 'absence_illness', -14);
+            return $this->finalizeEvaluatedDay(0, $bd, $ledgerDelta, $ledgerLines, [], 'absence_illness', -18);
         }
 
         $streakTravailSansActivite = $this->consecutiveApplicableTravailZeroActivityStreak(
@@ -3102,7 +3088,7 @@ final class StaffDisciplineService
             $tz,
             14,
         );
-        $penAbs = $streakTravailSansActivite >= 3 ? -28 : ($streakTravailSansActivite >= 2 ? -18 : -12);
+        $penAbs = $streakTravailSansActivite >= 3 ? -55 : ($streakTravailSansActivite >= 2 ? -45 : -35);
         $bd = [['label' => 'Saisie responsable « travail » sans activité métier mesurée (pénalité renforcée si répétée)', 'count' => 0]];
 
         return $this->finalizeEvaluatedDay(0, $bd, $ledgerDelta, $ledgerLines, [], 'absence_unjustified', $penAbs);

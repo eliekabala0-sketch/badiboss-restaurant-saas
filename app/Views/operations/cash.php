@@ -29,9 +29,23 @@ $canReclassifyCash = in_array((string) (current_user()['role_code'] ?? ''), ['ow
 <?php require base_path('app/Views/partials/manager_resolution_block.php'); ?>
 <?php require base_path('app/Views/partials/manager_recent_decisions.php'); ?>
 <?php require base_path('app/Views/partials/operational_period_tabs.php'); ?>
+<?php
+$module_nav_title = 'Navigation caisse';
+$module_nav_intro = 'Remis, recu, depenses, ecarts, historiques et regularisations restent dans ce module.';
+$module_nav_items = [
+    ['label' => 'Remis', 'href' => '#cash-today'],
+    ['label' => 'Recu', 'href' => '#cash-today'],
+    ['label' => 'Depenses', 'href' => '#cash-history'],
+    ['label' => 'Ecarts', 'href' => '#cash-history'],
+    ['label' => 'Manquants', 'href' => '#cash-today'],
+    ['label' => 'Historiques', 'href' => '#cash-history'],
+    ['label' => 'Regularisations', 'href' => '#cash-regularize'],
+];
+require base_path('app/Views/partials/module_quick_nav.php');
+?>
 
 <?php if (is_array($cashTodaySnapC) && $cashTodaySnapC !== []): ?>
-<section class="card" style="padding:22px; margin-bottom:20px;">
+<section class="card" id="cash-today" style="padding:22px; margin-bottom:20px;">
     <h2 style="margin:0 0 12px;">Situation actuelle / Aujourd’hui</h2>
     <div class="grid stats">
         <article class="card stat"><span>Vendu clôturé</span><strong><?= e(format_money((float) ($cashTodaySnapC['total_sold_closed'] ?? 0), $restaurantCurrency)) ?></strong></article>
@@ -87,13 +101,13 @@ $canReclassifyCash = in_array((string) (current_user()['role_code'] ?? ''), ['ow
 $rbCash = (int) (($cashRegBack['overdue_remis_a_caisse'] ?? 0) + ($cashRegBack['overdue_server_remis_serveur'] ?? 0) + ($cashRegBack['overdue_kitchen_production_returns'] ?? 0));
 ?>
 <?php if ($rbCash > 0): ?>
-<section class="card no-print" style="padding:16px; margin-bottom:20px; border-left:4px solid #f59e0b;">
+<section class="card no-print" id="cash-regularize" style="padding:16px; margin-bottom:20px; border-left:4px solid #f59e0b;">
     <strong>À régulariser</strong>
     <p class="muted" style="margin:8px 0 0;">Remises veille+ : <?= e((string) (int) ($cashRegBack['overdue_remis_a_caisse'] ?? 0)) ?> · Clôtures service retard : <?= e((string) (int) ($cashRegBack['overdue_server_remis_serveur'] ?? 0)) ?></p>
 </section>
 <?php endif; ?>
 
-<details class="card no-print" style="padding:18px 22px; margin-bottom:24px;">
+<details class="card no-print" id="cash-history" style="padding:18px 22px; margin-bottom:24px;">
 <summary><strong>Historique / Vue globale</strong> — totaux filtres &amp; mouvements</summary>
 <div style="padding-top:14px;">
 <section class="grid stats">

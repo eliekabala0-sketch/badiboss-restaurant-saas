@@ -10,6 +10,31 @@ $cashTodaySnapshot = $cash_today_snapshot ?? null;
 $cashClarityToday = is_array($cashTodaySnapshot['cash_clarity_today'] ?? null) ? $cashTodaySnapshot['cash_clarity_today'] : [];
 $pendingLateRemittance = $pending_late_remittance_attributions ?? [];
 $printQuery = http_build_query(['print' => '1']);
+$currentUserName = trim((string) ($user['full_name'] ?? 'Equipe'));
+$currentUserRole = restaurant_role_label($user['role_code'] ?? null);
+$currentUserIdentity = trim($currentUserRole . ' ' . $currentUserName);
+$dashboardPrimaryNav = [];
+if (!restaurant_status_blocks_operations($restaurant['status'] ?? null) && $can_access_reports) {
+    $dashboardPrimaryNav[] = ['label' => 'Rapport', 'href' => '/rapport'];
+}
+if (!restaurant_status_blocks_operations($restaurant['status'] ?? null) && $can_access_sales) {
+    $dashboardPrimaryNav[] = ['label' => 'Ventes', 'href' => '/ventes'];
+}
+if (!restaurant_status_blocks_operations($restaurant['status'] ?? null) && $can_access_cash) {
+    $dashboardPrimaryNav[] = ['label' => 'Caisse', 'href' => '/caisse'];
+}
+if (!restaurant_status_blocks_operations($restaurant['status'] ?? null) && $can_access_stock) {
+    $dashboardPrimaryNav[] = ['label' => 'Stock', 'href' => '/stock'];
+}
+if (!restaurant_status_blocks_operations($restaurant['status'] ?? null) && $can_access_kitchen) {
+    $dashboardPrimaryNav[] = ['label' => 'Cuisine', 'href' => '/cuisine'];
+}
+if (can_access('staff.team_gauges.view')) {
+    $dashboardPrimaryNav[] = ['label' => 'Discipline', 'href' => '/owner/discipline'];
+}
+if (can_access('payroll.prepare.view')) {
+    $dashboardPrimaryNav[] = ['label' => 'Paie', 'href' => '/owner/paie/preparer'];
+}
 $decisionBadgeClass = static function (?string $status): string {
     return match ((string) $status) {
         'EN_ATTENTE_VALIDATION_MANAGER' => 'badge-progress',
@@ -25,18 +50,6 @@ $decisionBadgeClass = static function (?string $status): string {
     .card { box-shadow:none !important; border:1px solid #d6d6d6; }
 }
 </style>
-<script>
-document.addEventListener('DOMContentLoaded', function () {
-    document.querySelectorAll('section.card h2').forEach(function (heading) {
-        if (heading.textContent && heading.textContent.trim() === 'Orientation rapide') {
-            var section = heading.closest('section.card');
-            if (section) {
-                section.remove();
-            }
-        }
-    });
-});
-</script>
 <section class="topbar">
     <div class="brand">
         <h1><?= e(($user['role_code'] ?? '') === 'manager' ? 'Pilotage opérationnel' : 'Pilotage du restaurant') ?></h1>
@@ -102,12 +115,23 @@ $disciplineDashboardLoaded = !empty($discipline_dashboard_loaded);
             data-fallback-src="<?= e($restaurantLogoFallback) ?>"
         >
         <div class="brand-visual-copy">
-            <span class="pill badge-gold">Dashboard owner</span>
+            <span class="pill badge-gold"><?= e(subscription_status_label($subscription['status'] ?? null)) ?></span>
             <h2 style="margin:10px 0 8px;"><?= e($restaurant['public_name'] ?? $restaurant['name'] ?? 'Restaurant') ?></h2>
-            <p class="muted" style="margin:0;"><?= e($restaurant['portal_tagline'] ?? ($restaurant['welcome_text'] ?? 'Identite visuelle du restaurant visible cote owner.')) ?></p>
+            <p class="muted" style="margin:0;"><?= e($currentUserIdentity !== '' ? $currentUserIdentity : 'Utilisateur connecte') ?></p>
+            <p class="muted" style="margin:8px 0 0;"><?= e($restaurant['portal_tagline'] ?? ($restaurant['welcome_text'] ?? 'Vue terrain compacte pour piloter le restaurant sans duplication.')) ?></p>
+            <div class="context-meta" style="margin-top:12px;">
+                <span class="pill badge-neutral">Abonnement <?= e(subscription_status_label($subscription['status'] ?? null)) ?></span>
+                <span class="pill badge-neutral">Paiement <?= e(subscription_payment_label($subscription['payment_status'] ?? null)) ?></span>
+            </div>
         </div>
     </div>
 </section>
+<?php
+$module_nav_title = 'Navigation principale';
+$module_nav_intro = 'Une seule zone d actions : chaque bouton ouvre son module sans doublons.';
+$module_nav_items = $dashboardPrimaryNav;
+require base_path('app/Views/partials/module_quick_nav.php');
+?>
 <section class="card no-print" style="padding:18px; margin-bottom:24px;">
     <div class="toolbar-actions">
         <button type="button" onclick="window.print()">Imprimer</button>
@@ -124,15 +148,36 @@ $disciplineDashboardLoaded = !empty($discipline_dashboard_loaded);
     </section>
 <?php endif; ?>
 
-<section class="grid stats">
-    <article class="card stat"><span>Restaurant</span><strong><?= e($restaurant['public_name'] ?? $restaurant['name'] ?? '-') ?></strong></article>
-    <article class="card stat"><span>Code</span><strong><?= e($restaurant['restaurant_code'] ?? '-') ?></strong></article>
-    <article class="card stat"><span>Abonnement</span><strong><?= e(subscription_status_label($subscription['status'] ?? null)) ?></strong></article>
-    <article class="card stat"><span>Paiement</span><strong><?= e(subscription_payment_label($subscription['payment_status'] ?? null)) ?></strong></article>
-</section>
-
 <?php if (!empty($cashTodaySnapshot)): ?>
 <section class="card" style="padding:22px; margin-bottom:24px;">
+    <div class="topbar" style="margin-bottom:14px;">
+        <div>
+            <h2 style="margin:0;">Tableau essentiel du jour</h2>
+            <p class="muted" style="margin:6px 0 0;"><?= e((string) ($cashTodaySnapshot['period_label'] ?? '')) ?> · <?= e((string) ($cashTodaySnapshot['date_ymd'] ?? '')) ?></p>
+        </div>
+        <?php if (!empty($can_access_reports)): ?><a href="/rapport?report_preset=today" class="button-muted no-print">Ouvrir le rapport du jour</a><?php endif; ?>
+    </div>
+    <div class="grid stats">
+        <article class="card stat"><span>Montant vendu aujourd hui</span><strong><?= e(format_money((float) ($cashTodaySnapshot['activity_day_sales_total_today'] ?? $cashTodaySnapshot['total_sold_closed'] ?? 0), $restaurantCurrency)) ?></strong></article>
+        <article class="card stat"><span>Montant verse a la caisse</span><strong><?= e(format_money((float) ($cashTodaySnapshot['remitted_to_cash_physical'] ?? 0), $restaurantCurrency)) ?></strong></article>
+        <article class="card stat"><span>Ecart / non verse</span><strong><?= e(format_money((float) ($cashTodaySnapshot['shortfall_today_total'] ?? 0), $restaurantCurrency)) ?></strong></article>
+        <article class="card stat"><span>Solde caisse</span><strong><?= e(format_money((float) ($cashTodaySnapshot['cash_balance_current'] ?? 0), $restaurantCurrency)) ?></strong></article>
+    </div>
+    <?php if ($cashClarityToday !== []): ?>
+    <div class="compact-empty" style="margin-top:16px;">
+        <strong>Lecture de coherence</strong>
+        <div style="margin-top:8px;">Vente = jour d activite, remise = jour physique de versement, reception caisse = jour de validation caisse.</div>
+        <?php if (!empty($cashClarityToday['clarity_notes']) && is_array($cashClarityToday['clarity_notes'])): ?>
+            <ul style="margin:8px 0 0; padding-left:18px; line-height:1.6;">
+                <?php foreach ($cashClarityToday['clarity_notes'] as $note): ?>
+                    <li><?= e((string) $note) ?></li>
+                <?php endforeach; ?>
+            </ul>
+        <?php endif; ?>
+    </div>
+    <?php endif; ?>
+</section>
+<section class="card" style="display:none;">
     <div class="topbar" style="margin-bottom:14px;">
         <div>
             <h2 style="margin:0;">Situation actuelle / Aujourd’hui</h2>
@@ -485,6 +530,7 @@ $restaurantRegisterUrl = restaurant_generated_registration_url($restaurant);
     </article>
 </section>
 
+<?php if (false): ?>
 <section class="card" style="padding:24px; margin-top:24px;">
     <h2 style="margin-top:0;">Parametres du restaurant</h2>
     <p class="muted">La devise change uniquement l affichage du restaurant courant. Aucun montant historique n est converti.</p>
@@ -502,6 +548,7 @@ $restaurantRegisterUrl = restaurant_generated_registration_url($restaurant);
     </form>
     <p><strong>Devise active :</strong> <?= e($restaurantCurrency) ?></p>
 </section>
+<?php endif; ?>
 
 <section class="card" style="padding:24px; margin-top:24px;">
     <h2 style="margin-top:0;">Demandes de correction</h2>

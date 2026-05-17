@@ -710,8 +710,36 @@ declare(strict_types=1);
         });
 
         var banner = document.getElementById('app-live-banner');
+        var audioReady = false;
+        var unlockAudio = function () {
+            audioReady = true;
+        };
+        document.addEventListener('pointerdown', unlockAudio, { once: true });
+        document.addEventListener('keydown', unlockAudio, { once: true });
+        var playTone = function (level) {
+            if (!audioReady || typeof window.AudioContext === 'undefined') {
+                return;
+            }
+            try {
+                var ctx = new window.AudioContext();
+                var osc = ctx.createOscillator();
+                var gain = ctx.createGain();
+                osc.type = 'sine';
+                osc.frequency.value = level === 'danger' ? 880 : (level === 'warning' ? 740 : 660);
+                gain.gain.value = 0.02;
+                osc.connect(gain);
+                gain.connect(ctx.destination);
+                osc.start();
+                window.setTimeout(function () {
+                    osc.stop();
+                    ctx.close();
+                }, 180);
+            } catch (err) {
+            }
+        };
+        var currentRole = document.body ? (document.body.getAttribute('data-current-role') || '') : '';
         window.BadibossNotify = {
-            push: function (message, level, timeoutMs) {
+            push: function (message, level, timeoutMs, options) {
                 if (!banner || !message) {
                     return;
                 }
@@ -730,12 +758,22 @@ declare(strict_types=1);
                         banner.hidden = true;
                     }, delay);
                 }
+                if (!options || options.silent !== true) {
+                    playTone(level || 'info');
+                }
+            },
+            pushRole: function (message, level, options) {
+                var roles = options && Array.isArray(options.roles) ? options.roles : [];
+                if (roles.length > 0 && currentRole && roles.indexOf(currentRole) === -1) {
+                    return;
+                }
+                this.push(message, level, options && options.timeoutMs ? options.timeoutMs : undefined, options || {});
             }
         };
     });
     </script>
 </head>
-<body>
+<body data-current-role="<?= e((string) (current_user()['role_code'] ?? '')) ?>">
 <div class="shell">
     <div class="container">
         <div id="app-live-banner" class="live-banner" data-level="info" hidden>

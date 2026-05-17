@@ -251,9 +251,26 @@ foreach ($historyEntries as $entry) {
 <?php require base_path('app/Views/partials/manager_resolution_block.php'); ?>
 <?php require base_path('app/Views/partials/manager_recent_decisions.php'); ?>
 <?php require base_path('app/Views/partials/operational_period_tabs.php'); ?>
+<?php
+$module_nav_title = 'Navigation ventes';
+$module_nav_intro = 'Aujourd hui, activite servie, ventes, meilleurs serveurs et remises restent ici.';
+$module_nav_items = [
+    ['label' => 'Aujourd hui', 'href' => '#sales-summary'],
+    ['label' => 'Hier', 'href' => '#sales-history'],
+    ['label' => 'Date', 'href' => '#sales-history'],
+    ['label' => 'Semaine', 'href' => '#sales-history'],
+    ['label' => 'Mois', 'href' => '#sales-history'],
+    ['label' => 'Par serveur', 'href' => '#sales-cash'],
+    ['label' => 'Par article', 'href' => '#sales-activity'],
+    ['label' => 'Par categorie', 'href' => '#sales-activity'],
+    ['label' => 'Meilleure vente', 'href' => '#sales-summary'],
+    ['label' => 'Meilleur serveur', 'href' => '#sales-cash'],
+];
+require base_path('app/Views/partials/module_quick_nav.php');
+?>
 
 <?php if ($modulePulse !== []): ?>
-<section class="card" style="padding:18px; margin-bottom:24px;">
+<section class="card" id="sales-summary" style="padding:18px; margin-bottom:24px;">
     <h2 style="margin:0 0 10px;"><?= $salesViewScope === 'self' ? 'Mes activités (période choisie)' : 'Situation opérationnelle' ?></h2>
     <p class="muted" style="margin:0 0 12px;"><?= e((string) ($modulePulse['period_label'] ?? 'Période')) ?><?php if (!empty($modulePulse['range_start_ymd']) && !empty($modulePulse['range_end_ymd'])): ?> · <?= e((string) $modulePulse['range_start_ymd']) ?> → <?= e((string) $modulePulse['range_end_ymd']) ?><?php endif; ?></p>
     <div class="grid stats">
@@ -313,7 +330,7 @@ $legacyShort = (float) ($agentServerCash['legacy_shortfall'] ?? 0);
 $legacyDetail = $agentServerCash['legacy_detail'] ?? [];
 $todayShort = (float) ($todayAgentCash['shortfall'] ?? 0);
 ?>
-<section class="card" style="padding:18px; margin-bottom:24px;">
+<section class="card" id="sales-cash" style="padding:18px; margin-bottom:24px;">
     <h2 style="margin:0 0 8px;">Remises caisse &amp; manquants</h2>
     <p class="muted" style="margin:0 0 14px;">Ventes clôturées du jour par rapport aux remises déjà prises en compte (hors remises tardives en attente de décision gérant).</p>
     <div class="grid stats">
@@ -402,7 +419,7 @@ $todayShort = (float) ($todayAgentCash['shortfall'] ?? 0);
 </section>
 
 <?php if ($servedWithoutSalePeriod !== []): ?>
-<section class="card" style="padding:18px; margin:24px 0;">
+<section class="card" id="sales-activity" style="padding:18px; margin:24px 0;">
     <h2 style="margin:0 0 8px;">Lecture métier · servi au jour d’activité</h2>
     <p class="muted" style="margin:0 0 14px;">Option A retenue: ces demandes servies apparaissent comme activité vendue du jour sans créer de vente ni toucher au stock. La remise caisse reste séparée.</p>
     <div class="grid stats" style="margin-bottom:14px;">
@@ -917,7 +934,7 @@ $todayShort = (float) ($todayAgentCash['shortfall'] ?? 0);
     </details>
 </section>
 
-<section class="card" style="margin-top:24px;">
+<section class="card" id="sales-history" style="margin-top:24px;">
     <details class="compact-card" style="padding:0;">
         <summary style="padding:22px 22px 10px; cursor:pointer; list-style:none;"><strong>Historique du service</strong></summary>
     <div style="padding:0 22px 10px;">
