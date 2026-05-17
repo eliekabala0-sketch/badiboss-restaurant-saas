@@ -325,9 +325,11 @@ final class DashboardController
 
     public function owner(Request $request): void
     {
-        authorize_access('tenant.dashboard.view');
-        $restaurantId = current_restaurant_id();
         $actor = current_user() ?? [];
+        if (($actor['scope'] ?? null) !== 'super_admin') {
+            authorize_access('tenant.dashboard.view');
+        }
+        $restaurantId = current_restaurant_id();
         $flashSuccess = flash('success');
         $flashError = flash('error');
         session_release_read_lock();
@@ -422,9 +424,11 @@ final class DashboardController
 
     public function preparePayroll(Request $request): void
     {
-        authorize_access('payroll.prepare.view');
-        $restaurantId = current_restaurant_id();
         $actor = current_user() ?? [];
+        if (($actor['scope'] ?? null) !== 'super_admin') {
+            authorize_access('payroll.prepare.view');
+        }
+        $restaurantId = current_restaurant_id();
         $flashSuccess = flash('success');
         $flashError = flash('error');
         session_release_read_lock();
@@ -469,9 +473,11 @@ final class DashboardController
 
     public function disciplineHub(Request $request): void
     {
-        authorize_access('staff.team_gauges.view');
-        $restaurantId = current_restaurant_id();
         $actor = current_user() ?? [];
+        if (($actor['scope'] ?? null) !== 'super_admin') {
+            authorize_access('staff.team_gauges.view');
+        }
+        $restaurantId = current_restaurant_id();
         $flashSuccess = flash('success');
         $flashError = flash('error');
         session_release_read_lock();
