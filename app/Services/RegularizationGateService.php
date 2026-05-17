@@ -212,8 +212,8 @@ final class RegularizationGateService
                 'server_user_id' => (int) ($r['server_id'] ?? 0),
                 'type_label' => 'Commande service',
                 'reference' => $ref,
-                'at_raw' => (string) ($r['created_at'] ?? ''),
-                'happened_at' => $this->formatTs((string) ($r['created_at'] ?? ''), $restaurantId),
+                'at_raw' => $createdAt,
+                'happened_at' => $this->formatTs($createdAt, $restaurantId),
                 'agent_label' => (string) ($r['server_name'] ?? ''),
                 'amount_label' => $this->moneyHint((float) ($r['amount_hint'] ?? 0), $currency),
                 'detail_label' => 'Commande non clôturée',
@@ -302,29 +302,24 @@ final class RegularizationGateService
             ];
         }
 
-        $stKsr = $this->database->pdo()->prepare(
-            'SELECT ksr.id, ksr.status, ksr.created_at, ksr.note
-             FROM kitchen_stock_requests ksr
-             WHERE ksr.restaurant_id = :rid
-               AND ksr.status NOT IN ("ANNULE", "REFUSE_STOCK", "CLOTURE", "FOURNI_TOTAL")
-               AND NOT (
-                   ksr.received_at IS NOT NULL
-                   AND ksr.status IN ("FOURNI_TOTAL", "FOURNI_PARTIEL", "NON_FOURNI", "CLOTURE")
-               )
-               AND NOT EXISTS (
-                   SELECT 1
-                   FROM operation_cases oc
-                   WHERE oc.restaurant_id = ksr.restaurant_id
-                     AND oc.source_entity_type = "kitchen_stock_requests"
-                     AND oc.source_entity_id = ksr.id
-                     AND oc.decided_at IS NOT NULL
-               )
-               AND ksr.created_at < :cutoff
-             ORDER BY ksr.created_at ASC
-             LIMIT 20'
-        );
-        $stKsr->execute(['rid' => $restaurantId, 'cutoff' => $cutoff]);
-        foreach ($stKsr->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        $cutoffTs = strtotime($cutoff) ?: 0;
+        $stockBlocks = Container::getInstance()->get('stockService')->listKitchenStockRequestBlocks($restaurantId);
+        foreach (($stockBlocks['requests'] ?? []) as $r) {
+            if (!is_array($r)) {
+                continue;
+            }
+            $status = (string) ($r['status'] ?? '');
+            if (in_array($status, ['ANNULE', 'REFUSE_STOCK', 'CLOTURE', 'FOURNI_TOTAL'], true)) {
+                continue;
+            }
+            if (!empty($r['has_any_received_item']) && in_array($status, ['FOURNI_PARTIEL', 'NON_FOURNI'], true)) {
+                continue;
+            }
+            $createdAt = (string) ($r['created_at'] ?? '');
+            $createdTs = $createdAt !== '' ? (strtotime($createdAt) ?: 0) : 0;
+            if ($cutoffTs > 0 && $createdTs > 0 && $createdTs >= $cutoffTs) {
+                continue;
+            }
             $ksrId = (int) ($r['id'] ?? 0);
             $tasks[] = [
                 'audience' => ['stock', 'manager', 'owner'],
@@ -336,7 +331,7 @@ final class RegularizationGateService
                 'agent_label' => '—',
                 'amount_label' => '—',
                 'detail_label' => trim((string) ($r['note'] ?? '')) !== '' ? trim((string) $r['note']) : 'Demande magasin ouverte',
-                'status_label' => stock_request_status_label((string) ($r['status'] ?? '')),
+                'status_label' => stock_request_status_label($status),
                 'action_label' => 'Traiter ou clôturer sur Stock',
                 'href' => '/stock?focus=kitchen_stock_request:' . $ksrId,
                 'focus' => 'kitchen_stock_request:' . $ksrId,
@@ -635,22 +630,26 @@ final class RegularizationGateService
     {
         $tz = $this->reportTz($restaurantId);
         $todayStart = (new DateTimeImmutable('now', $tz))->setTime(0, 0, 0)->format('Y-m-d H:i:s');
-        $st = $this->database->pdo()->prepare(
-            'SELECT COUNT(*) FROM kitchen_stock_requests
-             WHERE restaurant_id = :rid
-               AND status NOT IN ("ANNULE", "REFUSE_STOCK", "CLOTURE")
-               AND NOT EXISTS (
-                   SELECT 1
-                   FROM operation_cases oc
-                   WHERE oc.restaurant_id = kitchen_stock_requests.restaurant_id
-                     AND oc.source_entity_type = "kitchen_stock_requests"
-                     AND oc.source_entity_id = kitchen_stock_requests.id
-                     AND oc.decided_at IS NOT NULL
-               )
-               AND created_at < :today_start'
-        );
-        $st->execute(['rid' => $restaurantId, 'today_start' => $todayStart]);
+        $todayStartTs = strtotime($todayStart) ?: 0;
+        $stockBlocks = Container::getInstance()->get('stockService')->listKitchenStockRequestBlocks($restaurantId);
+        foreach (($stockBlocks['requests'] ?? []) as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            $status = (string) ($row['status'] ?? '');
+            if (in_array($status, ['ANNULE', 'REFUSE_STOCK', 'CLOTURE', 'FOURNI_TOTAL'], true)) {
+                continue;
+            }
+            if (!empty($row['has_any_received_item']) && in_array($status, ['FOURNI_PARTIEL', 'NON_FOURNI'], true)) {
+                continue;
+            }
+            $createdAt = (string) ($row['created_at'] ?? '');
+            $createdTs = $createdAt !== '' ? (strtotime($createdAt) ?: 0) : 0;
+            if ($todayStartTs > 0 && $createdTs > 0 && $createdTs < $todayStartTs) {
+                return true;
+            }
+        }
 
-        return (int) $st->fetchColumn() > 0;
+        return false;
     }
 }

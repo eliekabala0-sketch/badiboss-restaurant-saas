@@ -542,6 +542,7 @@ $restaurantRegisterUrl = restaurant_generated_registration_url($restaurant);
 <?php if (false): ?>
 <?php if (false): ?>
 <?php if (false): ?>
+<?php if (false): ?>
 <section class="card" style="padding:24px; margin-top:24px;">
     <h2 style="margin-top:0;">Parametres du restaurant</h2>
     <p class="muted">La devise change uniquement l affichage du restaurant courant. Aucun montant historique n est converti.</p>
@@ -559,6 +560,7 @@ $restaurantRegisterUrl = restaurant_generated_registration_url($restaurant);
     </form>
     <p><strong>Devise active :</strong> <?= e($restaurantCurrency) ?></p>
 </section>
+<?php endif; ?>
 <?php endif; ?>
 <?php endif; ?>
 <?php endif; ?>
