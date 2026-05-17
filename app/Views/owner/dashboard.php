@@ -8,6 +8,11 @@ $restaurantCover = restaurant_media_url_or_default($restaurant['cover_image_url'
 $restaurantLogoFallback = restaurant_media_fallback_url('logo');
 $cashTodaySnapshot = $cash_today_snapshot ?? null;
 $cashClarityToday = is_array($cashTodaySnapshot['cash_clarity_today'] ?? null) ? $cashTodaySnapshot['cash_clarity_today'] : [];
+$cashSalesActivityToday = (float) ($cashClarityToday['sales_activity_total'] ?? ($cashTodaySnapshot['activity_day_sales_total_today'] ?? 0));
+$cashReceivedForTodaySales = (float) ($cashClarityToday['cashier_received_sales_attributed'] ?? 0);
+$cashMissingForTodaySales = round($cashSalesActivityToday - $cashReceivedForTodaySales, 2);
+$cashPreviousSalesToday = (float) ($cashClarityToday['remittance_from_previous_sales'] ?? 0);
+$cashBalanceToday = (float) ($cashClarityToday['cash_balance'] ?? ($cashTodaySnapshot['cash_balance_current'] ?? 0));
 $pendingLateRemittance = $pending_late_remittance_attributions ?? [];
 $printQuery = http_build_query(['print' => '1']);
 $currentUserName = trim((string) ($user['full_name'] ?? 'Equipe'));
@@ -158,15 +163,18 @@ require base_path('app/Views/partials/module_quick_nav.php');
         <?php if (!empty($can_access_reports)): ?><a href="/rapport?report_preset=today" class="button-muted no-print">Ouvrir le rapport du jour</a><?php endif; ?>
     </div>
     <div class="grid stats">
-        <article class="card stat"><span>Montant vendu aujourd hui</span><strong><?= e(format_money((float) ($cashTodaySnapshot['activity_day_sales_total_today'] ?? $cashTodaySnapshot['total_sold_closed'] ?? 0), $restaurantCurrency)) ?></strong></article>
-        <article class="card stat"><span>Montant verse a la caisse</span><strong><?= e(format_money((float) ($cashTodaySnapshot['remitted_to_cash_physical'] ?? 0), $restaurantCurrency)) ?></strong></article>
-        <article class="card stat"><span>Ecart / non verse</span><strong><?= e(format_money((float) ($cashTodaySnapshot['shortfall_today_total'] ?? 0), $restaurantCurrency)) ?></strong></article>
-        <article class="card stat"><span>Solde caisse</span><strong><?= e(format_money((float) ($cashTodaySnapshot['cash_balance_current'] ?? 0), $restaurantCurrency)) ?></strong></article>
+        <article class="card stat"><span>Ventes du jour</span><strong><?= e(format_money($cashSalesActivityToday, $restaurantCurrency)) ?></strong></article>
+        <article class="card stat"><span>Recu caisse pour ventes du jour</span><strong><?= e(format_money($cashReceivedForTodaySales, $restaurantCurrency)) ?></strong></article>
+        <article class="card stat"><span>Manquant ventes du jour</span><strong><?= e(format_money($cashMissingForTodaySales, $restaurantCurrency)) ?></strong></article>
+        <article class="card stat"><span>Solde caisse cumule</span><strong><?= e(format_money($cashBalanceToday, $restaurantCurrency)) ?></strong></article>
     </div>
     <?php if ($cashClarityToday !== []): ?>
     <div class="compact-empty" style="margin-top:16px;">
         <strong>Lecture de coherence</strong>
         <div style="margin-top:8px;">Vente = jour d activite, remise = jour physique de versement, reception caisse = jour de validation caisse.</div>
+        <?php if ($cashPreviousSalesToday > 0.0001): ?>
+            <div style="margin-top:8px;"><strong>Encaissements recus aujourd hui pour anciennes ventes</strong> : <?= e(format_money($cashPreviousSalesToday, $restaurantCurrency)) ?></div>
+        <?php endif; ?>
         <?php if (!empty($cashClarityToday['clarity_notes']) && is_array($cashClarityToday['clarity_notes'])): ?>
             <ul style="margin:8px 0 0; padding-left:18px; line-height:1.6;">
                 <?php foreach ($cashClarityToday['clarity_notes'] as $note): ?>
@@ -531,6 +539,7 @@ $restaurantRegisterUrl = restaurant_generated_registration_url($restaurant);
 </section>
 
 <?php if (false): ?>
+<?php if (false): ?>
 <section class="card" style="padding:24px; margin-top:24px;">
     <h2 style="margin-top:0;">Parametres du restaurant</h2>
     <p class="muted">La devise change uniquement l affichage du restaurant courant. Aucun montant historique n est converti.</p>
@@ -548,6 +557,7 @@ $restaurantRegisterUrl = restaurant_generated_registration_url($restaurant);
     </form>
     <p><strong>Devise active :</strong> <?= e($restaurantCurrency) ?></p>
 </section>
+<?php endif; ?>
 <?php endif; ?>
 
 <section class="card" style="padding:24px; margin-top:24px;">

@@ -1130,6 +1130,11 @@ final class StockService
             ) {
                 $header['status'] = 'CLOTURE';
             } elseif (
+                !empty($header['received_by_name'])
+                && in_array((string) $header['status'], ['FOURNI_TOTAL', 'FOURNI_PARTIEL', 'NON_FOURNI'], true)
+            ) {
+                $header['status'] = 'CLOTURE';
+            } elseif (
                 $allItemsReceived
                 && in_array((string) $header['status'], ['FOURNI_TOTAL', 'FOURNI_PARTIEL', 'NON_FOURNI'], true)
             ) {

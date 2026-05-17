@@ -118,6 +118,9 @@ $servedRequestsWithoutSale = $report['served_requests_without_sale'] ?? [];
     padding: 14px 16px;
     background: rgba(255,255,255,0.025);
 }
+#report-today > .grid.stats:first-of-type {
+    display: none;
+}
 .voir-plus-btn {
     margin-top: 12px;
     padding: 10px 16px;
@@ -221,6 +224,20 @@ $disciplinary_alerts = $disciplinary_alerts ?? [];
         <article class="card stat"><span>Écarts</span><strong><?= e(format_money((float) ($cashTodaySnap['discrepancies_today'] ?? 0), $restaurantCurrency)) ?></strong></article>
     </div>
     <?php $todayClarity = is_array($cashTodaySnap['cash_clarity_today'] ?? null) ? $cashTodaySnap['cash_clarity_today'] : []; ?>
+    <?php
+    $todaySalesActivity = (float) ($todayClarity['sales_activity_total'] ?? ($cashTodaySnap['activity_day_sales_total_today'] ?? 0));
+    $todayReceivedForSales = (float) ($todayClarity['cashier_received_sales_attributed'] ?? 0);
+    $todayMissingForSales = round($todaySalesActivity - $todayReceivedForSales, 2);
+    $todayPreviousSalesReceipts = (float) ($todayClarity['remittance_from_previous_sales'] ?? 0);
+    $todayCashBalance = (float) ($todayClarity['cash_balance'] ?? ($cashTodaySnap['cash_balance_current'] ?? 0));
+    ?>
+    <div class="grid stats">
+        <article class="card stat"><span>Ventes du jour</span><strong><?= e(format_money($todaySalesActivity, $restaurantCurrency)) ?></strong></article>
+        <article class="card stat"><span>Recu caisse pour ventes du jour</span><strong><?= e(format_money($todayReceivedForSales, $restaurantCurrency)) ?></strong></article>
+        <article class="card stat"><span>Manquant ventes du jour</span><strong><?= e(format_money($todayMissingForSales, $restaurantCurrency)) ?></strong></article>
+        <article class="card stat"><span>Encaissements recus aujourd hui pour anciennes ventes</span><strong><?= e(format_money($todayPreviousSalesReceipts, $restaurantCurrency)) ?></strong></article>
+        <article class="card stat"><span>Solde caisse cumule</span><strong><?= e(format_money($todayCashBalance, $restaurantCurrency)) ?></strong></article>
+    </div>
     <?php if ($todayClarity !== []): ?>
     <div class="compact-empty" style="margin-top:14px;">
         <strong>Lecture de cohÃ©rence</strong>
