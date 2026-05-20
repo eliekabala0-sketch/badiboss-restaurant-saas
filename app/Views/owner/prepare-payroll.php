@@ -14,6 +14,7 @@ $disciplinePeriodLabel = (string) ($payroll_discipline_period_label ?? '');
 $staffPage = max(1, (int) ($staff_page ?? 1));
 $staffTotalPages = max(1, (int) ($staff_total_pages ?? 1));
 $staffTotalCount = max(0, (int) ($staff_total_count ?? count($rows)));
+$payrollPreviewWarning = (string) ($payroll_preview_warning ?? '');
 
 $disciplineByUser = [];
 foreach ($disciplineRows as $disciplineRow) {
@@ -103,12 +104,16 @@ $sanctionSummary = static function (array $activePeriod, array $metrics): string
 $impactSummary = static function (array $row, array $activePeriod): string {
     $parts = [];
     $retention = (float) ($row['retention_amount_est'] ?? 0);
-    $absence = (float) ($row['deduction_absence_est'] ?? 0);
+    $shortfall = (float) ($row['cash_shortfall_amount_est'] ?? 0);
+    $otherPenalties = (float) ($row['other_penalties_amount'] ?? 0);
     if ($retention > 0.0001) {
-        $parts[] = 'Retenue ' . format_money($retention, (string) ($row['currency'] ?? 'USD'));
+        $parts[] = 'Discipline ' . format_money($retention, (string) ($row['currency'] ?? 'USD'));
     }
-    if ($absence > 0.0001) {
-        $parts[] = 'Absence ' . format_money($absence, (string) ($row['currency'] ?? 'USD'));
+    if ($shortfall > 0.0001) {
+        $parts[] = 'Manquants ' . format_money($shortfall, (string) ($row['currency'] ?? 'USD'));
+    }
+    if ($otherPenalties > 0.0001) {
+        $parts[] = 'Autres ' . format_money($otherPenalties, (string) ($row['currency'] ?? 'USD'));
     }
     if (($activePeriod['score'] ?? null) === null && $parts === []) {
         return 'Aucun impact calcule';
@@ -131,10 +136,10 @@ $impactSummary = static function (array $row, array $activePeriod): string {
         <p class="muted" style="margin:0;">Agents affiches : page <?= e((string) $staffPage) ?> / <?= e((string) $staffTotalPages) ?> · total <?= e((string) $staffTotalCount) ?></p>
         <div class="toolbar-actions">
             <?php if ($staffPage > 1): ?>
-                <a class="button-muted" href="/owner/paie/preparer?<?= e(http_build_query(['month' => $month_query, 'preset' => $disciplinePreset, 'date' => $disciplineDate, 'page' => $staffPage - 1])) ?>">Page precedente</a>
+                <a class="button-muted" href="/owner/paie/preparer?<?= e(http_build_query(['month' => $month_query, 'preset' => $disciplinePreset, 'date' => $disciplineDate, 'page' => $staffPage - 1, 'heavy' => $payrollHeavyLoaded ? '1' : null])) ?>">Page precedente</a>
             <?php endif; ?>
             <?php if ($staffPage < $staffTotalPages): ?>
-                <a class="button-muted" href="/owner/paie/preparer?<?= e(http_build_query(['month' => $month_query, 'preset' => $disciplinePreset, 'date' => $disciplineDate, 'page' => $staffPage + 1])) ?>">Page suivante</a>
+                <a class="button-muted" href="/owner/paie/preparer?<?= e(http_build_query(['month' => $month_query, 'preset' => $disciplinePreset, 'date' => $disciplineDate, 'page' => $staffPage + 1, 'heavy' => $payrollHeavyLoaded ? '1' : null])) ?>">Page suivante</a>
             <?php endif; ?>
         </div>
     </div>
@@ -143,6 +148,7 @@ $impactSummary = static function (array $row, array $activePeriod): string {
 
 <?php if (!empty($flash_success)): ?><div class="flash-ok"><?= e($flash_success) ?></div><?php endif; ?>
 <?php if (!empty($flash_error)): ?><div class="flash-bad"><?= e($flash_error) ?></div><?php endif; ?>
+<?php if ($payrollPreviewWarning !== ''): ?><div class="flash-bad"><?= e($payrollPreviewWarning) ?></div><?php endif; ?>
 
 <section class="card no-print" style="padding:18px 22px; margin-bottom:20px;">
     <form method="get" action="/owner/paie/preparer" class="grid" style="gap:14px; grid-template-columns:repeat(auto-fit, minmax(180px, 1fr)); align-items:end;">
@@ -171,6 +177,7 @@ $impactSummary = static function (array $row, array $activePeriod): string {
         </label>
         <button type="submit">Actualiser</button>
     </form>
+    <p class="muted" style="margin:8px 0 0;">Le score mensuel est la moyenne des scores journaliers applicables du mois.</p>
     <p class="muted" style="margin:12px 0 0;">Paie calculee sur <?= e($periodLabel) ?> · <?= e($periodStart) ?> → <?= e($periodEnd) ?>. Discipline visible ici sur <?= e($disciplinePeriodLabel) ?>.</p>
 </section>
 
@@ -195,25 +202,30 @@ require base_path('app/Views/partials/module_quick_nav.php');
         <tr>
             <th>Agent</th>
             <th>Role</th>
+            <th>Salaire base</th>
+            <th>Jours app.</th>
+            <th>Travailles</th>
+            <th>Repos</th>
+            <th>Abs. non just.</th>
+            <th>Abs. just.</th>
+            <th>Maladie</th>
+            <th>Jours inactifs</th>
             <th>Jour</th>
             <th>Semaine</th>
-            <th>Mois</th>
-            <th>Signaux / sanction</th>
-            <th>Impact salaire</th>
-            <th>Salaire base</th>
-            <th>Retenue %</th>
-            <th>Abs. non just.</th>
-            <th>Retards caisse</th>
+            <th>Score mois</th>
+            <th>Mention</th>
+            <th>Retenue discipline</th>
             <th>Manquants</th>
+            <th>Autres pen.</th>
             <th>Prime</th>
             <th>Net propose</th>
-            <th>Action</th>
+            <th>Raisons des retenues</th>
         </tr>
         </thead>
         <tbody>
         <?php if ($rows === []): ?>
             <tr>
-                <td colspan="15" class="muted">Aucune ligne de paie disponible pour ce mois.</td>
+                <td colspan="20" class="muted">Aucune ligne de paie disponible pour ce mois.</td>
             </tr>
         <?php endif; ?>
         <?php foreach ($rows as $row): ?>
@@ -225,15 +237,15 @@ require base_path('app/Views/partials/module_quick_nav.php');
             $activePeriod = is_array($gauges['active_period'] ?? null) ? $gauges['active_period'] : [];
             $metrics = is_array($gauges['row_metrics'] ?? null) ? $gauges['row_metrics'] : [];
             $score = $activePeriod['score'] ?? null;
-            $zone = (string) ($activePeriod['zone'] ?? 'non_evalue');
-            $zoneClass = match ($zone) {
+            $monthZone = (string) ($row['monthly_score_zone'] ?? ($activePeriod['zone'] ?? 'non_evalue'));
+            $zoneClass = match ($monthZone) {
                 'vert' => 'badge-closed',
                 'jaune' => 'badge-ready',
                 'orange' => 'badge-progress',
                 'rouge', 'rouge_critique' => 'badge-bad',
                 default => 'badge-neutral',
             };
-            $zoneLabel = match ($zone) {
+            $zoneLabel = match ($monthZone) {
                 'vert' => 'Excellent',
                 'jaune' => 'Bon',
                 'orange' => 'Moyen',
@@ -254,38 +266,46 @@ require base_path('app/Views/partials/module_quick_nav.php');
                     <?php endif; ?>
                 </td>
                 <td><?= e(restaurant_role_label($row['role_code'] ?? null)) ?></td>
+                <td><?= e(format_money((float) ($row['base_salary_monthly'] ?? 0), (string) ($row['currency'] ?? 'USD'))) ?></td>
+                <td><?= e((string) (int) ($row['applicable_days'] ?? 0)) ?></td>
+                <td><?= e((string) (int) ($row['worked_days'] ?? 0)) ?></td>
+                <td><?= e((string) (int) ($row['rest_days_recorded'] ?? 0)) ?></td>
+                <td><?= e((string) (int) ($row['unjustified_absence_days'] ?? 0)) ?></td>
+                <td><?= e((string) (int) ($row['justified_absence_days'] ?? 0)) ?></td>
+                <td><?= e((string) (int) ($row['illness_days'] ?? 0)) ?></td>
+                <td><?= e((string) (int) ($row['inactive_days'] ?? 0)) ?></td>
                 <td><strong><?= e($scoreLine($gauges['daily'] ?? null)) ?></strong></td>
                 <td><strong><?= e($scoreLine($gauges['weekly_avg'] ?? null)) ?></strong></td>
                 <td>
                     <span class="pill <?= e($zoneClass) ?>"><?= e($zoneLabel) ?></span>
-                    <div class="muted" style="font-size:0.84rem; margin-top:6px;"><?= e($scoreLine($gauges['monthly_avg'] ?? $score)) ?></div>
+                    <div class="muted" style="font-size:0.84rem; margin-top:6px;"><?= e($scoreLine($row['monthly_score_avg'] ?? ($gauges['monthly_avg'] ?? $score))) ?></div>
                 </td>
                 <td>
-                    <strong><?= e($sanction) ?></strong>
+                    <strong><?= e((string) ($row['monthly_mention'] ?? $zoneLabel)) ?></strong>
+                    <div class="muted" style="font-size:0.84rem; margin-top:6px;"><?= e($sanction) ?></div>
+                </td>
+                <td>
+                    <strong><?= e((string) (float) ($row['retention_proposed_pct'] ?? 0)) ?> %</strong>
+                    <div class="muted" style="font-size:0.84rem; margin-top:6px;"><?= e(format_money((float) ($row['retention_amount_est'] ?? 0), (string) ($row['currency'] ?? 'USD'))) ?></div>
+                </td>
+                <td>
+                    <strong><?= e(format_money((float) ($row['cash_shortfall_amount_est'] ?? 0), (string) ($row['currency'] ?? 'USD'))) ?></strong>
+                    <div class="muted" style="font-size:0.84rem; margin-top:6px;"><?= e((string) (int) ($row['cash_shortfall_hits'] ?? 0)) ?> cas</div>
+                </td>
+                <td><?= e(format_money((float) ($row['other_penalties_amount'] ?? 0), (string) ($row['currency'] ?? 'USD'))) ?></td>
+                <td><?= e(format_money((float) ($row['bonus_monthly'] ?? 0), (string) ($row['currency'] ?? 'USD'))) ?></td>
+                <td><strong><?= e(format_money((float) ($row['net_pay_proposed'] ?? 0), (string) ($row['currency'] ?? 'USD'))) ?></strong></td>
+                <td>
+                    <strong><?= e((string) ($row['retention_reason_summary'] ?? $impact)) ?></strong>
                     <div class="muted" style="font-size:0.84rem; margin-top:6px;"><?= e($signals) ?></div>
                     <?php if (!empty($activePeriod['note'])): ?>
                         <div class="muted" style="font-size:0.84rem; margin-top:6px;"><?= e((string) $activePeriod['note']) ?></div>
                     <?php endif; ?>
                 </td>
-                <td>
-                    <strong><?= e($impact) ?></strong>
-                    <div class="muted" style="font-size:0.84rem; margin-top:6px;">Trace disponible dans Discipline et l audit.</div>
-                </td>
-                <td><?= e(format_money((float) ($row['base_salary_monthly'] ?? 0), (string) ($row['currency'] ?? 'USD'))) ?></td>
-                <td><?= e((string) (float) ($row['retention_proposed_pct'] ?? 0)) ?> %</td>
-                <td><?= e((string) (int) ($row['unjustified_absence_days'] ?? 0)) ?></td>
-                <td><?= e((string) (int) ($row['late_remittance_hits'] ?? 0)) ?></td>
-                <td><?= e((string) (int) ($row['cash_shortfall_hits'] ?? 0)) ?></td>
-                <td><?= e(format_money((float) ($row['bonus_monthly'] ?? 0), (string) ($row['currency'] ?? 'USD'))) ?></td>
-                <td><strong><?= e(format_money((float) ($row['net_pay_proposed'] ?? 0), (string) ($row['currency'] ?? 'USD'))) ?></strong></td>
-                <td>
-                    <a href="/owner/discipline?<?= e(http_build_query(['preset' => $disciplinePreset, 'date' => $disciplineDate, 'alerts' => 1])) ?>">Discipline</a>
-                    <div class="muted" style="font-size:0.84rem; margin-top:6px;"><a href="#" onclick="window.print(); return false;">Imprimer</a></div>
-                </td>
             </tr>
             <?php if ($detailRows !== []): ?>
                 <tr>
-                    <td colspan="15" class="muted" style="font-size:0.9rem;">
+                    <td colspan="20" class="muted" style="font-size:0.9rem;">
                         <strong>Detail trace</strong>
                         <ul style="margin:8px 0 0; padding-left:18px;">
                             <?php foreach ($detailRows as $detailRow): ?>

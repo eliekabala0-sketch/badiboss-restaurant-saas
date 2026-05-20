@@ -9,6 +9,7 @@ $restaurantLogoFallback = restaurant_media_fallback_url('logo');
 $cashTodaySnapshot = $cash_today_snapshot ?? null;
 $ownerInsightsLoaded = !empty($owner_insights_loaded);
 $ownerInsightsQuery = (string) ($owner_insights_query ?? 'insights=1');
+$ownerInsightsWarning = (string) ($owner_insights_warning ?? '');
 $cashClarityToday = is_array($cashTodaySnapshot['cash_clarity_today'] ?? null) ? $cashTodaySnapshot['cash_clarity_today'] : [];
 $cashSalesActivityToday = (float) ($cashClarityToday['sales_activity_total'] ?? ($cashTodaySnapshot['activity_day_sales_total_today'] ?? 0));
 $cashReceivedForTodaySales = (float) ($cashClarityToday['cashier_received_sales_attributed'] ?? 0);
@@ -69,6 +70,7 @@ $decisionBadgeClass = static function (?string $status): string {
 
 <?php if (!empty($flash_success)): ?><div class="flash-ok"><?= e($flash_success) ?></div><?php endif; ?>
 <?php if (!empty($flash_error)): ?><div class="flash-bad"><?= e($flash_error) ?></div><?php endif; ?>
+<?php if ($ownerInsightsWarning !== ''): ?><div class="flash-bad"><?= e($ownerInsightsWarning) ?></div><?php endif; ?>
 <?php
 $dash_tab_extra_qs = $dash_tab_extra_qs ?? '';
 $day_start_hold = $day_start_hold ?? ['blocked' => false, 'reasons' => [], 'items' => []];

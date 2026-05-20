@@ -1908,7 +1908,7 @@ final class StaffDisciplineService
      *
      * @return array{month:string, period_label:string, period_start:string, period_end:string, rows: list<array<string,mixed>>}
      */
-    public function payrollMonthPreview(int $restaurantId, string $monthInput, bool $includeHeavyScores = false): array
+    public function payrollMonthPreview(int $restaurantId, string $monthInput, bool $includeHeavyScores = false, ?array $onlyUserIds = null): array
     {
         $this->ensureSchema();
         $rs = Container::getInstance()->get('reportService');
@@ -1928,6 +1928,19 @@ final class StaffDisciplineService
             $endMonth = $todayY;
         }
         $end = substr($todayY, 0, 7) === $monthKey ? $todayY : $endMonth;
+        $allowedUserIds = null;
+        if (is_array($onlyUserIds)) {
+            $allowedUserIds = [];
+            foreach ($onlyUserIds as $candidateId) {
+                $candidateId = (int) $candidateId;
+                if ($candidateId > 0) {
+                    $allowedUserIds[$candidateId] = true;
+                }
+            }
+        }
+        $periodStartAt = new DateTimeImmutable($start . ' 00:00:00', $tz);
+        $periodEndExclusive = (new DateTimeImmutable($end . ' 00:00:00', $tz))->modify('+1 day');
+        $shortfallByUser = $this->serverShortfallAmountsByUser($restaurantId, $periodStartAt, $periodEndExclusive, $allowedUserIds);
 
         $pdo = $this->database->pdo();
         $profSt = $pdo->prepare(
@@ -1947,6 +1960,9 @@ final class StaffDisciplineService
                 continue;
             }
             if (($u['status'] ?? '') !== 'active') {
+                continue;
+            }
+            if (is_array($allowedUserIds) && !isset($allowedUserIds[$uid])) {
                 continue;
             }
             $roleCode = (string) ($u['role_code'] ?? '');
@@ -1973,10 +1989,16 @@ final class StaffDisciplineService
             $unjDays = array_key_exists('unjustified_absence_days', $monthMetrics)
                 ? (int) ($monthMetrics['unjustified_absence_days'] ?? 0)
                 : $this->countUnjustifiedAbsenceDaysInRange($restaurantId, $uid, $roleCode, $start, $end, $tz);
-            $perDayAbs = $base > 0 ? min($base / 22, $base * 0.12) : 0.0;
-            $absDeduction = round(min($base * 0.35, $unjDays * $perDayAbs), 2);
+            $applicableDays = (int) ($monthMetrics['days_scored'] ?? ($monthGauge['jours_moyennes'] ?? 0));
+            $workedDays = (int) ($monthMetrics['days_with_activity'] ?? 0);
+            $restDaysNeutral = (int) ($monthMetrics['days_rest_neutral'] ?? 0);
+            $authorizedAbsenceDays = (int) ($monthMetrics['days_authorized_absence'] ?? 0);
+            $illnessDays = (int) ($monthMetrics['days_illness_absence'] ?? 0);
+            $inactiveDays = (int) ($monthMetrics['days_without_measured_activity'] ?? 0);
             $scoreRetentionAmt = round($base * ($retentionPct / 100), 2);
-            $net = round(max(0, $base - $scoreRetentionAmt + $bonus - $absDeduction), 2);
+            $shortfallAmount = round((float) ($shortfallByUser[$uid] ?? 0), 2);
+            $otherPenaltyAmount = 0.0;
+            $net = round(max(0, $base - $scoreRetentionAmt - $shortfallAmount - $otherPenaltyAmount + $bonus), 2);
 
             $attSt = $pdo->prepare(
                 'SELECT COUNT(*) FROM staff_attendance_day
@@ -2009,10 +2031,14 @@ final class StaffDisciplineService
                 'retention_proposed_pct' => $retentionPct,
                 'retention_amount_est' => $scoreRetentionAmt,
                 'bonus_monthly' => $bonus,
+                'applicable_days' => $applicableDays,
+                'worked_days' => $workedDays,
                 'unjustified_absence_days' => $unjDays,
-                'justified_absence_days' => (int) ($monthMetrics['soft_absence_days'] ?? 0),
-                'rest_days_recorded' => $restDays,
-                'deduction_absence_est' => $absDeduction,
+                'justified_absence_days' => $authorizedAbsenceDays,
+                'illness_days' => $illnessDays,
+                'inactive_days' => $inactiveDays,
+                'rest_days_recorded' => max($restDays, $restDaysNeutral),
+                'deduction_absence_est' => 0,
                 'service_start_ymd' => $profiles[$uid]['service_start_ymd'] ?? null,
                 'profile_note' => $profiles[$uid]['profile_note'] ?? null,
                 'net_pay_proposed' => $net,
@@ -2020,10 +2046,20 @@ final class StaffDisciplineService
                 'measured_activity_days' => (int) ($monthMetrics['measured_activity_days'] ?? 0),
                 'ledger_penalty_points_month' => $ledgerPenaltyPts,
                 'cash_shortfall_hits' => (int) ($monthMetrics['cash_shortfall_hits'] ?? 0),
+                'cash_shortfall_amount_est' => $shortfallAmount,
                 'late_remittance_hits' => (int) ($monthMetrics['late_remittance_hits'] ?? 0),
                 'late_remittance_max_delay_days' => (int) ($monthMetrics['late_remittance_max_delay_days'] ?? 0),
                 'activity_pct_vs_role_avg' => $monthMetrics['activity_pct_vs_role_avg'] ?? null,
                 'discipline_cap_reasons' => $disciplineMonth['cap_reasons'] ?? [],
+                'other_penalties_amount' => $otherPenaltyAmount,
+                'monthly_mention' => $this->payrollMonthlyMention($monthlyScore),
+                'retention_reason_summary' => $this->payrollRetentionReasonSummary(
+                    $monthlyScore,
+                    $unjDays,
+                    $inactiveDays,
+                    (int) ($monthMetrics['late_remittance_hits'] ?? 0),
+                    (int) ($monthMetrics['cash_shortfall_hits'] ?? 0)
+                ),
                 'period_effective_start' => $effectiveStart,
                 'restaurant_start_ymd' => $restaurantStartYmd,
                 'day_score' => $dayGauge['score'] ?? null,
@@ -2043,6 +2079,74 @@ final class StaffDisciplineService
             'period_end' => $end,
             'rows' => $rows,
         ];
+    }
+
+    /**
+     * @param array<int, bool>|null $allowedUserIds
+     * @return array<int, float>
+     */
+    private function serverShortfallAmountsByUser(int $restaurantId, DateTimeImmutable $startAt, DateTimeImmutable $endAt, ?array $allowedUserIds = null): array
+    {
+        $summary = Container::getInstance()->get('reportService')->serverRemittanceShortfallBreakdown($restaurantId, $startAt, $endAt, 0);
+        $amounts = [];
+        foreach (($summary['agents'] ?? []) as $agent) {
+            if (!is_array($agent)) {
+                continue;
+            }
+            $userId = (int) ($agent['server_user_id'] ?? 0);
+            if ($userId <= 0) {
+                continue;
+            }
+            if (is_array($allowedUserIds) && !isset($allowedUserIds[$userId])) {
+                continue;
+            }
+            $amounts[$userId] = round((float) ($agent['shortfall'] ?? 0), 2);
+        }
+
+        return $amounts;
+    }
+
+    private function payrollMonthlyMention(?float $monthlyScore): string
+    {
+        if ($monthlyScore === null) {
+            return 'Non evalue';
+        }
+        if ($monthlyScore >= 90) {
+            return 'Excellent';
+        }
+        if ($monthlyScore >= 75) {
+            return 'Bon';
+        }
+        if ($monthlyScore >= 60) {
+            return 'Moyen';
+        }
+        if ($monthlyScore >= 40) {
+            return 'Problematique';
+        }
+
+        return 'Critique';
+    }
+
+    private function payrollRetentionReasonSummary(?float $monthlyScore, int $unjustifiedDays, int $inactiveDays, int $lateRemittanceHits, int $shortfallHits): string
+    {
+        $parts = [];
+        if ($monthlyScore !== null) {
+            $parts[] = 'Score mensuel ' . rtrim(rtrim(number_format($monthlyScore, 1, '.', ''), '0'), '.') . '/100';
+        }
+        if ($unjustifiedDays > 0) {
+            $parts[] = $unjustifiedDays . ' absence(s) non justifiee(s)';
+        }
+        if ($inactiveDays > 0) {
+            $parts[] = $inactiveDays . ' jour(s) inactif(s)';
+        }
+        if ($lateRemittanceHits > 0) {
+            $parts[] = $lateRemittanceHits . ' remise(s) tardive(s)';
+        }
+        if ($shortfallHits > 0) {
+            $parts[] = $shortfallHits . ' manquant(s)';
+        }
+
+        return $parts === [] ? 'Aucune retenue discipline proposee.' : implode(' · ', $parts);
     }
 
     private function resolveRoleCodeForUser(int $restaurantId, int $userId): string
@@ -3892,6 +3996,9 @@ final class StaffDisciplineService
         $stRest = 0;
         $stExempt = 0;
         $stSoft = 0;
+        $stAuthorized = 0;
+        $stIllness = 0;
+        $stLateJustified = 0;
         $stUnj = 0;
         $stZeroAct = 0;
         $penOff = 0;
@@ -3916,14 +4023,19 @@ final class StaffDisciplineService
                     $stRest++;
                 } elseif ($ek === 'neutral_exempt') {
                     $stExempt++;
-                } elseif ($ek === 'absence_authorized' || $ek === 'absence_illness') {
+                } elseif ($ek === 'absence_authorized') {
                     $stSoft++;
+                    $stAuthorized++;
+                } elseif ($ek === 'absence_illness') {
+                    $stSoft++;
+                    $stIllness++;
                 } elseif ($ek === 'absence_unjustified') {
                     $stUnj++;
                 } elseif ($ek === 'manager_present_confirm') {
                     $stExempt++;
                 } elseif ($ek === 'late_justified') {
                     $stSoft++;
+                    $stLateJustified++;
                 }
                 foreach ($this->ledgerPenaltyRowsForGauge($ev) as $row) {
                     $details[] = $row;
@@ -3938,6 +4050,9 @@ final class StaffDisciplineService
             'days_rest_neutral' => $stRest,
             'days_exempt_neutral' => $stExempt,
             'days_soft_absence' => $stSoft,
+            'days_authorized_absence' => $stAuthorized,
+            'days_illness_absence' => $stIllness,
+            'days_late_justified' => $stLateJustified,
             'days_unjustified_absence' => $stUnj,
             'days_no_activity_measured' => $stRest + $stExempt + $stSoft + $stUnj,
             'penalty_points_off_base' => $penOff,

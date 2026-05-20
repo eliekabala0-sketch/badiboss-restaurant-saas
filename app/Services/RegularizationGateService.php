@@ -204,6 +204,7 @@ final class RegularizationGateService
         foreach ($stReq->fetchAll(PDO::FETCH_ASSOC) as $r) {
             $srid = (int) ($r['id'] ?? 0);
             $ref = trim((string) ($r['service_reference'] ?? ''));
+            $createdAt = (string) ($r['created_at'] ?? '');
             if ($ref === '') {
                 $ref = 'SR-' . $srid;
             }

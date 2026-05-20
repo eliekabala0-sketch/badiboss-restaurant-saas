@@ -349,14 +349,33 @@ final class DashboardController
         $staffDisc = Container::getInstance()->get('staffDiscipline');
         $staffDisc->ensureSchema();
         $loadDisciplineDashboard = (string) ($request->query['discipline_dashboard'] ?? '') === '1';
-
-        $dash = $this->ownerOperationalDashboardBundle($request, $restaurantId, $loadOwnerInsights);
-        $wideTasks = $loadOwnerInsights
-            ? Container::getInstance()->get('regularizationGate')->listRestaurantWideTasks($restaurantId, 30)
-            : [];
-        $hold = $loadOwnerInsights
-            ? Container::getInstance()->get('regularizationGate')->assessForUser($restaurantId, $actor)
-            : [
+        $ownerInsightsWarning = null;
+        try {
+            $dash = $this->ownerOperationalDashboardBundle($request, $restaurantId, $loadOwnerInsights);
+            $wideTasks = $loadOwnerInsights
+                ? Container::getInstance()->get('regularizationGate')->listRestaurantWideTasks($restaurantId, 30)
+                : [];
+            $hold = $loadOwnerInsights
+                ? Container::getInstance()->get('regularizationGate')->assessForUser($restaurantId, $actor)
+                : [
+                    'blocked' => false,
+                    'reasons' => [],
+                    'codes' => [],
+                    'backlog' => [],
+                    'items' => [],
+                    'items_today_soft' => [],
+                    'super_admin_unblocked' => ($actor['scope'] ?? null) === 'super_admin',
+                ];
+        } catch (\Throwable $e) {
+            if (!$loadOwnerInsights) {
+                throw $e;
+            }
+            error_log('[OWNER_INSIGHTS_DEGRADED] rid=' . $restaurantId . ' actor=' . (int) ($actor['id'] ?? 0) . ' ' . $e->getMessage());
+            $ownerInsightsWarning = 'Analyse avancee temporairement indisponible. Utilisez les rapports detailles.';
+            $loadOwnerInsights = false;
+            $dash = $this->ownerOperationalDashboardBundle($request, $restaurantId, false);
+            $wideTasks = [];
+            $hold = [
                 'blocked' => false,
                 'reasons' => [],
                 'codes' => [],
@@ -365,6 +384,7 @@ final class DashboardController
                 'items_today_soft' => [],
                 'super_admin_unblocked' => ($actor['scope'] ?? null) === 'super_admin',
             ];
+        }
         $disciplineSchedule = $staffDisc->disciplineWorkScheduleForRestaurant($restaurantId);
         $disciplinaryAlerts = $loadDisciplineDashboard && can_access('staff.team_gauges.view')
             ? $staffDisc->listDisciplinaryAlerts($restaurantId)
@@ -415,6 +435,7 @@ final class DashboardController
             'owner_details_loaded' => $loadOwnerDetails,
             'owner_insights_loaded' => $loadOwnerInsights,
             'owner_insights_query' => http_build_query($insightsQuery),
+            'owner_insights_warning' => $ownerInsightsWarning,
         ]));
 
         audit_access('dashboard', $restaurantId, 'screens', 'owner-dashboard', 'Consultation tableau de bord restaurant');
@@ -469,6 +490,7 @@ final class DashboardController
         if ($monthIn === '') {
             $monthIn = substr($todayY, 0, 7);
         }
+        $loadHeavy = (string) ($request->query['heavy'] ?? '') === '1';
         $allStaffUsers = array_values(array_filter(
             Container::getInstance()->get('roleAdmin')->listUsersForRestaurant($restaurantId),
             static fn (array $u): bool => ($u['status'] ?? '') === 'active' && (string) ($u['role_code'] ?? '') !== 'owner',
@@ -483,7 +505,15 @@ final class DashboardController
         $pagedUsers = array_slice($allStaffUsers, ($page - 1) * $perPage, $perPage);
         $pagedUserIds = array_values(array_map(static fn (array $u): int => (int) ($u['id'] ?? 0), $pagedUsers));
         $disciplineRows = $staffDisc->gaugesSnapshotRestaurantDailyLight($restaurantId, $disciplineDate, $pagedUserIds);
-        $preview = $staffDisc->payrollMonthPreviewLight($restaurantId, $monthIn, $disciplineRows, $pagedUserIds);
+        try {
+            $preview = $staffDisc->payrollMonthPreview($restaurantId, $monthIn, $loadHeavy, $pagedUserIds);
+            $payrollPreviewWarning = null;
+        } catch (\Throwable $e) {
+            error_log('[PAYROLL_PREVIEW_FALLBACK] rid=' . $restaurantId . ' actor=' . (int) ($actor['id'] ?? 0) . ' ' . $e->getMessage());
+            $preview = $staffDisc->payrollMonthPreviewLight($restaurantId, $monthIn, $disciplineRows, $pagedUserIds);
+            $payrollPreviewWarning = 'Preparation detaillee temporairement indisponible. Une vue rapide est affichee pour eviter un blocage.';
+            $loadHeavy = false;
+        }
 
         view('owner/prepare-payroll', [
             'title' => 'Préparer la paie',
@@ -495,7 +525,8 @@ final class DashboardController
             'payroll_discipline_date' => $disciplineDate,
             'payroll_discipline_period_label' => (string) ($disciplineWindow['label'] ?? ''),
             'month_query' => $preview['month'],
-            'payroll_heavy_loaded' => false,
+            'payroll_heavy_loaded' => $loadHeavy,
+            'payroll_preview_warning' => $payrollPreviewWarning,
             'staff_page' => $page,
             'staff_per_page' => $perPage,
             'staff_total_count' => $totalStaff,
