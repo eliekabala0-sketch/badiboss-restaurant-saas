@@ -138,11 +138,9 @@ final class AuthorizationService
         }
 
         if (($user['scope'] ?? null) === 'super_admin') {
-            if (str_starts_with($ability, 'platform.')) {
-                return true;
-            }
-
-            return in_array($ability, self::SUPER_ADMIN_AUDIT_ABILITIES, true);
+            return str_starts_with($ability, 'platform.')
+                || array_key_exists($ability, self::ABILITY_RULES)
+                || in_array($ability, self::SUPER_ADMIN_AUDIT_ABILITIES, true);
         }
 
         $rule = self::ABILITY_RULES[$ability] ?? null;
