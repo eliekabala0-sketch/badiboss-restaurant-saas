@@ -490,7 +490,8 @@ final class DashboardController
         if ($monthIn === '') {
             $monthIn = substr($todayY, 0, 7);
         }
-        $loadHeavy = (string) ($request->query['heavy'] ?? '') === '1';
+        $loadHeavyRequested = (string) ($request->query['heavy'] ?? '') === '1';
+        $loadHeavy = false;
         $allStaffUsers = array_values(array_filter(
             Container::getInstance()->get('roleAdmin')->listUsersForRestaurant($restaurantId),
             static fn (array $u): bool => ($u['status'] ?? '') === 'active' && (string) ($u['role_code'] ?? '') !== 'owner',
@@ -505,9 +506,11 @@ final class DashboardController
         $pagedUsers = array_slice($allStaffUsers, ($page - 1) * $perPage, $perPage);
         $pagedUserIds = array_values(array_map(static fn (array $u): int => (int) ($u['id'] ?? 0), $pagedUsers));
         $disciplineRows = $staffDisc->gaugesSnapshotRestaurantDailyLight($restaurantId, $disciplineDate, $pagedUserIds);
+        $payrollPreviewWarning = $loadHeavyRequested
+            ? 'Analyse avancee temporairement indisponible. Utilisez les rapports detailles.'
+            : null;
         try {
             $preview = $staffDisc->payrollMonthPreview($restaurantId, $monthIn, $loadHeavy, $pagedUserIds);
-            $payrollPreviewWarning = null;
         } catch (\Throwable $e) {
             error_log('[PAYROLL_PREVIEW_FALLBACK] rid=' . $restaurantId . ' actor=' . (int) ($actor['id'] ?? 0) . ' ' . $e->getMessage());
             $preview = $staffDisc->payrollMonthPreviewLight($restaurantId, $monthIn, $disciplineRows, $pagedUserIds);
