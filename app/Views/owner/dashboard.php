@@ -7,6 +7,8 @@ $restaurantLogo = restaurant_media_url_or_default($restaurant['logo_url'] ?? nul
 $restaurantCover = restaurant_media_url_or_default($restaurant['cover_image_url'] ?? null, 'photo');
 $restaurantLogoFallback = restaurant_media_fallback_url('logo');
 $cashTodaySnapshot = $cash_today_snapshot ?? null;
+$ownerInsightsLoaded = !empty($owner_insights_loaded);
+$ownerInsightsQuery = (string) ($owner_insights_query ?? 'insights=1');
 $cashClarityToday = is_array($cashTodaySnapshot['cash_clarity_today'] ?? null) ? $cashTodaySnapshot['cash_clarity_today'] : [];
 $cashSalesActivityToday = (float) ($cashClarityToday['sales_activity_total'] ?? ($cashTodaySnapshot['activity_day_sales_total_today'] ?? 0));
 $cashReceivedForTodaySales = (float) ($cashClarityToday['cashier_received_sales_attributed'] ?? 0);
@@ -73,6 +75,17 @@ $day_start_hold = $day_start_hold ?? ['blocked' => false, 'reasons' => [], 'item
 ?>
 <?php require base_path('app/Views/partials/regularization_hold_banner.php'); ?>
 <?php require base_path('app/Views/partials/operational_period_tabs.php'); ?>
+<?php if (!$ownerInsightsLoaded): ?>
+<section class="card no-print" style="padding:16px 18px; margin-bottom:18px;">
+    <div class="topbar" style="margin-bottom:0;">
+        <div>
+            <strong>Vue allégée chargée</strong>
+            <p class="muted" style="margin:6px 0 0;">Le tableau de bord a été allégé pour éviter le blocage Railway sur les restaurants volumineux. Les accès métier restent disponibles immédiatement.</p>
+        </div>
+        <a href="/owner?<?= e($ownerInsightsQuery) ?>" class="button-muted">Charger les indicateurs complets</a>
+    </div>
+</section>
+<?php endif; ?>
 <?php if (can_access('staff.team_gauges.view')): ?>
 <section class="card no-print" id="discipline-horaires" style="padding:16px 18px; margin-bottom:18px;">
     <h3 style="margin:0 0 8px; font-size:1.05rem;">Paramètres horaires discipline</h3>

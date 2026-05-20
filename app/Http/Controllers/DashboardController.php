@@ -338,6 +338,9 @@ final class DashboardController
         $settings = Container::getInstance()->get('platformSettings')->listSystemSettings();
         $incidentService = Container::getInstance()->get('incidentService');
         $loadOwnerDetails = (string) ($request->query['details'] ?? '') === '1';
+        $loadOwnerInsights = (string) ($request->query['insights'] ?? '') === '1';
+        $insightsQuery = $request->query;
+        $insightsQuery['insights'] = '1';
 
         $canAccessReports = can_access('reports.view');
 
@@ -347,9 +350,21 @@ final class DashboardController
         $staffDisc->ensureSchema();
         $loadDisciplineDashboard = (string) ($request->query['discipline_dashboard'] ?? '') === '1';
 
-        $dash = $this->ownerOperationalDashboardBundle($request, $restaurantId);
-        $wideTasks = Container::getInstance()->get('regularizationGate')->listRestaurantWideTasks($restaurantId, 30);
-        $hold = Container::getInstance()->get('regularizationGate')->assessForUser($restaurantId, $actor);
+        $dash = $this->ownerOperationalDashboardBundle($request, $restaurantId, $loadOwnerInsights);
+        $wideTasks = $loadOwnerInsights
+            ? Container::getInstance()->get('regularizationGate')->listRestaurantWideTasks($restaurantId, 30)
+            : [];
+        $hold = $loadOwnerInsights
+            ? Container::getInstance()->get('regularizationGate')->assessForUser($restaurantId, $actor)
+            : [
+                'blocked' => false,
+                'reasons' => [],
+                'codes' => [],
+                'backlog' => [],
+                'items' => [],
+                'items_today_soft' => [],
+                'super_admin_unblocked' => ($actor['scope'] ?? null) === 'super_admin',
+            ];
         $disciplineSchedule = $staffDisc->disciplineWorkScheduleForRestaurant($restaurantId);
         $disciplinaryAlerts = $loadDisciplineDashboard && can_access('staff.team_gauges.view')
             ? $staffDisc->listDisciplinaryAlerts($restaurantId)
@@ -363,7 +378,7 @@ final class DashboardController
             'pending_manager_sale_remittances' => $loadOwnerDetails ? $cashSvc->listPendingManagerSaleRemittances($restaurantId) : [],
             'pending_late_remittance_attributions' => $loadOwnerDetails ? $cashSvc->listPendingLateRemittanceAttributions($restaurantId) : [],
             'sale_remittance_history' => $loadOwnerDetails ? $cashSvc->listSaleRemittanceHistory($restaurantId, 24) : [],
-            'cash_today_snapshot' => $canAccessReports
+            'cash_today_snapshot' => $loadOwnerInsights && $canAccessReports
                 ? Container::getInstance()->get('reportService')->cashTodayOperationalSnapshot($restaurantId)
                 : null,
             'correction_requests_pending' => $loadOwnerDetails ? Container::getInstance()->get('correctionService')->listPendingForRestaurant($restaurantId) : [],
@@ -377,10 +392,12 @@ final class DashboardController
             'can_access_sales' => can_access('sales.view'),
             'can_access_cash' => can_access('cash.view'),
             'can_access_reports' => $canAccessReports,
-            'report_detail_summary' => $canAccessReports
+            'report_detail_summary' => $loadOwnerInsights && $canAccessReports
                 ? ($loadOwnerDetails ? Container::getInstance()->get('reportService')->reportDetailSummaryForDashboard($restaurantId) : null)
                 : null,
-            'regularization_backlog' => Container::getInstance()->get('salesService')->regularizationBacklogCounts($restaurantId),
+            'regularization_backlog' => $loadOwnerInsights
+                ? Container::getInstance()->get('salesService')->regularizationBacklogCounts($restaurantId)
+                : [],
             'restaurant_reg_tasks' => $wideTasks,
             'day_start_hold' => $hold,
             'discipline_work_schedule' => $disciplineSchedule,
@@ -396,6 +413,8 @@ final class DashboardController
             'flash_success' => $flashSuccess,
             'flash_error' => $flashError,
             'owner_details_loaded' => $loadOwnerDetails,
+            'owner_insights_loaded' => $loadOwnerInsights,
+            'owner_insights_query' => http_build_query($insightsQuery),
         ]));
 
         audit_access('dashboard', $restaurantId, 'screens', 'owner-dashboard', 'Consultation tableau de bord restaurant');
@@ -612,7 +631,7 @@ final class DashboardController
     /**
      * @return array{dash_preset: string, dash_date: string, today_ymd_restaurant: string, module_today_pulse: array<string, mixed>}
      */
-    private function ownerOperationalDashboardBundle(Request $request, int $restaurantId): array
+    private function ownerOperationalDashboardBundle(Request $request, int $restaurantId, bool $loadPulse = true): array
     {
         $rs = Container::getInstance()->get('reportService');
         $todayY = $rs->todayForRestaurant($restaurantId);
@@ -623,7 +642,7 @@ final class DashboardController
         }
         $dRaw = trim((string) ($request->query['dash_date'] ?? ''));
         $d = preg_match('/^\d{4}-\d{2}-\d{2}$/', $dRaw) ? $dRaw : $todayY;
-        $pulse = $rs->moduleOperationalPulse($restaurantId, $preset, $d);
+        $pulse = $loadPulse ? $rs->moduleOperationalPulse($restaurantId, $preset, $d) : [];
 
         return [
             'dash_preset' => $preset,
