@@ -30,6 +30,7 @@ use App\Services\SubscriptionService;
 use App\Services\TenantProvisioningService;
 use App\Services\TenantResolverService;
 use App\Services\UploadService;
+use App\Services\UiNotificationService;
 use App\Services\UserAdminService;
 
 final class App
@@ -128,6 +129,7 @@ final class App
         $container->set('operationalResetService', new OperationalResetService($database));
         $container->set('stockResetService', new StockResetService($database));
         $container->set('superAdminOperationsService', new SuperAdminOperationsService($database));
+        $container->set('uiNotifications', new UiNotificationService($database));
 
         try {
             $this->router->dispatch($request);

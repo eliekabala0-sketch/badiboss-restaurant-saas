@@ -6,7 +6,11 @@ $restaurantNotice = flash('restaurant_notice');
 $uiBootNotification = null;
 $notificationContext = [
     'restaurantName' => (string) (($current_restaurant_context['public_name'] ?? $current_restaurant_context['name'] ?? current_user()['restaurant_name'] ?? 'Badiboss') ?? 'Badiboss'),
+    'restaurantId' => (int) (($current_restaurant_context['id'] ?? current_user()['restaurant_id'] ?? current_restaurant_id() ?? 0) ?: 0),
+    'userId' => (int) ((current_user()['id'] ?? 0) ?: 0),
+    'roleCode' => (string) (current_user()['role_code'] ?? ''),
     'roleLabel' => (string) (restaurant_role_label(current_user()['role_code'] ?? null) ?? ''),
+    'feedUrl' => '/notifications/feed',
 ];
 $notificationSources = [
     ['message' => $flash_error ?? null, 'level' => 'danger', 'timeoutMs' => 10000],
@@ -771,8 +775,12 @@ foreach ($notificationSources as $candidate) {
         var notificationStatus = document.getElementById('app-notification-status');
         var notificationContext = <?= json_encode($notificationContext, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?>;
         var notificationStorageKey = 'badiboss.notifications.enabled';
+        var notificationLastIdKey = ['badiboss.notifications.lastId', notificationContext.userId || 0, notificationContext.restaurantId || 0].join('.');
+        var notificationSeenKey = ['badiboss.notifications.seen', notificationContext.userId || 0, notificationContext.restaurantId || 0].join('.');
         var audioContextRef = null;
         var audioReady = false;
+        var pollTimer = null;
+        var pollInFlight = false;
         var unlockAudio = function () {
             audioReady = true;
         };
@@ -796,6 +804,16 @@ foreach ($notificationSources as $candidate) {
         var serviceWorkerRegistration = null;
         var lastNotificationFingerprint = '';
         var lastNotificationAt = 0;
+        var lastPolledId = parseInt(readStorage(notificationLastIdKey) || '0', 10);
+        if (!Number.isFinite(lastPolledId) || lastPolledId < 0) {
+            lastPolledId = 0;
+        }
+        var seenNotificationKeys = {};
+        try {
+            seenNotificationKeys = JSON.parse(readStorage(notificationSeenKey) || '{}') || {};
+        } catch (err) {
+            seenNotificationKeys = {};
+        }
         var playTone = function (level) {
             if (!audioReady || typeof window.AudioContext === 'undefined') {
                 return;
@@ -884,13 +902,16 @@ foreach ($notificationSources as $candidate) {
             if (detail.system === false) {
                 return;
             }
+            if (document.visibilityState === 'visible' && document.hasFocus()) {
+                return;
+            }
             var body = String(message);
             var tag = detail.tag || ('badiboss:' + (detail.level || level || 'info') + ':' + body.slice(0, 80));
             var payload = {
                 body: body,
                 tag: tag,
                 renotify: false,
-                silent: true,
+                silent: false,
                 data: {
                     url: detail.url || window.location.href,
                     level: detail.level || level || 'info',
@@ -912,6 +933,100 @@ foreach ($notificationSources as $candidate) {
             } catch (err) {
             }
         };
+        var rememberSeenEvent = function (eventKey) {
+            if (!eventKey) {
+                return;
+            }
+            seenNotificationKeys[eventKey] = Date.now();
+            var keys = Object.keys(seenNotificationKeys).sort(function (a, b) {
+                return seenNotificationKeys[b] - seenNotificationKeys[a];
+            }).slice(0, 60);
+            var compact = {};
+            keys.forEach(function (key) {
+                compact[key] = seenNotificationKeys[key];
+            });
+            seenNotificationKeys = compact;
+            writeStorage(notificationSeenKey, JSON.stringify(seenNotificationKeys));
+        };
+        var hasSeenEvent = function (eventKey) {
+            return !!(eventKey && seenNotificationKeys[eventKey]);
+        };
+        var canPollNotifications = function () {
+            return notificationsEnabled
+                && !!notificationContext.feedUrl
+                && (notificationContext.userId || 0) > 0
+                && (notificationContext.restaurantId || 0) > 0;
+        };
+        var notificationPollIntervalMs = function () {
+            return document.visibilityState === 'hidden' ? 20000 : 45000;
+        };
+        var scheduleNotificationPoll = function (immediate) {
+            if (pollTimer) {
+                window.clearTimeout(pollTimer);
+                pollTimer = null;
+            }
+            if (!canPollNotifications()) {
+                return;
+            }
+            pollTimer = window.setTimeout(fetchNotificationFeed, immediate ? 1000 : notificationPollIntervalMs());
+        };
+        var dispatchQueuedNotification = function (item) {
+            if (!item || !item.message) {
+                return;
+            }
+            var eventKey = item.event_key || ('ui:' + String(item.id || '0'));
+            if (hasSeenEvent(eventKey)) {
+                return;
+            }
+            rememberSeenEvent(eventKey);
+            window.BadibossNotify.push(
+                item.message,
+                item.level || 'info',
+                9000,
+                {
+                    url: item.target_url || window.location.href,
+                    tag: eventKey,
+                    eventKey: eventKey,
+                    timeoutMs: 9000,
+                    system: document.visibilityState === 'hidden' || !document.hasFocus()
+                }
+            );
+        };
+        var fetchNotificationFeed = function () {
+            if (!canPollNotifications() || pollInFlight) {
+                scheduleNotificationPoll(false);
+                return;
+            }
+            pollInFlight = true;
+            var url = notificationContext.feedUrl
+                + '?restaurant_id=' + encodeURIComponent(String(notificationContext.restaurantId || 0))
+                + '&since_id=' + encodeURIComponent(String(lastPolledId))
+                + '&limit=10';
+            window.fetch(url, {
+                method: 'GET',
+                credentials: 'same-origin',
+                headers: { 'Accept': 'application/json' }
+            }).then(function (response) {
+                if (!response.ok) {
+                    throw new Error('feed_http_' + response.status);
+                }
+                return response.json();
+            }).then(function (payload) {
+                var data = payload && payload.data ? payload.data : {};
+                var notifications = Array.isArray(data.notifications) ? data.notifications : [];
+                notifications.forEach(function (item) {
+                    dispatchQueuedNotification(item);
+                });
+                if (typeof data.last_id === 'number' && data.last_id >= lastPolledId) {
+                    lastPolledId = data.last_id;
+                    writeStorage(notificationLastIdKey, String(lastPolledId));
+                }
+            }).catch(function () {
+            }).finally(function () {
+                pollInFlight = false;
+                scheduleNotificationPoll(false);
+            });
+        };
         var enableBrowserNotifications = async function () {
             notificationsEnabled = true;
             audioReady = true;
@@ -919,6 +1034,7 @@ foreach ($notificationSources as $candidate) {
             await registerServiceWorker();
             await requestSystemPermission();
             refreshNotificationStatus();
+            scheduleNotificationPoll(true);
             window.BadibossNotify.push(
                 systemPermission === 'granted'
                     ? 'Notifications navigateur et sonnerie activées pour ce navigateur.'
@@ -959,6 +1075,9 @@ foreach ($notificationSources as $candidate) {
                 }
                 lastNotificationFingerprint = fingerprint;
                 lastNotificationAt = now;
+                if (options && options.eventKey) {
+                    rememberSeenEvent(String(options.eventKey));
+                }
                 maybeShowSystemNotification(message, level || 'info', options || {});
             },
             pushRole: function (message, level, options) {
@@ -986,8 +1105,15 @@ foreach ($notificationSources as $candidate) {
         });
         registerServiceWorker().then(function () {
             refreshNotificationStatus();
+            scheduleNotificationPoll(false);
         });
         refreshNotificationStatus();
+        document.addEventListener('visibilitychange', function () {
+            scheduleNotificationPoll(document.visibilityState === 'hidden');
+        });
+        window.addEventListener('focus', function () {
+            scheduleNotificationPoll(true);
+        });
         var bootNotification = <?= json_encode($uiBootNotification, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?>;
         if (bootNotification && bootNotification.message) {
             window.BadibossNotify.push(

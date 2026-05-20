@@ -301,10 +301,11 @@ final class OperationsController
     {
         $restaurantId = $this->resolveRestaurantId($request);
         authorize_access('stock.request.respond');
+        $requestId = (int) $request->route('id');
 
         Container::getInstance()->get('stockService')->respondKitchenStockRequest(
             $restaurantId,
-            (int) $request->route('id'),
+            $requestId,
             [
                 'workflow_stage' => $request->input('workflow_stage', 'FINALISER'),
                 'quantity_supplied' => $request->input('quantity_supplied', 0),
@@ -316,6 +317,20 @@ final class OperationsController
             current_user()
         );
 
+        $status = strtoupper(trim((string) $request->input('status', 'FOURNI_TOTAL')));
+        $this->queueUiNotificationForRoles(
+            $restaurantId,
+            ['kitchen'],
+            'stock.request.responded',
+            $status === 'FOURNI_PARTIEL' ? 'warning' : 'success',
+            'Réponse stock',
+            $status === 'FOURNI_PARTIEL'
+                ? 'Une demande stock a reçu une réponse partielle.'
+                : 'Le stock a répondu à une demande cuisine.',
+            $this->moduleUrl('/cuisine', $restaurantId),
+            'stock.request.responded:' . $requestId
+        );
+
         flash('success', 'Reponse du stock enregistree.');
         redirect($this->stockUrl($restaurantId));
     }
@@ -325,7 +340,7 @@ final class OperationsController
         $restaurantId = $this->resolveRestaurantId($request);
         authorize_access('stock.damage.signal');
 
-        Container::getInstance()->get('incidentService')->signalKitchenStockIncident(
+        $caseId = Container::getInstance()->get('incidentService')->signalKitchenStockIncident(
             $restaurantId,
             (int) $request->route('id'),
             [
@@ -334,6 +349,17 @@ final class OperationsController
                 'signal_notes' => $request->input('signal_notes'),
             ],
             current_user()
+        );
+
+        $this->queueUiNotificationForRoles(
+            $restaurantId,
+            ['manager', 'owner'],
+            'incident.stock.critical',
+            'danger',
+            'Problème critique stock',
+            'Un litige stock signalé par la cuisine attend une décision responsable.',
+            $this->moduleUrl('/owner', $restaurantId),
+            'incident.stock.critical:' . $caseId
         );
 
         flash('success', 'Cas complexe transmis au gerant avec sa trace.');
@@ -505,12 +531,23 @@ final class OperationsController
             redirect($this->moduleUrl('/cuisine', $restaurantId));
         }
 
-        Container::getInstance()->get('incidentService')->signalKitchenIncident($restaurantId, [
+        $caseId = Container::getInstance()->get('incidentService')->signalKitchenIncident($restaurantId, [
             'production_id' => $request->input('production_id'),
             'reported_category' => $request->input('reported_category', 'produit_defectueux'),
             'quantity_affected' => $request->input('quantity_affected'),
             'signal_notes' => $request->input('signal_notes'),
         ], current_user());
+
+        $this->queueUiNotificationForRoles(
+            $restaurantId,
+            ['manager', 'owner'],
+            'incident.kitchen.critical',
+            'danger',
+            'Appel gérant cuisine',
+            'Un incident cuisine critique attend une décision responsable.',
+            $this->moduleUrl('/owner', $restaurantId),
+            'incident.kitchen.critical:' . $caseId
+        );
 
         flash('success', 'Incident cuisine signale au gerant.');
         redirect($this->moduleUrl('/cuisine', $restaurantId));
@@ -528,13 +565,24 @@ final class OperationsController
             redirect($this->moduleUrl('/cuisine', $restaurantId));
         }
 
-        Container::getInstance()->get('stockService')->createKitchenStockRequest($restaurantId, [
+        $requestId = Container::getInstance()->get('stockService')->createKitchenStockRequest($restaurantId, [
             'stock_item_id' => $request->input('stock_item_id'),
             'quantity_requested' => $request->input('quantity_requested'),
             'priority_level' => $request->input('priority_level', 'normale'),
             'note' => $request->input('note'),
             'items' => $this->kitchenStockRequestItemsPayload($request),
         ], current_user());
+
+        $this->queueUiNotificationForRoles(
+            $restaurantId,
+            ['stock_manager'],
+            'stock.request.created',
+            'warning',
+            'Demande stock',
+            'Une nouvelle demande cuisine vers stock attend un traitement.',
+            $this->stockUrl($restaurantId),
+            'stock.request.created:' . $requestId
+        );
 
         flash('success', 'Demande cuisine vers stock enregistree.');
         redirect($this->moduleUrl('/cuisine', $restaurantId));
@@ -544,14 +592,16 @@ final class OperationsController
     {
         $restaurantId = $this->resolveRestaurantId($request);
         authorize_access('kitchen.request.fulfill');
+        $requestItemId = (int) $request->route('id');
+        $workflowStage = (string) $request->input('workflow_stage', 'PRET_A_SERVIR');
 
         try {
             Container::getInstance()->get('kitchenService')->fulfillServerRequestItem(
                 $restaurantId,
-                (int) $request->route('id'),
+                $requestItemId,
                 [
                     'supplied_quantity' => $request->input('supplied_quantity'),
-                    'workflow_stage' => $request->input('workflow_stage', 'PRET_A_SERVIR'),
+                    'workflow_stage' => $workflowStage,
                 ],
                 current_user()
             );
@@ -563,10 +613,22 @@ final class OperationsController
 
         flash(
             'success',
-            $request->input('workflow_stage', 'PRET_A_SERVIR') === 'EN_PREPARATION'
+            $workflowStage === 'EN_PREPARATION'
                 ? 'La demande est maintenant en préparation côté cuisine.'
                 : 'La demande est prête à servir et attend la confirmation du serveur.'
         );
+        if ($workflowStage !== 'EN_PREPARATION') {
+            $this->queueUiNotificationForRoles(
+                $restaurantId,
+                ['cashier_server'],
+                'server_request.ready',
+                'success',
+                'Commande prête',
+                'Une commande est prête à servir côté cuisine.',
+                $this->moduleUrl('/ventes', $restaurantId),
+                'server_request.ready:' . $requestItemId
+            );
+        }
         redirect($this->moduleUrl('/cuisine', $restaurantId));
     }
 
@@ -822,6 +884,17 @@ final class OperationsController
             'items' => $items,
         ], current_user());
 
+        $this->queueUiNotificationForRoles(
+            $restaurantId,
+            ['kitchen'],
+            'server_request.created',
+            'info',
+            'Nouvelle commande',
+            'Une nouvelle commande serveur attend la cuisine.',
+            $this->moduleUrl('/cuisine', $restaurantId),
+            'server_request.created:' . $newRequestId
+        );
+
         flash('success', 'Demande serveur enregistree #' . (string) $newRequestId . '.');
         redirect($this->moduleUrl('/ventes', $restaurantId) . '#op-focus-server_request-' . (string) $newRequestId);
     }
@@ -1045,12 +1118,23 @@ final class OperationsController
             redirect($this->moduleUrl('/ventes', $restaurantId));
         }
 
-        Container::getInstance()->get('incidentService')->signalSaleIncident($restaurantId, [
+        $caseId = Container::getInstance()->get('incidentService')->signalSaleIncident($restaurantId, [
             'sale_item_id' => $request->input('sale_item_id'),
             'reported_category' => $request->input('reported_category', 'retour_avec_anomalie'),
             'quantity_affected' => $request->input('quantity_affected'),
             'signal_notes' => $request->input('signal_notes'),
         ], current_user());
+
+        $this->queueUiNotificationForRoles(
+            $restaurantId,
+            ['manager', 'owner'],
+            'incident.sales.critical',
+            'danger',
+            'Appel gérant ventes',
+            'Un incident ventes ou service attend une décision responsable.',
+            $this->moduleUrl('/owner', $restaurantId),
+            'incident.sales.critical:' . $caseId
+        );
 
         flash('success', 'Incident vente ou service signale au gerant.');
         redirect($this->moduleUrl('/ventes', $restaurantId));
@@ -1077,6 +1161,22 @@ final class OperationsController
         if (!in_array($redirectTo, ['/owner', '/ventes', '/cuisine', '/stock'], true)) {
             $redirectTo = '/ventes';
         }
+
+        $recipientRoles = match ($redirectTo) {
+            '/cuisine' => ['kitchen'],
+            '/stock' => ['stock_manager'],
+            default => ['cashier_server'],
+        };
+        $this->queueUiNotificationForRoles(
+            $restaurantId,
+            $recipientRoles,
+            'manager.decision.applied',
+            'success',
+            'Décision gérant appliquée',
+            'Une décision gérant a été enregistrée sur un cas signalé.',
+            $this->moduleUrl($redirectTo, $restaurantId),
+            'manager.decision.applied:' . (int) $request->route('id')
+        );
 
         redirect($this->moduleUrl($redirectTo, $restaurantId));
     }
@@ -1108,11 +1208,22 @@ final class OperationsController
         $restaurantId = $this->resolveRestaurantId($request);
         authorize_access('cash.remit.server');
 
-        Container::getInstance()->get('cashService')->remitServerCash($restaurantId, [
+        $transferId = Container::getInstance()->get('cashService')->remitServerCash($restaurantId, [
             'sale_id' => $request->input('sale_id'),
             'to_user_id' => $request->input('to_user_id'),
             'note' => $request->input('note'),
         ], current_user());
+
+        $this->queueUiNotificationForUsers(
+            $restaurantId,
+            [(int) $request->input('to_user_id')],
+            'cash.remittance.created',
+            'warning',
+            'Remise caisse',
+            'Une remise serveur attend la caisse.',
+            $this->moduleUrl('/caisse', $restaurantId),
+            'cash.remittance.created:' . $transferId
+        );
 
         flash('success', 'Remise serveur enregistree.');
         $redirectTo = (string) ($request->server['HTTP_REFERER'] ?? '');
@@ -1166,13 +1277,24 @@ final class OperationsController
     {
         $restaurantId = $this->resolveRestaurantId($request);
         authorize_access('cash.receive.cashier');
+        $transferId = (int) $request->route('id');
 
         try {
             Container::getInstance()->get('cashService')->submitSaleRemittanceToManager(
                 $restaurantId,
-                (int) $request->route('id'),
+                $transferId,
                 (string) $request->input('reason', ''),
                 current_user()
+            );
+            $this->queueUiNotificationForRoles(
+                $restaurantId,
+                ['manager', 'owner'],
+                'cash.remittance.manager_review',
+                'danger',
+                'Appel gérant caisse',
+                'Une remise caisse bloquée attend une décision responsable.',
+                $this->moduleUrl('/owner', $restaurantId),
+                'cash.remittance.manager_review:' . $transferId
             );
             flash('success', 'Remise soumise au gerant pour decision.');
         } catch (\Throwable $e) {
@@ -1763,5 +1885,65 @@ final class OperationsController
         }
 
         return $items;
+    }
+
+    /**
+     * @param list<string> $roleCodes
+     */
+    private function queueUiNotificationForRoles(
+        int $restaurantId,
+        array $roleCodes,
+        string $eventCode,
+        string $level,
+        string $title,
+        string $message,
+        ?string $targetUrl,
+        string $eventKey
+    ): void {
+        try {
+            Container::getInstance()->get('uiNotifications')->queueForRoles(
+                $restaurantId,
+                $roleCodes,
+                current_user(),
+                $eventCode,
+                $level,
+                $title,
+                $message,
+                $targetUrl,
+                $eventKey
+            );
+        } catch (\Throwable $exception) {
+            error_log('[ui_notifications] role queue failed: ' . $exception->getMessage());
+        }
+    }
+
+    /**
+     * @param list<int> $userIds
+     */
+    private function queueUiNotificationForUsers(
+        int $restaurantId,
+        array $userIds,
+        string $eventCode,
+        string $level,
+        string $title,
+        string $message,
+        ?string $targetUrl,
+        string $eventKey
+    ): void {
+        try {
+            Container::getInstance()->get('uiNotifications')->queueForUsers(
+                $restaurantId,
+                $userIds,
+                current_user(),
+                $eventCode,
+                $level,
+                $title,
+                $message,
+                $targetUrl,
+                $eventKey
+            );
+        } catch (\Throwable $exception) {
+            error_log('[ui_notifications] user queue failed: ' . $exception->getMessage());
+        }
     }
 }

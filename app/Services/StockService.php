@@ -1535,7 +1535,7 @@ final class StockService
         return ['movement_ids' => $movementIds, 'materials' => $normalized];
     }
 
-    public function createKitchenStockRequest(int $restaurantId, array $payload, array $actor): void
+    public function createKitchenStockRequest(int $restaurantId, array $payload, array $actor): int
     {
         $this->ensureKitchenStockRequestItemsTable();
         $items = $this->normalizeKitchenStockRequestItems($restaurantId, $payload);
@@ -1609,6 +1609,8 @@ final class StockService
             ],
             'justification' => 'Demande cuisine vers stock',
         ]);
+
+        return $requestId;
     }
 
     public function cancelKitchenStockRequestByKitchen(int $restaurantId, int $requestId, string $reason, array $actor): void
