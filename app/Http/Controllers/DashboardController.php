@@ -497,7 +497,7 @@ final class DashboardController
             static fn (array $u): bool => ($u['status'] ?? '') === 'active' && (string) ($u['role_code'] ?? '') !== 'owner',
         ));
         $page = max(1, (int) ($request->query['page'] ?? 1));
-        $perPage = 25;
+        $perPage = 4;
         $totalStaff = count($allStaffUsers);
         $totalPages = max(1, (int) ceil(max(1, $totalStaff) / $perPage));
         if ($page > $totalPages) {
@@ -505,17 +505,22 @@ final class DashboardController
         }
         $pagedUsers = array_slice($allStaffUsers, ($page - 1) * $perPage, $perPage);
         $pagedUserIds = array_values(array_map(static fn (array $u): int => (int) ($u['id'] ?? 0), $pagedUsers));
-        $payrollPreviewWarning = $loadHeavyRequested
-            ? 'Analyse avancee temporairement indisponible. Utilisez les rapports detailles.'
-            : null;
-        try {
-            $preview = $staffDisc->payrollMonthPreview($restaurantId, $monthIn, $loadHeavy, $pagedUserIds);
-        } catch (\Throwable $e) {
-            error_log('[PAYROLL_PREVIEW_FALLBACK] rid=' . $restaurantId . ' actor=' . (int) ($actor['id'] ?? 0) . ' ' . $e->getMessage());
+        $payrollPreviewWarning = null;
+        if ($loadHeavyRequested) {
             $disciplineRows = $staffDisc->gaugesSnapshotRestaurantDailyLight($restaurantId, $disciplineDate, $pagedUserIds);
             $preview = $staffDisc->payrollMonthPreviewLight($restaurantId, $monthIn, $disciplineRows, $pagedUserIds);
-            $payrollPreviewWarning = 'Preparation detaillee temporairement indisponible. Une vue rapide est affichee pour eviter un blocage.';
+            $payrollPreviewWarning = 'Details disciplinaires avances temporairement indisponibles. La paie rapide reste disponible.';
             $loadHeavy = false;
+        } else {
+            try {
+                $preview = $staffDisc->payrollMonthPreview($restaurantId, $monthIn, $loadHeavy, $pagedUserIds);
+            } catch (\Throwable $e) {
+                error_log('[PAYROLL_PREVIEW_FALLBACK] rid=' . $restaurantId . ' actor=' . (int) ($actor['id'] ?? 0) . ' ' . $e->getMessage());
+                $disciplineRows = $staffDisc->gaugesSnapshotRestaurantDailyLight($restaurantId, $disciplineDate, $pagedUserIds);
+                $preview = $staffDisc->payrollMonthPreviewLight($restaurantId, $monthIn, $disciplineRows, $pagedUserIds);
+                $payrollPreviewWarning = 'Details disciplinaires avances temporairement indisponibles. La paie rapide reste disponible.';
+                $loadHeavy = false;
+            }
         }
 
         view('owner/prepare-payroll', [
