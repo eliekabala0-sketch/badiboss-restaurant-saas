@@ -497,7 +497,7 @@ final class DashboardController
             static fn (array $u): bool => ($u['status'] ?? '') === 'active' && (string) ($u['role_code'] ?? '') !== 'owner',
         ));
         $page = max(1, (int) ($request->query['page'] ?? 1));
-        $perPage = 12;
+        $perPage = 4;
         $totalStaff = count($allStaffUsers);
         $totalPages = max(1, (int) ceil(max(1, $totalStaff) / $perPage));
         if ($page > $totalPages) {
