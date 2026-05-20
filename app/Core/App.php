@@ -134,10 +134,11 @@ final class App
         } catch (\RuntimeException $exception) {
             $this->handleApplicationError($request, ui_safe_message($exception->getMessage()), 422);
         } catch (\Throwable $exception) {
-            error_log((string) $exception);
+            $incidentId = $this->buildIncidentId();
+            error_log('[INCIDENT ' . $incidentId . '] ' . (string) $exception);
             $message = (bool) ($this->config['app']['debug'] ?? false)
                 ? ui_safe_message($exception->getMessage())
-                : 'Action impossible pour le moment. Veuillez reessayer ou contacter l administrateur.';
+                : 'Incident technique #' . $incidentId . '. Le journal serveur contient le detail.';
 
             $this->handleApplicationError($request, $message, 500);
         }
@@ -187,6 +188,17 @@ final class App
         $message = preg_replace('/\/\/([^:@\/]+):([^@\/]+)@/', '//***:***@', $message) ?? $message;
 
         return trim($message) !== '' ? $message : 'Connexion impossible';
+    }
+
+    private function buildIncidentId(): string
+    {
+        try {
+            $suffix = substr(bin2hex(random_bytes(4)), 0, 8);
+        } catch (\Throwable) {
+            $suffix = substr(hash('sha256', uniqid('', true)), 0, 8);
+        }
+
+        return gmdate('YmdHis') . '-' . $suffix;
     }
 
     private function respondDatabaseHealthDebug(): void

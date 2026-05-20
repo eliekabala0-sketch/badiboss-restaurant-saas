@@ -120,15 +120,19 @@ function current_restaurant_id(): int
 
     $user = current_user();
     if (($user['scope'] ?? null) === 'super_admin') {
-        $requestMethod = strtoupper((string) ($_SERVER['REQUEST_METHOD'] ?? 'GET'));
-        $queryRestaurantId = (int) ($_GET['restaurant_id'] ?? 0);
-        if (in_array($requestMethod, ['GET', 'HEAD'], true) && $queryRestaurantId > 0) {
-            return $queryRestaurantId;
-        }
+        $candidates = [
+            (int) ($_GET['restaurant_id'] ?? 0),
+            (int) ($_POST['restaurant_id'] ?? 0),
+            (int) ($_SESSION['active_restaurant_id'] ?? 0),
+        ];
 
-        $activeRestaurantId = (int) ($_SESSION['active_restaurant_id'] ?? 0);
-        if ($activeRestaurantId > 0) {
-            return $activeRestaurantId;
+        foreach ($candidates as $candidateId) {
+            if ($candidateId <= 0) {
+                continue;
+            }
+
+            $_SESSION['active_restaurant_id'] = $candidateId;
+            return $candidateId;
         }
 
         $restaurants = App\Core\Container::getInstance()->get('restaurantAdmin')?->listRestaurants() ?? [];

@@ -68,9 +68,11 @@ final class RestaurantAdminService
         }
 
         $restaurant['settings'] = $this->listSettings($restaurantId);
+        $restaurant['modules'] = $this->listModules($restaurantId);
         $restaurant['users'] = $this->listUsers($restaurantId);
         $restaurant['categories'] = $this->listCategories($restaurantId);
         $restaurant['items'] = $this->listItems($restaurantId);
+        $restaurant['recent_audits'] = $this->listRecentAudits($restaurantId);
 
         return $restaurant;
     }
@@ -343,6 +345,19 @@ final class RestaurantAdminService
         return $settings;
     }
 
+    public function listModules(int $restaurantId): array
+    {
+        $statement = $this->database->pdo()->prepare(
+            'SELECT module_code, is_enabled, configured_at
+             FROM restaurant_modules
+             WHERE restaurant_id = :restaurant_id
+             ORDER BY module_code ASC'
+        );
+        $statement->execute(['restaurant_id' => $restaurantId]);
+
+        return $statement->fetchAll(PDO::FETCH_ASSOC);
+    }
+
     /**
      * @param array{work_start?:string, arrival_grace_minutes?:int|string, cash_deadline?:string} $input
      */
@@ -435,6 +450,20 @@ final class RestaurantAdminService
              ORDER BY mi.display_order ASC, mi.id ASC'
         );
         $statement->execute(['restaurant_id' => $restaurantId]);
+        return $statement->fetchAll(PDO::FETCH_ASSOC);
+    }
+
+    public function listRecentAudits(int $restaurantId, int $limit = 8): array
+    {
+        $statement = $this->database->pdo()->prepare(
+            'SELECT created_at, actor_name, actor_role_code, module_name, action_name, justification
+             FROM audit_logs
+             WHERE restaurant_id = :restaurant_id
+             ORDER BY id DESC
+             LIMIT ' . max(1, $limit)
+        );
+        $statement->execute(['restaurant_id' => $restaurantId]);
+
         return $statement->fetchAll(PDO::FETCH_ASSOC);
     }
 

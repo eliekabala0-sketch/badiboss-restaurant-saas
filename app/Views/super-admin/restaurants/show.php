@@ -6,6 +6,22 @@ $generatedLink = restaurant_generated_access_url($restaurant);
 $logoPreview = restaurant_media_url_or_default($restaurant['logo_url'] ?? null, 'logo');
 $photoPreview = restaurant_media_url_or_default($restaurant['cover_image_url'] ?? null, 'photo');
 $faviconPreview = restaurant_media_url_or_default($restaurant['favicon_url'] ?? null, 'favicon');
+$supervisionLinks = [
+    'Tableau de bord' => '/owner?restaurant_id=' . rawurlencode((string) $restaurant['id']),
+    'Ventes' => '/ventes?restaurant_id=' . rawurlencode((string) $restaurant['id']),
+    'Stock' => '/stock?restaurant_id=' . rawurlencode((string) $restaurant['id']),
+    'Cuisine' => '/cuisine?restaurant_id=' . rawurlencode((string) $restaurant['id']),
+    'Caisse' => '/caisse?restaurant_id=' . rawurlencode((string) $restaurant['id']),
+    'Rapport' => '/rapport?restaurant_id=' . rawurlencode((string) $restaurant['id']),
+    'Discipline' => '/owner/discipline?restaurant_id=' . rawurlencode((string) $restaurant['id']),
+    'Paie' => '/owner/paie/preparer?restaurant_id=' . rawurlencode((string) $restaurant['id']),
+    'Audit filtré' => '/super-admin/audit?restaurant_id=' . rawurlencode((string) $restaurant['id']),
+];
+$activeModules = array_values(array_filter(
+    (array) ($restaurant['modules'] ?? []),
+    static fn (array $module): bool => (int) ($module['is_enabled'] ?? 0) === 1
+));
+$recentAudits = (array) ($restaurant['recent_audits'] ?? []);
 ?>
 
 <section class="topbar">
@@ -36,6 +52,71 @@ $faviconPreview = restaurant_media_url_or_default($restaurant['favicon_url'] ?? 
     <article class="card stat"><span>Statut</span><strong><?= e(status_label($restaurant['status'])) ?></strong></article>
     <article class="card stat"><span>Abonnement</span><strong><?= e(subscription_status_label($subscription['status'] ?? null)) ?></strong></article>
     <article class="card stat"><span>Paiement</span><strong><?= e(subscription_payment_label($subscription['payment_status'] ?? null)) ?></strong></article>
+</section>
+
+<section class="card" style="padding:22px; margin-bottom:24px;">
+    <div class="topbar" style="margin-bottom:16px;">
+        <div>
+            <h2 style="margin:0;">Supervision express</h2>
+            <p class="muted" style="margin:8px 0 0;">Ouverture rapide des modules BELIEVE avec le bon ciblage restaurant, visibilité immédiate sur l’état réel et les dernières traces utiles.</p>
+        </div>
+        <span class="pill badge-ready"><?= !empty($subscription['is_operational']) ? 'Opérationnel' : 'À surveiller' ?></span>
+    </div>
+
+    <div class="grid stats" style="margin-bottom:18px;">
+        <article class="card stat"><span>Utilisateurs</span><strong><?= e((string) count((array) ($restaurant['users'] ?? []))) ?></strong></article>
+        <article class="card stat"><span>Modules actifs</span><strong><?= e((string) count($activeModules)) ?></strong></article>
+        <article class="card stat"><span>Catégories menu</span><strong><?= e((string) count((array) ($restaurant['categories'] ?? []))) ?></strong></article>
+        <article class="card stat"><span>Articles menu</span><strong><?= e((string) count((array) ($restaurant['items'] ?? []))) ?></strong></article>
+    </div>
+
+    <div class="split">
+        <div class="link-box">
+            <strong>Accès rapides</strong>
+            <div class="toolbar-actions">
+                <?php foreach ($supervisionLinks as $label => $href): ?>
+                    <a href="<?= e($href) ?>" target="_blank" rel="noopener noreferrer" class="button-muted"><?= e($label) ?></a>
+                <?php endforeach; ?>
+            </div>
+            <span class="muted">Le super admin garde désormais le bon restaurant cible pour les actions de suivi et de dépannage.</span>
+        </div>
+
+        <div class="link-box">
+            <strong>État utile</strong>
+            <span>Restaurant : <?= e(status_label($restaurant['status'] ?? null)) ?></span>
+            <span>Abonnement : <?= e(subscription_status_label($subscription['status'] ?? null)) ?> · <?= e(subscription_payment_label($subscription['payment_status'] ?? null)) ?></span>
+            <span>Message : <?= e((string) ($subscription['message'] ?? 'Aucun message')) ?></span>
+            <span>Jour référence : <?= e((string) ($subscription['today'] ?? '-')) ?></span>
+        </div>
+    </div>
+
+    <div class="link-box" style="margin-top:18px;">
+        <strong>Modules actifs</strong>
+        <?php if ($activeModules === []): ?>
+            <span class="muted">Aucun module actif déclaré.</span>
+        <?php else: ?>
+            <div class="toolbar-actions">
+                <?php foreach ($activeModules as $module): ?>
+                    <span class="pill badge-neutral"><?= e((string) ($module['module_code'] ?? 'module')) ?></span>
+                <?php endforeach; ?>
+            </div>
+        <?php endif; ?>
+    </div>
+
+    <div class="link-box" style="margin-top:18px;">
+        <strong>Dernières traces d’audit</strong>
+        <?php if ($recentAudits === []): ?>
+            <span class="muted">Aucune trace récente disponible pour ce restaurant.</span>
+        <?php else: ?>
+            <?php foreach ($recentAudits as $audit): ?>
+                <div>
+                    <strong><?= e((string) ($audit['module_name'] ?? 'module')) ?> / <?= e((string) ($audit['action_name'] ?? 'action')) ?></strong>
+                    <div class="muted"><?= e((string) ($audit['actor_name'] ?? 'Système')) ?> · <?= e(restaurant_role_label((string) ($audit['actor_role_code'] ?? ''))) ?> · <?= e(format_date_fr($audit['created_at'] ?? null, $subscriptionTimezone)) ?></div>
+                    <div><?= e((string) ($audit['justification'] ?? 'Sans justification détaillée.')) ?></div>
+                </div>
+            <?php endforeach; ?>
+        <?php endif; ?>
+    </div>
 </section>
 
 <div class="section-stack">
