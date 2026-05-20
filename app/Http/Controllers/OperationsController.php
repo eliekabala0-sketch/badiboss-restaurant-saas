@@ -618,9 +618,9 @@ final class OperationsController
                 : 'La demande est prête à servir et attend la confirmation du serveur.'
         );
         if ($workflowStage !== 'EN_PREPARATION') {
-            $this->queueUiNotificationForRoles(
+            $this->queueUiNotificationForUsers(
                 $restaurantId,
-                ['cashier_server'],
+                $this->serverRequestRecipientUserIds($restaurantId, $requestItemId),
                 'server_request.ready',
                 'success',
                 'Commande prête',
@@ -1885,6 +1885,28 @@ final class OperationsController
         }
 
         return $items;
+    }
+
+    /**
+     * @return list<int>
+     */
+    private function serverRequestRecipientUserIds(int $restaurantId, int $requestItemId): array
+    {
+        $statement = Container::getInstance()->get('db')->pdo()->prepare(
+            'SELECT sr.requested_by
+             FROM server_request_items sri
+             INNER JOIN server_requests sr ON sr.id = sri.request_id
+             WHERE sri.id = :request_item_id
+               AND sr.restaurant_id = :restaurant_id
+             LIMIT 1'
+        );
+        $statement->execute([
+            'request_item_id' => $requestItemId,
+            'restaurant_id' => $restaurantId,
+        ]);
+        $requestedBy = (int) ($statement->fetchColumn() ?: 0);
+
+        return $requestedBy > 0 ? [$requestedBy] : [];
     }
 
     /**
