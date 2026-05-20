@@ -1,6 +1,28 @@
 <?php
 
 declare(strict_types=1);
+
+$restaurantNotice = flash('restaurant_notice');
+$uiBootNotification = null;
+$notificationSources = [
+    ['message' => $flash_error ?? null, 'level' => 'danger', 'timeoutMs' => 10000],
+    ['message' => $error ?? null, 'level' => 'danger', 'timeoutMs' => 10000],
+    ['message' => $flash_success ?? null, 'level' => 'success', 'timeoutMs' => 7000],
+    ['message' => $success ?? null, 'level' => 'success', 'timeoutMs' => 7000],
+    ['message' => $restaurantNotice ?? null, 'level' => 'warning', 'timeoutMs' => 9000],
+];
+foreach ($notificationSources as $candidate) {
+    $message = trim((string) ($candidate['message'] ?? ''));
+    if ($message === '') {
+        continue;
+    }
+    $uiBootNotification = [
+        'message' => $message,
+        'level' => (string) ($candidate['level'] ?? 'info'),
+        'timeoutMs' => (int) ($candidate['timeoutMs'] ?? 8000),
+    ];
+    break;
+}
 ?><!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -780,6 +802,15 @@ declare(strict_types=1);
                 detail
             );
         });
+        var bootNotification = <?= json_encode($uiBootNotification, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?>;
+        if (bootNotification && bootNotification.message) {
+            window.BadibossNotify.push(
+                bootNotification.message,
+                bootNotification.level || 'info',
+                typeof bootNotification.timeoutMs === 'number' ? bootNotification.timeoutMs : undefined,
+                bootNotification
+            );
+        }
     });
     </script>
 </head>
@@ -791,7 +822,6 @@ declare(strict_types=1);
             <button type="button" class="button-muted" onclick="this.parentElement.hidden = true;">Masquer</button>
         </div>
         <?php if (current_user() !== null): ?>
-            <?php $restaurantNotice = flash('restaurant_notice'); ?>
             <?php if ((current_user()['scope'] ?? null) !== 'super_admin' && !empty($current_restaurant_context ?? null)): ?>
                 <section class="context-bar">
                     <div class="context-identity">
