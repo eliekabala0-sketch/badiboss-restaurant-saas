@@ -16,9 +16,14 @@ $cur = $restaurant['currency'] ?? 'USD';
 $staffPage = max(1, (int) ($staff_page ?? 1));
 $staffTotalPages = max(1, (int) ($staff_total_pages ?? 1));
 $staffTotalCount = max(0, (int) ($staff_total_count ?? count($gaugeRows)));
+$disciplineAlertsWarning = (string) ($discipline_alerts_warning ?? '');
+$disciplineRestaurantId = max(0, (int) ($discipline_restaurant_id ?? 0));
 
-$periodHref = static function (string $preset, string $date, bool $alertsLoaded): string {
+$periodHref = static function (string $preset, string $date, bool $alertsLoaded, int $restaurantId): string {
     $query = ['preset' => $preset];
+    if ($restaurantId > 0) {
+        $query['restaurant_id'] = $restaurantId;
+    }
     if ($preset === 'date') {
         $query['date'] = $date;
     }
@@ -189,10 +194,10 @@ $managerActionHint = static function (array $activePeriod, array $metrics): stri
         <p class="muted" style="margin:0;">Agents affiches : page <?= e((string) $staffPage) ?> / <?= e((string) $staffTotalPages) ?> · total <?= e((string) $staffTotalCount) ?></p>
         <div class="toolbar-actions">
             <?php if ($staffPage > 1): ?>
-                <a class="button-muted" href="/owner/discipline?<?= e(http_build_query(['preset' => $disciplinePreset, 'date' => $disciplineAnchorDate, 'alerts' => $disciplineAlertsLoaded ? '1' : null, 'page' => $staffPage - 1])) ?>">Page precedente</a>
+                <a class="button-muted" href="/owner/discipline?<?= e(http_build_query(['restaurant_id' => $disciplineRestaurantId > 0 ? $disciplineRestaurantId : null, 'preset' => $disciplinePreset, 'date' => $disciplineAnchorDate, 'alerts' => $disciplineAlertsLoaded ? '1' : null, 'page' => $staffPage - 1])) ?>">Page precedente</a>
             <?php endif; ?>
             <?php if ($staffPage < $staffTotalPages): ?>
-                <a class="button-muted" href="/owner/discipline?<?= e(http_build_query(['preset' => $disciplinePreset, 'date' => $disciplineAnchorDate, 'alerts' => $disciplineAlertsLoaded ? '1' : null, 'page' => $staffPage + 1])) ?>">Page suivante</a>
+                <a class="button-muted" href="/owner/discipline?<?= e(http_build_query(['restaurant_id' => $disciplineRestaurantId > 0 ? $disciplineRestaurantId : null, 'preset' => $disciplinePreset, 'date' => $disciplineAnchorDate, 'alerts' => $disciplineAlertsLoaded ? '1' : null, 'page' => $staffPage + 1])) ?>">Page suivante</a>
             <?php endif; ?>
         </div>
     </div>
@@ -201,9 +206,13 @@ $managerActionHint = static function (array $activePeriod, array $metrics): stri
 
 <?php if (!empty($flash_success)): ?><div class="flash-ok"><?= e($flash_success) ?></div><?php endif; ?>
 <?php if (!empty($flash_error)): ?><div class="flash-bad"><?= e($flash_error) ?></div><?php endif; ?>
+<?php if ($disciplineAlertsWarning !== ''): ?><div class="flash-bad"><?= e($disciplineAlertsWarning) ?></div><?php endif; ?>
 
 <section class="card no-print" style="padding:18px 22px; margin-bottom:18px;">
     <form method="get" action="/owner/discipline" class="grid" style="gap:14px; grid-template-columns:repeat(auto-fit, minmax(180px, 1fr)); align-items:end;">
+        <?php if ($disciplineRestaurantId > 0): ?>
+            <input type="hidden" name="restaurant_id" value="<?= e((string) $disciplineRestaurantId) ?>">
+        <?php endif; ?>
         <label>
             <span class="muted">Periode</span>
             <select name="preset">
@@ -232,15 +241,15 @@ $managerActionHint = static function (array $activePeriod, array $metrics): stri
 $module_nav_title = 'Navigation discipline';
 $module_nav_intro = 'Jour, hier, date, semaine, mois, alertes, sanctions et clemence restent dans ce module.';
 $module_nav_items = [
-    ['label' => 'Jour', 'href' => $periodHref('today', $disciplineAnchorDate, $disciplineAlertsLoaded)],
-    ['label' => 'Hier', 'href' => $periodHref('yesterday', $disciplineAnchorDate, $disciplineAlertsLoaded)],
-    ['label' => 'Date', 'href' => '/owner/discipline?' . http_build_query(['preset' => 'date', 'date' => $disciplineAnchorDate, 'alerts' => $disciplineAlertsLoaded ? '1' : null])],
-    ['label' => 'Semaine', 'href' => $periodHref('week', $disciplineAnchorDate, $disciplineAlertsLoaded)],
-    ['label' => 'Mois', 'href' => $periodHref('month', $disciplineAnchorDate, $disciplineAlertsLoaded)],
-    ['label' => 'Alertes', 'href' => '/owner/discipline?' . http_build_query(['preset' => $disciplinePreset, 'date' => $disciplineAnchorDate, 'alerts' => 1])],
+    ['label' => 'Jour', 'href' => $periodHref('today', $disciplineAnchorDate, $disciplineAlertsLoaded, $disciplineRestaurantId)],
+    ['label' => 'Hier', 'href' => $periodHref('yesterday', $disciplineAnchorDate, $disciplineAlertsLoaded, $disciplineRestaurantId)],
+    ['label' => 'Date', 'href' => '/owner/discipline?' . http_build_query(['restaurant_id' => $disciplineRestaurantId > 0 ? $disciplineRestaurantId : null, 'preset' => 'date', 'date' => $disciplineAnchorDate, 'alerts' => $disciplineAlertsLoaded ? '1' : null])],
+    ['label' => 'Semaine', 'href' => $periodHref('week', $disciplineAnchorDate, $disciplineAlertsLoaded, $disciplineRestaurantId)],
+    ['label' => 'Mois', 'href' => $periodHref('month', $disciplineAnchorDate, $disciplineAlertsLoaded, $disciplineRestaurantId)],
+    ['label' => 'Alertes', 'href' => '/owner/discipline?' . http_build_query(['restaurant_id' => $disciplineRestaurantId > 0 ? $disciplineRestaurantId : null, 'preset' => $disciplinePreset, 'date' => $disciplineAnchorDate, 'alerts' => 1])],
     ['label' => 'Sanctions', 'href' => '#discipline-tableau'],
     ['label' => 'Clemence', 'href' => '#discipline-actions'],
-    ['label' => 'Ouvrir paie', 'href' => '/owner/paie/preparer?' . http_build_query(['preset' => $disciplinePreset, 'date' => $disciplineAnchorDate])],
+    ['label' => 'Ouvrir paie', 'href' => '/owner/paie/preparer?' . http_build_query(['restaurant_id' => $disciplineRestaurantId > 0 ? $disciplineRestaurantId : null, 'preset' => $disciplinePreset, 'date' => $disciplineAnchorDate])],
 ];
 require base_path('app/Views/partials/module_quick_nav.php');
 ?>
@@ -410,7 +419,7 @@ require base_path('app/Views/partials/module_quick_nav.php');
 <details class="card no-print" style="padding:14px 16px; margin-bottom:18px;" <?= ($disciplineAlertsLoaded && $alerts !== []) ? 'open' : '' ?> data-autoclose-details>
     <summary style="font-weight:600; cursor:pointer;">Alertes disciplinaires</summary>
     <?php if (!$disciplineAlertsLoaded): ?>
-        <p class="muted" style="margin-top:12px;">Les alertes detaillees restent a la demande pour garder l ouverture fluide. <a href="/owner/discipline?<?= e(http_build_query(['preset' => $disciplinePreset, 'date' => $disciplineAnchorDate, 'alerts' => 1])) ?>">Charger aussi les alertes actives</a>.</p>
+        <p class="muted" style="margin-top:12px;">Les alertes detaillees restent a la demande pour garder l ouverture fluide. <a href="/owner/discipline?<?= e(http_build_query(['restaurant_id' => $disciplineRestaurantId > 0 ? $disciplineRestaurantId : null, 'preset' => $disciplinePreset, 'date' => $disciplineAnchorDate, 'alerts' => 1])) ?>">Charger aussi les alertes actives</a>.</p>
     <?php elseif ($alerts === []): ?>
         <p class="muted" style="margin-top:12px;">Aucune alerte active.</p>
     <?php else: ?>

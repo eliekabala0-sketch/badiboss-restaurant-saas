@@ -1143,8 +1143,7 @@ final class StaffDisciplineService
                 continue;
             }
             $name = (string) ($u['full_name'] ?? '');
-            $score = $this->gaugesForUser($restaurantId, $uid, $todayY);
-            $monthly = $score['monthly_avg'];
+            $monthly = null;
 
             $unjWeek = 0;
             $unjDays = [];
@@ -1582,6 +1581,38 @@ final class StaffDisciplineService
         return (int) $st->fetchColumn();
     }
 
+    /**
+     * @param array<int, bool>|null $allowedUserIds
+     * @return array<int, array{attendance_days:int, rest_days:int}>
+     */
+    private function attendanceMonthStatsByUser(int $restaurantId, string $monthKey, ?array $allowedUserIds = null): array
+    {
+        $sql = 'SELECT user_id,
+                       COUNT(*) AS attendance_days,
+                       SUM(CASE WHEN planned_status = "REPOS" THEN 1 ELSE 0 END) AS rest_days
+                FROM staff_attendance_day
+                WHERE restaurant_id = :rid AND DATE_FORMAT(day_ymd, "%Y-%m") = :m
+                GROUP BY user_id';
+        $st = $this->database->pdo()->prepare($sql);
+        $st->execute(['rid' => $restaurantId, 'm' => $monthKey]);
+        $stats = [];
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            $userId = (int) ($row['user_id'] ?? 0);
+            if ($userId <= 0) {
+                continue;
+            }
+            if (is_array($allowedUserIds) && !isset($allowedUserIds[$userId])) {
+                continue;
+            }
+            $stats[$userId] = [
+                'attendance_days' => (int) ($row['attendance_days'] ?? 0),
+                'rest_days' => (int) ($row['rest_days'] ?? 0),
+            ];
+        }
+
+        return $stats;
+    }
+
     private function maxUnjustifiedAbsenceStreakInRange(
         int $restaurantId,
         int $userId,
@@ -1941,6 +1972,7 @@ final class StaffDisciplineService
         $periodStartAt = new DateTimeImmutable($start . ' 00:00:00', $tz);
         $periodEndExclusive = (new DateTimeImmutable($end . ' 00:00:00', $tz))->modify('+1 day');
         $shortfallByUser = $this->serverShortfallAmountsByUser($restaurantId, $periodStartAt, $periodEndExclusive, $allowedUserIds);
+        $attendanceStatsByUser = $this->attendanceMonthStatsByUser($restaurantId, $monthKey, $allowedUserIds);
 
         $pdo = $this->database->pdo();
         $profSt = $pdo->prepare(
@@ -2000,13 +2032,9 @@ final class StaffDisciplineService
             $otherPenaltyAmount = 0.0;
             $net = round(max(0, $base - $scoreRetentionAmt - $shortfallAmount - $otherPenaltyAmount + $bonus), 2);
 
-            $attSt = $pdo->prepare(
-                'SELECT COUNT(*) FROM staff_attendance_day
-                 WHERE restaurant_id = :rid AND user_id = :uid AND DATE_FORMAT(day_ymd, "%Y-%m") = :m'
-            );
-            $attSt->execute(['rid' => $restaurantId, 'uid' => $uid, 'm' => $monthKey]);
-            $attDays = (int) $attSt->fetchColumn();
-            $restDays = $this->countReposAttendanceDaysInMonth($restaurantId, $uid, $monthKey);
+            $attendanceStats = $attendanceStatsByUser[$uid] ?? ['attendance_days' => 0, 'rest_days' => 0];
+            $attDays = (int) ($attendanceStats['attendance_days'] ?? 0);
+            $restDays = (int) ($attendanceStats['rest_days'] ?? 0);
 
             $ledgerPenaltyPts = array_key_exists('ledger_penalty_points_month', $monthMetrics)
                 ? (int) ($monthMetrics['ledger_penalty_points_month'] ?? 0)
@@ -2087,20 +2115,46 @@ final class StaffDisciplineService
      */
     private function serverShortfallAmountsByUser(int $restaurantId, DateTimeImmutable $startAt, DateTimeImmutable $endAt, ?array $allowedUserIds = null): array
     {
-        $summary = Container::getInstance()->get('reportService')->serverRemittanceShortfallBreakdown($restaurantId, $startAt, $endAt, 0);
         $amounts = [];
-        foreach (($summary['agents'] ?? []) as $agent) {
-            if (!is_array($agent)) {
-                continue;
-            }
-            $userId = (int) ($agent['server_user_id'] ?? 0);
+        $s = $startAt->format('Y-m-d H:i:s');
+        $e = $endAt->format('Y-m-d H:i:s');
+        $closedIn = '"VALIDE","CLOTURE","VENDU_TOTAL","VENDU_PARTIEL"';
+        $sql = 'SELECT s.server_id,
+                       SUM(
+                           CASE
+                               WHEN ct.id IS NOT NULL AND (
+                                   COALESCE(ct.responsible_outcome_code, "") <> ""
+                                   OR ct.status = "REMISE_REJETEE_GERANT"
+                                   OR (ct.status <> "REMISE_REJETEE_CAISSE" AND COALESCE(ct.late_remittance_basis, "") <> "PENDING")
+                               )
+                               THEN 0
+                               ELSE s.total_amount
+                           END
+                       ) AS shortfall_total
+                FROM sales s
+                ' . sql_sale_activity_left_join_server_request('s', 'sr') . '
+                LEFT JOIN cash_transfers ct ON ct.id = (
+                    SELECT c2.id FROM cash_transfers c2
+                    WHERE c2.restaurant_id = s.restaurant_id
+                      AND c2.source_type = "sale" AND c2.source_id = s.id
+                    ORDER BY c2.id DESC LIMIT 1
+                )
+                WHERE s.restaurant_id = :rid
+                  AND s.status IN (' . $closedIn . ')
+                  AND ' . sql_sale_activity_datetime_expr('s', 'sr') . ' >= :st
+                  AND ' . sql_sale_activity_datetime_expr('s', 'sr') . ' < :en
+                GROUP BY s.server_id';
+        $st = $this->database->pdo()->prepare($sql);
+        $st->execute(['rid' => $restaurantId, 'st' => $s, 'en' => $e]);
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            $userId = (int) ($row['server_id'] ?? 0);
             if ($userId <= 0) {
                 continue;
             }
             if (is_array($allowedUserIds) && !isset($allowedUserIds[$userId])) {
                 continue;
             }
-            $amounts[$userId] = round((float) ($agent['shortfall'] ?? 0), 2);
+            $amounts[$userId] = round((float) ($row['shortfall_total'] ?? 0), 2);
         }
 
         return $amounts;

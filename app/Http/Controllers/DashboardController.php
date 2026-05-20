@@ -497,7 +497,7 @@ final class DashboardController
             static fn (array $u): bool => ($u['status'] ?? '') === 'active' && (string) ($u['role_code'] ?? '') !== 'owner',
         ));
         $page = max(1, (int) ($request->query['page'] ?? 1));
-        $perPage = 4;
+        $perPage = 25;
         $totalStaff = count($allStaffUsers);
         $totalPages = max(1, (int) ceil(max(1, $totalStaff) / $perPage));
         if ($page > $totalPages) {
@@ -505,7 +505,6 @@ final class DashboardController
         }
         $pagedUsers = array_slice($allStaffUsers, ($page - 1) * $perPage, $perPage);
         $pagedUserIds = array_values(array_map(static fn (array $u): int => (int) ($u['id'] ?? 0), $pagedUsers));
-        $disciplineRows = $staffDisc->gaugesSnapshotRestaurantDailyLight($restaurantId, $disciplineDate, $pagedUserIds);
         $payrollPreviewWarning = $loadHeavyRequested
             ? 'Analyse avancee temporairement indisponible. Utilisez les rapports detailles.'
             : null;
@@ -513,6 +512,7 @@ final class DashboardController
             $preview = $staffDisc->payrollMonthPreview($restaurantId, $monthIn, $loadHeavy, $pagedUserIds);
         } catch (\Throwable $e) {
             error_log('[PAYROLL_PREVIEW_FALLBACK] rid=' . $restaurantId . ' actor=' . (int) ($actor['id'] ?? 0) . ' ' . $e->getMessage());
+            $disciplineRows = $staffDisc->gaugesSnapshotRestaurantDailyLight($restaurantId, $disciplineDate, $pagedUserIds);
             $preview = $staffDisc->payrollMonthPreviewLight($restaurantId, $monthIn, $disciplineRows, $pagedUserIds);
             $payrollPreviewWarning = 'Preparation detaillee temporairement indisponible. Une vue rapide est affichee pour eviter un blocage.';
             $loadHeavy = false;
@@ -523,10 +523,11 @@ final class DashboardController
             'user' => $actor,
             'restaurant' => $restaurant,
             'payroll_preview' => $preview,
-            'payroll_discipline_rows' => $disciplineRows,
+            'payroll_discipline_rows' => [],
             'payroll_discipline_preset' => $disciplinePreset,
             'payroll_discipline_date' => $disciplineDate,
             'payroll_discipline_period_label' => (string) ($disciplineWindow['label'] ?? ''),
+            'payroll_restaurant_id' => $restaurantId,
             'month_query' => $preview['month'],
             'payroll_heavy_loaded' => $loadHeavy,
             'payroll_preview_warning' => $payrollPreviewWarning,
@@ -592,6 +593,16 @@ final class DashboardController
             $payrollProfiles[$uid] = $pr;
         }
 
+        $disciplineAlertsWarning = null;
+        try {
+            $disciplineAlerts = $loadAlerts ? $staffDisc->listDisciplinaryAlerts($restaurantId) : [];
+        } catch (\Throwable $e) {
+            error_log('[DISCIPLINE_ALERTS_FALLBACK] rid=' . $restaurantId . ' actor=' . (int) ($actor['id'] ?? 0) . ' ' . $e->getMessage());
+            $disciplineAlerts = [];
+            $disciplineAlertsWarning = 'Alertes detaillees temporairement indisponibles. La discipline du jour reste disponible.';
+            $loadAlerts = false;
+        }
+
         view('owner/discipline-hub', [
             'title' => 'Discipline & présences',
             'user' => $actor,
@@ -601,10 +612,12 @@ final class DashboardController
             'discipline_anchor_date' => $anchorYmd,
             'discipline_period_label' => (string) ($periodWindow['label'] ?? ''),
             'discipline_schedule' => $staffDisc->disciplineWorkScheduleForRestaurant($restaurantId),
-            'alerts' => $loadAlerts ? $staffDisc->listDisciplinaryAlerts($restaurantId) : [],
+            'alerts' => $disciplineAlerts,
             'gauge_rows' => $staffDisc->gaugesSnapshotRestaurantDailyLight($restaurantId, $anchorYmd, $pagedUserIds),
             'discipline_heavy_loaded' => false,
             'discipline_alerts_loaded' => $loadAlerts,
+            'discipline_alerts_warning' => $disciplineAlertsWarning,
+            'discipline_restaurant_id' => $restaurantId,
             'staff_users' => $attUsers,
             'payroll_profiles' => $payrollProfiles,
             'staff_page' => $page,

@@ -770,6 +770,16 @@ declare(strict_types=1);
                 this.push(message, level, options && options.timeoutMs ? options.timeoutMs : undefined, options || {});
             }
         };
+        window.BadibossLiveBanner = window.BadibossNotify;
+        window.addEventListener('badiboss:notify', function (event) {
+            var detail = event && event.detail ? event.detail : {};
+            window.BadibossNotify.push(
+                detail.message || '',
+                detail.level || 'info',
+                typeof detail.timeoutMs === 'number' ? detail.timeoutMs : undefined,
+                detail
+            );
+        });
     });
     </script>
 </head>

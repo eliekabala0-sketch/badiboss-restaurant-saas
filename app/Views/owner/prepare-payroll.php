@@ -7,7 +7,6 @@ $periodStart = (string) ($preview['period_start'] ?? '');
 $periodEnd = (string) ($preview['period_end'] ?? '');
 $periodLabel = (string) ($preview['period_label'] ?? '');
 $payrollHeavyLoaded = !empty($payroll_heavy_loaded);
-$disciplineRows = is_array($payroll_discipline_rows ?? null) ? $payroll_discipline_rows : [];
 $disciplinePreset = (string) ($payroll_discipline_preset ?? 'today');
 $disciplineDate = (string) ($payroll_discipline_date ?? '');
 $disciplinePeriodLabel = (string) ($payroll_discipline_period_label ?? '');
@@ -15,29 +14,7 @@ $staffPage = max(1, (int) ($staff_page ?? 1));
 $staffTotalPages = max(1, (int) ($staff_total_pages ?? 1));
 $staffTotalCount = max(0, (int) ($staff_total_count ?? count($rows)));
 $payrollPreviewWarning = (string) ($payroll_preview_warning ?? '');
-
-$disciplineByUser = [];
-foreach ($disciplineRows as $disciplineRow) {
-    if (!is_array($disciplineRow)) {
-        continue;
-    }
-    $disciplineByUser[(int) ($disciplineRow['user_id'] ?? 0)] = $disciplineRow;
-}
-
-$periodHref = static function (string $preset, string $monthQuery, string $disciplineDate, bool $heavy): string {
-    $query = [
-        'month' => $monthQuery,
-        'preset' => $preset,
-    ];
-    if ($preset === 'date') {
-        $query['date'] = $disciplineDate;
-    }
-    if ($heavy) {
-        $query['heavy'] = '1';
-    }
-
-    return '/owner/paie/preparer?' . http_build_query($query);
-};
+$payrollRestaurantId = max(0, (int) ($payroll_restaurant_id ?? 0));
 
 $scoreLine = static function ($score): string {
     if ($score === null || !is_numeric($score)) {
@@ -47,61 +24,50 @@ $scoreLine = static function ($score): string {
     return rtrim(rtrim(number_format((float) $score, 1, '.', ''), '0'), '.') . ' / 100';
 };
 
-$signalSummary = static function (array $activePeriod, array $metrics): string {
-    $signals = [];
-    $kind = (string) (($activePeriod['score_breakdown']['evaluation_kind'] ?? $activePeriod['evaluation_kind'] ?? ''));
-    if ($kind === 'absence_unjustified') {
-        $signals[] = 'Absence / inactivite non justifiee';
-    } elseif ($kind === 'absence_authorized') {
-        $signals[] = 'Absence autorisee';
-    } elseif ($kind === 'absence_illness') {
-        $signals[] = 'Maladie';
-    } elseif ($kind === 'late_justified') {
-        $signals[] = 'Retard justifie';
-    } elseif ($kind === 'neutral_rest') {
-        $signals[] = 'Repos';
+$payrollHref = static function (
+    int $restaurantId,
+    string $monthQuery,
+    string $preset,
+    string $disciplineDate,
+    bool $heavy,
+    ?int $page = null
+): string {
+    $query = [
+        'month' => $monthQuery,
+        'preset' => $preset,
+    ];
+    if ($restaurantId > 0) {
+        $query['restaurant_id'] = $restaurantId;
+    }
+    if ($preset === 'date') {
+        $query['date'] = $disciplineDate;
+    }
+    if ($heavy) {
+        $query['heavy'] = '1';
+    }
+    if ($page !== null && $page > 0) {
+        $query['page'] = $page;
     }
 
-    if ((int) ($metrics['activite_actions'] ?? 0) > 0) {
-        $signals[] = (int) $metrics['activite_actions'] . ' action(s)';
-    }
-    if ((int) ($metrics['late_remittance_hits'] ?? 0) > 0) {
-        $signals[] = (int) ($metrics['late_remittance_hits']) . ' remise(s) tardive(s)';
-    }
-    if ((int) ($metrics['manquants_caisse_hits'] ?? 0) > 0) {
-        $signals[] = (int) ($metrics['manquants_caisse_hits']) . ' manquant(s)';
-    }
-    if ((int) ($metrics['jours_sans_activite_mesuree'] ?? 0) > 0) {
-        $signals[] = (int) ($metrics['jours_sans_activite_mesuree']) . ' jour(s) sans activite';
-    }
-
-    return $signals === [] ? 'Aucun signal critique visible' : implode(' · ', array_unique($signals));
+    return '/owner/paie/preparer?' . http_build_query($query);
 };
 
-$sanctionSummary = static function (array $activePeriod, array $metrics): string {
-    $score = $activePeriod['score'] ?? null;
-    $kind = (string) (($activePeriod['score_breakdown']['evaluation_kind'] ?? $activePeriod['evaluation_kind'] ?? ''));
-    $shortfalls = (int) ($metrics['manquants_caisse_hits'] ?? 0);
-    $lateDelayDays = (int) ($metrics['late_remittance_max_delay_days'] ?? 0);
-    $daysNoActivity = (int) ($metrics['jours_sans_activite_mesuree'] ?? 0);
-
-    if ($shortfalls > 0 || $lateDelayDays >= 2) {
-        return 'Retenue forte ou retrait poste sensible';
+$disciplineHref = static function (int $restaurantId, string $preset, string $disciplineDate, bool $alerts = true): string {
+    $query = [
+        'preset' => $preset,
+        'date' => $disciplineDate,
+    ];
+    if ($restaurantId > 0) {
+        $query['restaurant_id'] = $restaurantId;
     }
-    if ($kind === 'absence_unjustified') {
-        return 'Avertissement ou retenue salaire';
-    }
-    if ($daysNoActivity > 0) {
-        return 'Avertissement';
-    }
-    if ($score !== null && (float) $score < 50) {
-        return 'Surveillance renforcee';
+    if ($alerts) {
+        $query['alerts'] = '1';
     }
 
-    return 'RAS / suivi normal';
+    return '/owner/discipline?' . http_build_query($query);
 };
 
-$impactSummary = static function (array $row, array $activePeriod): string {
+$impactSummary = static function (array $row): string {
     $parts = [];
     $retention = (float) ($row['retention_amount_est'] ?? 0);
     $shortfall = (float) ($row['cash_shortfall_amount_est'] ?? 0);
@@ -115,18 +81,15 @@ $impactSummary = static function (array $row, array $activePeriod): string {
     if ($otherPenalties > 0.0001) {
         $parts[] = 'Autres ' . format_money($otherPenalties, (string) ($row['currency'] ?? 'USD'));
     }
-    if (($activePeriod['score'] ?? null) === null && $parts === []) {
-        return 'Aucun impact calcule';
-    }
 
-    return $parts === [] ? 'Impact faible / a confirmer' : implode(' · ', $parts);
+    return $parts === [] ? 'Aucun impact calcule' : implode(' · ', $parts);
 };
 ?>
 
 <section class="topbar">
     <div class="brand">
         <h1>Preparer la paie</h1>
-        <p class="muted">Module direct et exploitable sans vue detaillee supplementaire, avec discipline visible sur la meme page.</p>
+        <p class="muted">Vue mensuelle ciblee : tous les agents restent visibles via pagination claire, sans recalculs secondaires inutiles.</p>
     </div>
 </section>
 
@@ -136,10 +99,10 @@ $impactSummary = static function (array $row, array $activePeriod): string {
         <p class="muted" style="margin:0;">Agents affiches : page <?= e((string) $staffPage) ?> / <?= e((string) $staffTotalPages) ?> · total <?= e((string) $staffTotalCount) ?></p>
         <div class="toolbar-actions">
             <?php if ($staffPage > 1): ?>
-                <a class="button-muted" href="/owner/paie/preparer?<?= e(http_build_query(['month' => $month_query, 'preset' => $disciplinePreset, 'date' => $disciplineDate, 'page' => $staffPage - 1, 'heavy' => $payrollHeavyLoaded ? '1' : null])) ?>">Page precedente</a>
+                <a class="button-muted" href="<?= e($payrollHref($payrollRestaurantId, (string) $month_query, $disciplinePreset, $disciplineDate, $payrollHeavyLoaded, $staffPage - 1)) ?>">Page precedente</a>
             <?php endif; ?>
             <?php if ($staffPage < $staffTotalPages): ?>
-                <a class="button-muted" href="/owner/paie/preparer?<?= e(http_build_query(['month' => $month_query, 'preset' => $disciplinePreset, 'date' => $disciplineDate, 'page' => $staffPage + 1, 'heavy' => $payrollHeavyLoaded ? '1' : null])) ?>">Page suivante</a>
+                <a class="button-muted" href="<?= e($payrollHref($payrollRestaurantId, (string) $month_query, $disciplinePreset, $disciplineDate, $payrollHeavyLoaded, $staffPage + 1)) ?>">Page suivante</a>
             <?php endif; ?>
         </div>
     </div>
@@ -152,6 +115,9 @@ $impactSummary = static function (array $row, array $activePeriod): string {
 
 <section class="card no-print" style="padding:18px 22px; margin-bottom:20px;">
     <form method="get" action="/owner/paie/preparer" class="grid" style="gap:14px; grid-template-columns:repeat(auto-fit, minmax(180px, 1fr)); align-items:end;">
+        <?php if ($payrollRestaurantId > 0): ?>
+            <input type="hidden" name="restaurant_id" value="<?= e((string) $payrollRestaurantId) ?>">
+        <?php endif; ?>
         <label>
             <span class="muted">Mois paie</span>
             <input type="month" name="month" value="<?= e($month_query) ?>" required>
@@ -173,7 +139,7 @@ $impactSummary = static function (array $row, array $activePeriod): string {
         </label>
         <label style="display:flex; align-items:center; gap:8px; margin:0;">
             <input type="checkbox" name="heavy" value="1" <?= $payrollHeavyLoaded ? 'checked' : '' ?> style="width:auto; margin:0;">
-            <span>Details jour + semaine</span>
+            <span>Details avances</span>
         </label>
         <button type="submit">Actualiser</button>
     </form>
@@ -183,14 +149,14 @@ $impactSummary = static function (array $row, array $activePeriod): string {
 
 <?php
 $module_nav_title = 'Navigation paie';
-$module_nav_intro = 'Preparation directe, liste agents, retenues, primes, net et impression restent dans ce module.';
+$module_nav_intro = 'Paie mensuelle, pagination, retenues et net propose restent dans ce module.';
 $module_nav_items = [
-    ['label' => 'Aujourd hui', 'href' => $periodHref('today', (string) $month_query, $disciplineDate, $payrollHeavyLoaded)],
-    ['label' => 'Hier', 'href' => $periodHref('yesterday', (string) $month_query, $disciplineDate, $payrollHeavyLoaded)],
-    ['label' => 'Semaine', 'href' => $periodHref('week', (string) $month_query, $disciplineDate, $payrollHeavyLoaded)],
-    ['label' => 'Mois', 'href' => $periodHref('month', (string) $month_query, $disciplineDate, $payrollHeavyLoaded)],
-    ['label' => 'Mois precedent', 'href' => $periodHref('prev_month', (string) $month_query, $disciplineDate, $payrollHeavyLoaded)],
-    ['label' => 'Discipline', 'href' => '/owner/discipline?' . http_build_query(['preset' => $disciplinePreset, 'date' => $disciplineDate, 'alerts' => 1])],
+    ['label' => 'Aujourd hui', 'href' => $payrollHref($payrollRestaurantId, (string) $month_query, 'today', $disciplineDate, $payrollHeavyLoaded)],
+    ['label' => 'Hier', 'href' => $payrollHref($payrollRestaurantId, (string) $month_query, 'yesterday', $disciplineDate, $payrollHeavyLoaded)],
+    ['label' => 'Semaine', 'href' => $payrollHref($payrollRestaurantId, (string) $month_query, 'week', $disciplineDate, $payrollHeavyLoaded)],
+    ['label' => 'Mois', 'href' => $payrollHref($payrollRestaurantId, (string) $month_query, 'month', $disciplineDate, $payrollHeavyLoaded)],
+    ['label' => 'Mois precedent', 'href' => $payrollHref($payrollRestaurantId, (string) $month_query, 'prev_month', $disciplineDate, $payrollHeavyLoaded)],
+    ['label' => 'Discipline', 'href' => $disciplineHref($payrollRestaurantId, $disciplinePreset, $disciplineDate, true)],
     ['label' => 'Imprimer', 'href' => '#payroll-print'],
 ];
 require base_path('app/Views/partials/module_quick_nav.php');
@@ -204,20 +170,12 @@ require base_path('app/Views/partials/module_quick_nav.php');
             <th>Role</th>
             <th>Salaire base</th>
             <th>Jours app.</th>
-            <th>Travailles</th>
-            <th>Repos</th>
-            <th>Abs. non just.</th>
-            <th>Abs. just.</th>
-            <th>Maladie</th>
-            <th>Jours inactifs</th>
-            <th>Jour</th>
-            <th>Semaine</th>
-            <th>Score mois</th>
-            <th>Mention</th>
-            <th>Retenue discipline</th>
+            <th>Absences</th>
+            <th>Inactivite</th>
+            <th>Retards caisse</th>
             <th>Manquants</th>
-            <th>Autres pen.</th>
-            <th>Prime</th>
+            <th>Score mois</th>
+            <th>Retenue discipline</th>
             <th>Net propose</th>
             <th>Raisons des retenues</th>
         </tr>
@@ -225,19 +183,13 @@ require base_path('app/Views/partials/module_quick_nav.php');
         <tbody>
         <?php if ($rows === []): ?>
             <tr>
-                <td colspan="20" class="muted">Aucune ligne de paie disponible pour ce mois.</td>
+                <td colspan="12" class="muted">Aucune ligne de paie disponible pour ce mois.</td>
             </tr>
         <?php endif; ?>
         <?php foreach ($rows as $row): ?>
             <?php if (!is_array($row)) { continue; } ?>
             <?php
-            $uid = (int) ($row['user_id'] ?? 0);
-            $disciplineRow = is_array($disciplineByUser[$uid] ?? null) ? $disciplineByUser[$uid] : [];
-            $gauges = is_array($disciplineRow['gauges'] ?? null) ? $disciplineRow['gauges'] : [];
-            $activePeriod = is_array($gauges['active_period'] ?? null) ? $gauges['active_period'] : [];
-            $metrics = is_array($gauges['row_metrics'] ?? null) ? $gauges['row_metrics'] : [];
-            $score = $activePeriod['score'] ?? null;
-            $monthZone = (string) ($row['monthly_score_zone'] ?? ($activePeriod['zone'] ?? 'non_evalue'));
+            $monthZone = (string) ($row['monthly_score_zone'] ?? 'non_evalue');
             $zoneClass = match ($monthZone) {
                 'vert' => 'badge-closed',
                 'jaune' => 'badge-ready',
@@ -245,18 +197,6 @@ require base_path('app/Views/partials/module_quick_nav.php');
                 'rouge', 'rouge_critique' => 'badge-bad',
                 default => 'badge-neutral',
             };
-            $zoneLabel = match ($monthZone) {
-                'vert' => 'Excellent',
-                'jaune' => 'Bon',
-                'orange' => 'Moyen',
-                'rouge' => 'Problematique',
-                'rouge_critique' => 'Critique',
-                default => 'Non evalue',
-            };
-            $signals = $signalSummary($activePeriod, $metrics);
-            $sanction = $sanctionSummary($activePeriod, $metrics);
-            $impact = $impactSummary($row, $activePeriod);
-            $detailRows = is_array($activePeriod['points_detail'] ?? null) ? $activePeriod['points_detail'] : [];
             ?>
             <tr>
                 <td>
@@ -267,60 +207,42 @@ require base_path('app/Views/partials/module_quick_nav.php');
                 </td>
                 <td><?= e(restaurant_role_label($row['role_code'] ?? null)) ?></td>
                 <td><?= e(format_money((float) ($row['base_salary_monthly'] ?? 0), (string) ($row['currency'] ?? 'USD'))) ?></td>
-                <td><?= e((string) (int) ($row['applicable_days'] ?? 0)) ?></td>
-                <td><?= e((string) (int) ($row['worked_days'] ?? 0)) ?></td>
-                <td><?= e((string) (int) ($row['rest_days_recorded'] ?? 0)) ?></td>
-                <td><?= e((string) (int) ($row['unjustified_absence_days'] ?? 0)) ?></td>
-                <td><?= e((string) (int) ($row['justified_absence_days'] ?? 0)) ?></td>
-                <td><?= e((string) (int) ($row['illness_days'] ?? 0)) ?></td>
+                <td>
+                    <strong><?= e((string) (int) ($row['applicable_days'] ?? 0)) ?></strong>
+                    <div class="muted" style="font-size:0.84rem; margin-top:6px;">Travailles <?= e((string) (int) ($row['worked_days'] ?? 0)) ?> · repos <?= e((string) (int) ($row['rest_days_recorded'] ?? 0)) ?></div>
+                </td>
+                <td>
+                    <strong><?= e((string) (int) ($row['unjustified_absence_days'] ?? 0)) ?> non just.</strong>
+                    <div class="muted" style="font-size:0.84rem; margin-top:6px;"><?= e((string) (int) ($row['justified_absence_days'] ?? 0)) ?> just. · <?= e((string) (int) ($row['illness_days'] ?? 0)) ?> maladie</div>
+                </td>
                 <td><?= e((string) (int) ($row['inactive_days'] ?? 0)) ?></td>
-                <td><strong><?= e($scoreLine($gauges['daily'] ?? null)) ?></strong></td>
-                <td><strong><?= e($scoreLine($gauges['weekly_avg'] ?? null)) ?></strong></td>
                 <td>
-                    <span class="pill <?= e($zoneClass) ?>"><?= e($zoneLabel) ?></span>
-                    <div class="muted" style="font-size:0.84rem; margin-top:6px;"><?= e($scoreLine($row['monthly_score_avg'] ?? ($gauges['monthly_avg'] ?? $score))) ?></div>
-                </td>
-                <td>
-                    <strong><?= e((string) ($row['monthly_mention'] ?? $zoneLabel)) ?></strong>
-                    <div class="muted" style="font-size:0.84rem; margin-top:6px;"><?= e($sanction) ?></div>
-                </td>
-                <td>
-                    <strong><?= e((string) (float) ($row['retention_proposed_pct'] ?? 0)) ?> %</strong>
-                    <div class="muted" style="font-size:0.84rem; margin-top:6px;"><?= e(format_money((float) ($row['retention_amount_est'] ?? 0), (string) ($row['currency'] ?? 'USD'))) ?></div>
+                    <strong><?= e((string) (int) ($row['late_remittance_hits'] ?? 0)) ?></strong>
+                    <div class="muted" style="font-size:0.84rem; margin-top:6px;">max <?= e((string) (int) ($row['late_remittance_max_delay_days'] ?? 0)) ?> j</div>
                 </td>
                 <td>
                     <strong><?= e(format_money((float) ($row['cash_shortfall_amount_est'] ?? 0), (string) ($row['currency'] ?? 'USD'))) ?></strong>
                     <div class="muted" style="font-size:0.84rem; margin-top:6px;"><?= e((string) (int) ($row['cash_shortfall_hits'] ?? 0)) ?> cas</div>
                 </td>
-                <td><?= e(format_money((float) ($row['other_penalties_amount'] ?? 0), (string) ($row['currency'] ?? 'USD'))) ?></td>
-                <td><?= e(format_money((float) ($row['bonus_monthly'] ?? 0), (string) ($row['currency'] ?? 'USD'))) ?></td>
+                <td>
+                    <span class="pill <?= e($zoneClass) ?>"><?= e((string) ($row['monthly_mention'] ?? 'Non evalue')) ?></span>
+                    <div class="muted" style="font-size:0.84rem; margin-top:6px;"><?= e($scoreLine($row['monthly_score_avg'] ?? null)) ?></div>
+                </td>
+                <td>
+                    <strong><?= e(format_money((float) ($row['retention_amount_est'] ?? 0), (string) ($row['currency'] ?? 'USD'))) ?></strong>
+                    <div class="muted" style="font-size:0.84rem; margin-top:6px;"><?= e((string) (float) ($row['retention_proposed_pct'] ?? 0)) ?> %</div>
+                </td>
                 <td><strong><?= e(format_money((float) ($row['net_pay_proposed'] ?? 0), (string) ($row['currency'] ?? 'USD'))) ?></strong></td>
                 <td>
-                    <strong><?= e((string) ($row['retention_reason_summary'] ?? $impact)) ?></strong>
-                    <div class="muted" style="font-size:0.84rem; margin-top:6px;"><?= e($signals) ?></div>
-                    <?php if (!empty($activePeriod['note'])): ?>
-                        <div class="muted" style="font-size:0.84rem; margin-top:6px;"><?= e((string) $activePeriod['note']) ?></div>
-                    <?php endif; ?>
+                    <strong><?= e((string) ($row['retention_reason_summary'] ?? '')) ?></strong>
+                    <div class="muted" style="font-size:0.84rem; margin-top:6px;"><?= e($impactSummary($row)) ?></div>
                 </td>
             </tr>
-            <?php if ($detailRows !== []): ?>
-                <tr>
-                    <td colspan="20" class="muted" style="font-size:0.9rem;">
-                        <strong>Detail trace</strong>
-                        <ul style="margin:8px 0 0; padding-left:18px;">
-                            <?php foreach ($detailRows as $detailRow): ?>
-                                <?php if (!is_array($detailRow)) { continue; } ?>
-                                <li><?= e((string) ($detailRow['label'] ?? 'Point')) ?> · <?= e((string) ($detailRow['delta_points'] ?? 0)) ?> pts</li>
-                            <?php endforeach; ?>
-                        </ul>
-                    </td>
-                </tr>
-            <?php endif; ?>
         <?php endforeach; ?>
         </tbody>
     </table>
 </section>
 
 <section class="card no-print" style="padding:18px 22px; margin-bottom:24px;">
-    <p class="muted" style="margin:0;">Les montants restent indicatifs avant paiement reel. Pour appliquer une sanction, une clemence, une justification ou un report avec trace, utilisez <a href="/owner/discipline?<?= e(http_build_query(['preset' => $disciplinePreset, 'date' => $disciplineDate, 'alerts' => 1])) ?>">Discipline</a>.</p>
+    <p class="muted" style="margin:0;">Les montants restent indicatifs avant paiement reel. Pour une justification, une clemence ou un suivi, utilisez <a href="<?= e($disciplineHref($payrollRestaurantId, $disciplinePreset, $disciplineDate, true)) ?>">Discipline</a>.</p>
 </section>
