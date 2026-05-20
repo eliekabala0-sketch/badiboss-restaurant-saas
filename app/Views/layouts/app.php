@@ -4,6 +4,10 @@ declare(strict_types=1);
 
 $restaurantNotice = flash('restaurant_notice');
 $uiBootNotification = null;
+$notificationContext = [
+    'restaurantName' => (string) (($current_restaurant_context['public_name'] ?? $current_restaurant_context['name'] ?? current_user()['restaurant_name'] ?? 'Badiboss') ?? 'Badiboss'),
+    'roleLabel' => (string) (restaurant_role_label(current_user()['role_code'] ?? null) ?? ''),
+];
 $notificationSources = [
     ['message' => $flash_error ?? null, 'level' => 'danger', 'timeoutMs' => 10000],
     ['message' => $error ?? null, 'level' => 'danger', 'timeoutMs' => 10000],
@@ -367,6 +371,37 @@ foreach ($notificationSources as $candidate) {
             padding: 8px 12px;
             background: rgba(255,255,255,0.08);
             box-shadow: none;
+        }
+        .notification-optin {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 14px;
+            padding: 14px 16px;
+            margin-bottom: 18px;
+            border-radius: var(--radius-md);
+            border: 1px solid rgba(212, 175, 55, 0.18);
+            background: rgba(255,255,255,0.03);
+        }
+        .notification-optin strong {
+            display: block;
+            margin-bottom: 4px;
+        }
+        .notification-optin p {
+            margin: 0;
+            color: var(--muted);
+            font-size: 0.92rem;
+            line-height: 1.45;
+        }
+        .notification-optin button[disabled] {
+            opacity: 0.65;
+            cursor: default;
+            transform: none;
+        }
+        .notification-optin-status {
+            margin-top: 6px;
+            font-size: 0.84rem;
+            color: var(--muted);
         }
         .nav a {
             background: rgba(255,255,255,0.04);
@@ -732,18 +767,47 @@ foreach ($notificationSources as $candidate) {
         });
 
         var banner = document.getElementById('app-live-banner');
+        var notificationToggle = document.getElementById('app-notification-toggle');
+        var notificationStatus = document.getElementById('app-notification-status');
+        var notificationContext = <?= json_encode($notificationContext, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?>;
+        var notificationStorageKey = 'badiboss.notifications.enabled';
+        var audioContextRef = null;
         var audioReady = false;
         var unlockAudio = function () {
             audioReady = true;
         };
         document.addEventListener('pointerdown', unlockAudio, { once: true });
         document.addEventListener('keydown', unlockAudio, { once: true });
+        var readStorage = function (key) {
+            try {
+                return window.localStorage.getItem(key);
+            } catch (err) {
+                return null;
+            }
+        };
+        var writeStorage = function (key, value) {
+            try {
+                window.localStorage.setItem(key, value);
+            } catch (err) {
+            }
+        };
+        var notificationsEnabled = readStorage(notificationStorageKey) === '1';
+        var systemPermission = typeof window.Notification === 'undefined' ? 'unsupported' : window.Notification.permission;
+        var serviceWorkerRegistration = null;
+        var lastNotificationFingerprint = '';
+        var lastNotificationAt = 0;
         var playTone = function (level) {
             if (!audioReady || typeof window.AudioContext === 'undefined') {
                 return;
             }
             try {
-                var ctx = new window.AudioContext();
+                if (!audioContextRef) {
+                    audioContextRef = new window.AudioContext();
+                }
+                if (audioContextRef.state === 'suspended') {
+                    audioContextRef.resume();
+                }
+                var ctx = audioContextRef;
                 var osc = ctx.createOscillator();
                 var gain = ctx.createGain();
                 osc.type = 'sine';
@@ -754,10 +818,115 @@ foreach ($notificationSources as $candidate) {
                 osc.start();
                 window.setTimeout(function () {
                     osc.stop();
-                    ctx.close();
                 }, 180);
             } catch (err) {
             }
+        };
+        var notificationTitle = function (level) {
+            if (level === 'danger') {
+                return 'Alerte critique · ' + notificationContext.restaurantName;
+            }
+            if (level === 'warning') {
+                return 'Attention · ' + notificationContext.restaurantName;
+            }
+            return 'Notification · ' + notificationContext.restaurantName;
+        };
+        var refreshNotificationStatus = function () {
+            if (!notificationToggle || !notificationStatus) {
+                return;
+            }
+            var supportLabel = systemPermission === 'unsupported'
+                ? 'Notifications navigateur non supportées.'
+                : (systemPermission === 'granted'
+                    ? 'Notifications navigateur autorisées.'
+                    : (systemPermission === 'denied'
+                        ? 'Permission navigateur refusée.'
+                        : 'Permission navigateur en attente.'));
+            var workerLabel = serviceWorkerRegistration ? 'Service worker prêt.' : 'Service worker non prêt.';
+            if (!notificationsEnabled) {
+                notificationToggle.textContent = 'Activer les notifications et la sonnerie';
+            } else if (systemPermission === 'granted') {
+                notificationToggle.textContent = 'Notifications actives';
+            } else {
+                notificationToggle.textContent = 'Réessayer l’activation des notifications';
+            }
+            notificationToggle.disabled = notificationsEnabled && systemPermission === 'granted' && !!serviceWorkerRegistration;
+            notificationStatus.textContent = (audioReady ? 'Sonnerie prête.' : 'Cliquez pour armer la sonnerie.') + ' ' + supportLabel + ' ' + workerLabel;
+        };
+        var registerServiceWorker = async function () {
+            if (!('serviceWorker' in navigator)) {
+                return null;
+            }
+            try {
+                serviceWorkerRegistration = await navigator.serviceWorker.register('/badiboss-notifications-sw.js', { scope: '/' });
+                return serviceWorkerRegistration;
+            } catch (err) {
+                return null;
+            }
+        };
+        var requestSystemPermission = async function () {
+            if (typeof window.Notification === 'undefined') {
+                systemPermission = 'unsupported';
+                return systemPermission;
+            }
+            try {
+                systemPermission = await window.Notification.requestPermission();
+            } catch (err) {
+                systemPermission = window.Notification.permission || 'default';
+            }
+            return systemPermission;
+        };
+        var maybeShowSystemNotification = function (message, level, options) {
+            if (!notificationsEnabled || systemPermission !== 'granted' || !message) {
+                return;
+            }
+            var detail = options || {};
+            if (detail.system === false) {
+                return;
+            }
+            var body = String(message);
+            var tag = detail.tag || ('badiboss:' + (detail.level || level || 'info') + ':' + body.slice(0, 80));
+            var payload = {
+                body: body,
+                tag: tag,
+                renotify: false,
+                silent: true,
+                data: {
+                    url: detail.url || window.location.href,
+                    level: detail.level || level || 'info',
+                    restaurant: notificationContext.restaurantName,
+                    role: notificationContext.roleLabel
+                }
+            };
+            if (serviceWorkerRegistration && typeof serviceWorkerRegistration.showNotification === 'function') {
+                serviceWorkerRegistration.showNotification(notificationTitle(level || 'info'), payload).catch(function () {
+                });
+                return;
+            }
+            try {
+                var browserNotification = new window.Notification(notificationTitle(level || 'info'), payload);
+                browserNotification.onclick = function () {
+                    window.focus();
+                    browserNotification.close();
+                };
+            } catch (err) {
+            }
+        };
+        var enableBrowserNotifications = async function () {
+            notificationsEnabled = true;
+            audioReady = true;
+            writeStorage(notificationStorageKey, '1');
+            await registerServiceWorker();
+            await requestSystemPermission();
+            refreshNotificationStatus();
+            window.BadibossNotify.push(
+                systemPermission === 'granted'
+                    ? 'Notifications navigateur et sonnerie activées pour ce navigateur.'
+                    : 'Sonnerie activée. Autorisez aussi les notifications navigateur si votre appareil le propose.',
+                systemPermission === 'granted' ? 'success' : 'warning',
+                8000,
+                { silent: false, system: false }
+            );
         };
         var currentRole = document.body ? (document.body.getAttribute('data-current-role') || '') : '';
         window.BadibossNotify = {
@@ -783,6 +952,14 @@ foreach ($notificationSources as $candidate) {
                 if (!options || options.silent !== true) {
                     playTone(level || 'info');
                 }
+                var fingerprint = String(level || 'info') + '|' + String(message);
+                var now = Date.now();
+                if (fingerprint === lastNotificationFingerprint && now - lastNotificationAt < 2500) {
+                    return;
+                }
+                lastNotificationFingerprint = fingerprint;
+                lastNotificationAt = now;
+                maybeShowSystemNotification(message, level || 'info', options || {});
             },
             pushRole: function (message, level, options) {
                 var roles = options && Array.isArray(options.roles) ? options.roles : [];
@@ -792,6 +969,11 @@ foreach ($notificationSources as $candidate) {
                 this.push(message, level, options && options.timeoutMs ? options.timeoutMs : undefined, options || {});
             }
         };
+        if (notificationToggle) {
+            notificationToggle.addEventListener('click', function () {
+                enableBrowserNotifications();
+            });
+        }
         window.BadibossLiveBanner = window.BadibossNotify;
         window.addEventListener('badiboss:notify', function (event) {
             var detail = event && event.detail ? event.detail : {};
@@ -802,6 +984,10 @@ foreach ($notificationSources as $candidate) {
                 detail
             );
         });
+        registerServiceWorker().then(function () {
+            refreshNotificationStatus();
+        });
+        refreshNotificationStatus();
         var bootNotification = <?= json_encode($uiBootNotification, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?>;
         if (bootNotification && bootNotification.message) {
             window.BadibossNotify.push(
@@ -821,6 +1007,16 @@ foreach ($notificationSources as $candidate) {
             <strong data-live-banner-text>Nouvelle alerte</strong>
             <button type="button" class="button-muted" onclick="this.parentElement.hidden = true;">Masquer</button>
         </div>
+        <?php if (current_user() !== null): ?>
+            <section class="notification-optin no-print">
+                <div>
+                    <strong>Notifications terrain</strong>
+                    <p>Bannière, sonnerie légère et notification navigateur après votre accord. Le push hors application complète reste préparé sans polling ni websocket lourds.</p>
+                    <div id="app-notification-status" class="notification-optin-status">Initialisation des notifications…</div>
+                </div>
+                <button id="app-notification-toggle" type="button" class="button-muted">Activer les notifications et la sonnerie</button>
+            </section>
+        <?php endif; ?>
         <?php if (current_user() !== null): ?>
             <?php if ((current_user()['scope'] ?? null) !== 'super_admin' && !empty($current_restaurant_context ?? null)): ?>
                 <section class="context-bar">
