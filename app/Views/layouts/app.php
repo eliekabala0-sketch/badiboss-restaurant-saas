@@ -377,35 +377,46 @@ foreach ($notificationSources as $candidate) {
             box-shadow: none;
         }
         .notification-optin {
-            display: flex;
-            justify-content: space-between;
+            position: fixed;
+            top: 18px;
+            right: 18px;
+            z-index: 70;
+            display: inline-flex;
             align-items: center;
-            gap: 14px;
-            padding: 14px 16px;
-            margin-bottom: 18px;
-            border-radius: var(--radius-md);
+            gap: 8px;
+            padding: 8px 10px;
+            max-width: min(260px, calc(100vw - 30px));
+            border-radius: 999px;
             border: 1px solid rgba(212, 175, 55, 0.18);
-            background: rgba(255,255,255,0.03);
+            background: rgba(17, 17, 17, 0.94);
+            box-shadow: 0 18px 40px rgba(0, 0, 0, 0.32);
         }
-        .notification-optin strong {
-            display: block;
-            margin-bottom: 4px;
+        .notification-optin[hidden] {
+            display: none !important;
         }
-        .notification-optin p {
+        .notification-optin button {
+            padding: 7px 12px;
+            white-space: nowrap;
+            box-shadow: none;
+        }
+        .notification-optin-copy {
+            min-width: 0;
+        }
+        .notification-optin-copy strong,
+        .notification-optin-copy p {
+            display: none;
+        }
+        .notification-optin-status {
             margin: 0;
             color: var(--muted);
-            font-size: 0.92rem;
-            line-height: 1.45;
+            font-size: 0.73rem;
+            line-height: 1.3;
+            white-space: nowrap;
         }
         .notification-optin button[disabled] {
             opacity: 0.65;
             cursor: default;
             transform: none;
-        }
-        .notification-optin-status {
-            margin-top: 6px;
-            font-size: 0.84rem;
-            color: var(--muted);
         }
         .nav a {
             background: rgba(255,255,255,0.04);
@@ -755,6 +766,20 @@ foreach ($notificationSources as $candidate) {
             .toolbar-actions, .nav, .context-meta { width: 100%; }
             .actions a, button, .nav a { width: 100%; text-align: center; }
             .quantity-stepper { width: 100%; grid-template-columns: 40px minmax(64px, 1fr) 40px; }
+            .notification-optin {
+                top: 12px;
+                right: 12px;
+                bottom: auto;
+                left: auto;
+                max-width: calc(100vw - 24px);
+                padding: 7px 9px;
+            }
+            .notification-optin button {
+                width: auto;
+            }
+            .notification-optin-status {
+                display: none;
+            }
         }
     </style>
     <script>
@@ -771,6 +796,7 @@ foreach ($notificationSources as $candidate) {
         });
 
         var banner = document.getElementById('app-live-banner');
+        var notificationOptin = document.getElementById('app-notification-optin');
         var notificationToggle = document.getElementById('app-notification-toggle');
         var notificationStatus = document.getElementById('app-notification-status');
         var notificationContext = <?= json_encode($notificationContext, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?>;
@@ -871,6 +897,45 @@ foreach ($notificationSources as $candidate) {
             notificationToggle.disabled = notificationsEnabled && systemPermission === 'granted' && !!serviceWorkerRegistration;
             notificationStatus.textContent = (audioReady ? 'Sonnerie prête.' : 'Cliquez pour armer la sonnerie.') + ' ' + supportLabel + ' ' + workerLabel;
         };
+        refreshNotificationStatus = function () {
+            if (!notificationToggle || !notificationStatus) {
+                return;
+            }
+            var canHideOptin = notificationsEnabled && systemPermission === 'granted';
+            if (notificationOptin) {
+                notificationOptin.hidden = canHideOptin;
+                notificationOptin.title = notificationLimitLabel;
+            }
+            notificationToggle.title = notificationLimitLabel;
+            notificationStatus.title = notificationLimitLabel;
+            if (!notificationsEnabled) {
+                notificationToggle.textContent = 'Activer alertes';
+                notificationToggle.disabled = false;
+                notificationStatus.textContent = 'Onglet reduit : OK.';
+                return;
+            }
+            if (systemPermission === 'granted') {
+                notificationToggle.textContent = 'Alertes actives';
+                notificationToggle.disabled = true;
+                notificationStatus.textContent = 'Son actif.';
+                return;
+            }
+            if (systemPermission === 'denied') {
+                notificationToggle.textContent = 'Reactiver alertes';
+                notificationToggle.disabled = false;
+                notificationStatus.textContent = 'Autorisation refusee.';
+                return;
+            }
+            if (systemPermission === 'unsupported') {
+                notificationToggle.textContent = 'Activer son';
+                notificationToggle.disabled = notificationsEnabled;
+                notificationStatus.textContent = 'Son dans l app.';
+                return;
+            }
+            notificationToggle.textContent = 'Activer alertes';
+            notificationToggle.disabled = false;
+            notificationStatus.textContent = audioReady ? 'Son pret.' : 'Activer le son.';
+        };
         var registerServiceWorker = async function () {
             if (!('serviceWorker' in navigator)) {
                 return null;
@@ -960,6 +1025,7 @@ foreach ($notificationSources as $candidate) {
         var notificationPollIntervalMs = function () {
             return document.visibilityState === 'hidden' ? 20000 : 45000;
         };
+        var notificationLimitLabel = 'Onglet ouvert ou reduit : OK. Navigateur ferme : push complet requis.';
         var scheduleNotificationPoll = function (immediate) {
             if (pollTimer) {
                 window.clearTimeout(pollTimer);
@@ -1134,13 +1200,13 @@ foreach ($notificationSources as $candidate) {
             <button type="button" class="button-muted" onclick="this.parentElement.hidden = true;">Masquer</button>
         </div>
         <?php if (current_user() !== null): ?>
-            <section class="notification-optin no-print">
-                <div>
+            <section id="app-notification-optin" class="notification-optin no-print" title="Onglet ouvert ou reduit : OK. Navigateur ferme : push complet requis.">
+                <div class="notification-optin-copy">
                     <strong>Notifications terrain</strong>
                     <p>Bannière, sonnerie légère et notification navigateur après votre accord. Le push hors application complète reste préparé sans polling ni websocket lourds.</p>
                     <div id="app-notification-status" class="notification-optin-status">Initialisation des notifications…</div>
                 </div>
-                <button id="app-notification-toggle" type="button" class="button-muted">Activer les notifications et la sonnerie</button>
+                <button id="app-notification-toggle" type="button" class="button-muted" title="Onglet ouvert ou reduit : OK. Navigateur ferme : push complet requis.">Activer alertes</button>
             </section>
         <?php endif; ?>
         <?php if (current_user() !== null): ?>
