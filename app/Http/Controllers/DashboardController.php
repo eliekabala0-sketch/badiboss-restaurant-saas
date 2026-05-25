@@ -552,6 +552,7 @@ final class DashboardController
             'staff_per_page' => $perPage,
             'staff_total_count' => $totalStaff,
             'staff_total_pages' => $totalPages,
+            'staff_roster' => $allStaffUsers,
             'flash_success' => $flashSuccess,
             'flash_error' => $flashError,
         ]);

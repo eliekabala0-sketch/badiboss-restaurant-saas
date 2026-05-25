@@ -14,6 +14,7 @@ $staffPage = max(1, (int) ($staff_page ?? 1));
 $staffTotalPages = max(1, (int) ($staff_total_pages ?? 1));
 $staffTotalCount = max(0, (int) ($staff_total_count ?? count($rows)));
 $staffDisplayedCount = count($rows);
+$staffRoster = is_array($staff_roster ?? null) ? array_values($staff_roster) : [];
 $payrollPreviewWarning = (string) ($payroll_preview_warning ?? '');
 $payrollRestaurantId = max(0, (int) ($payroll_restaurant_id ?? 0));
 
@@ -107,6 +108,21 @@ $impactSummary = static function (array $row): string {
         </div>
     </div>
 </section>
+
+<?php if ($staffRoster !== []): ?>
+<section class="card no-print" style="padding:14px 18px; margin-bottom:18px;">
+    <h2 style="margin:0 0 10px; font-size:1.02rem;">Personnel complet</h2>
+    <div class="nav" style="margin:0;">
+        <?php foreach ($staffRoster as $idx => $staffUser): ?>
+            <?php if (!is_array($staffUser)) { continue; } ?>
+            <?php $staffRosterPage = $idx + 1; ?>
+            <a class="<?= $staffRosterPage === $staffPage ? '' : 'button-muted' ?>" href="<?= e($payrollHref($payrollRestaurantId, (string) $month_query, $disciplinePreset, $disciplineDate, $payrollHeavyLoaded, $staffRosterPage)) ?>">
+                <?= e((string) ($staffUser['full_name'] ?? ('Agent ' . $staffRosterPage))) ?>
+            </a>
+        <?php endforeach; ?>
+    </div>
+</section>
+<?php endif; ?>
 
 <?php if (!empty($flash_success)): ?><div class="flash-ok"><?= e($flash_success) ?></div><?php endif; ?>
 <?php if (!empty($flash_error)): ?><div class="flash-bad"><?= e($flash_error) ?></div><?php endif; ?>
