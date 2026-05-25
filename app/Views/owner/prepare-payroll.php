@@ -13,6 +13,7 @@ $disciplinePeriodLabel = (string) ($payroll_discipline_period_label ?? '');
 $staffPage = max(1, (int) ($staff_page ?? 1));
 $staffTotalPages = max(1, (int) ($staff_total_pages ?? 1));
 $staffTotalCount = max(0, (int) ($staff_total_count ?? count($rows)));
+$staffDisplayedCount = count($rows);
 $payrollPreviewWarning = (string) ($payroll_preview_warning ?? '');
 $payrollRestaurantId = max(0, (int) ($payroll_restaurant_id ?? 0));
 
@@ -39,7 +40,7 @@ $payrollHref = static function (
     if ($restaurantId > 0) {
         $query['restaurant_id'] = $restaurantId;
     }
-    if ($preset === 'date') {
+    if ($disciplineDate !== '') {
         $query['date'] = $disciplineDate;
     }
     if ($heavy) {
@@ -82,7 +83,7 @@ $impactSummary = static function (array $row): string {
         $parts[] = 'Autres ' . format_money($otherPenalties, (string) ($row['currency'] ?? 'USD'));
     }
 
-    return $parts === [] ? 'Aucun impact calcule' : implode(' · ', $parts);
+    return $parts === [] ? 'Aucun impact calcule' : implode(' - ', $parts);
 };
 ?>
 
@@ -93,10 +94,9 @@ $impactSummary = static function (array $row): string {
     </div>
 </section>
 
-<?php if ($staffTotalPages > 1): ?>
 <section class="card no-print" style="padding:14px 18px; margin-bottom:18px;">
     <div class="topbar" style="margin:0;">
-        <p class="muted" style="margin:0;">Agents affiches : page <?= e((string) $staffPage) ?> / <?= e((string) $staffTotalPages) ?> · total <?= e((string) $staffTotalCount) ?></p>
+        <p class="muted" style="margin:0;">Total agents : <?= e((string) $staffTotalCount) ?> - agents affiches : <?= e((string) $staffDisplayedCount) ?> - page <?= e((string) $staffPage) ?> / <?= e((string) $staffTotalPages) ?></p>
         <div class="toolbar-actions">
             <?php if ($staffPage > 1): ?>
                 <a class="button-muted" href="<?= e($payrollHref($payrollRestaurantId, (string) $month_query, $disciplinePreset, $disciplineDate, $payrollHeavyLoaded, $staffPage - 1)) ?>">Page precedente</a>
@@ -107,7 +107,6 @@ $impactSummary = static function (array $row): string {
         </div>
     </div>
 </section>
-<?php endif; ?>
 
 <?php if (!empty($flash_success)): ?><div class="flash-ok"><?= e($flash_success) ?></div><?php endif; ?>
 <?php if (!empty($flash_error)): ?><div class="flash-bad"><?= e($flash_error) ?></div><?php endif; ?>
@@ -144,7 +143,7 @@ $impactSummary = static function (array $row): string {
         <button type="submit">Actualiser</button>
     </form>
     <p class="muted" style="margin:8px 0 0;">Le score mensuel est la moyenne des scores journaliers applicables du mois.</p>
-    <p class="muted" style="margin:12px 0 0;">Paie calculee sur <?= e($periodLabel) ?> · <?= e($periodStart) ?> → <?= e($periodEnd) ?>. Discipline visible ici sur <?= e($disciplinePeriodLabel) ?>.</p>
+    <p class="muted" style="margin:12px 0 0;">Paie calculee sur <?= e($periodLabel) ?> - <?= e($periodStart) ?> -> <?= e($periodEnd) ?>. Discipline visible ici sur <?= e($disciplinePeriodLabel) ?>.</p>
 </section>
 
 <?php
@@ -209,11 +208,11 @@ require base_path('app/Views/partials/module_quick_nav.php');
                 <td><?= e(format_money((float) ($row['base_salary_monthly'] ?? 0), (string) ($row['currency'] ?? 'USD'))) ?></td>
                 <td>
                     <strong><?= e((string) (int) ($row['applicable_days'] ?? 0)) ?></strong>
-                    <div class="muted" style="font-size:0.84rem; margin-top:6px;">Travailles <?= e((string) (int) ($row['worked_days'] ?? 0)) ?> · repos <?= e((string) (int) ($row['rest_days_recorded'] ?? 0)) ?></div>
+                    <div class="muted" style="font-size:0.84rem; margin-top:6px;">Travailles <?= e((string) (int) ($row['worked_days'] ?? 0)) ?> - repos <?= e((string) (int) ($row['rest_days_recorded'] ?? 0)) ?></div>
                 </td>
                 <td>
                     <strong><?= e((string) (int) ($row['unjustified_absence_days'] ?? 0)) ?> non just.</strong>
-                    <div class="muted" style="font-size:0.84rem; margin-top:6px;"><?= e((string) (int) ($row['justified_absence_days'] ?? 0)) ?> just. · <?= e((string) (int) ($row['illness_days'] ?? 0)) ?> maladie</div>
+                    <div class="muted" style="font-size:0.84rem; margin-top:6px;"><?= e((string) (int) ($row['justified_absence_days'] ?? 0)) ?> just. - <?= e((string) (int) ($row['illness_days'] ?? 0)) ?> maladie</div>
                 </td>
                 <td><?= e((string) (int) ($row['inactive_days'] ?? 0)) ?></td>
                 <td>

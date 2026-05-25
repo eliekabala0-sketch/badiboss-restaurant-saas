@@ -16,15 +16,20 @@ $cur = $restaurant['currency'] ?? 'USD';
 $staffPage = max(1, (int) ($staff_page ?? 1));
 $staffTotalPages = max(1, (int) ($staff_total_pages ?? 1));
 $staffTotalCount = max(0, (int) ($staff_total_count ?? count($gaugeRows)));
+$staffDisplayedCount = count($gaugeRows);
 $disciplineAlertsWarning = (string) ($discipline_alerts_warning ?? '');
 $disciplineRestaurantId = max(0, (int) ($discipline_restaurant_id ?? 0));
+$disciplineScoreMode = in_array($disciplinePreset, ['week', 'month', 'prev_month'], true)
+    ? ($disciplinePreset === 'week' ? 'week' : 'month')
+    : 'day';
+$disciplineTableColspan = 8;
 
 $periodHref = static function (string $preset, string $date, bool $alertsLoaded, int $restaurantId): string {
     $query = ['preset' => $preset];
     if ($restaurantId > 0) {
         $query['restaurant_id'] = $restaurantId;
     }
-    if ($preset === 'date') {
+    if ($date !== '') {
         $query['date'] = $date;
     }
     if ($alertsLoaded) {
@@ -188,7 +193,6 @@ $managerActionHint = static function (array $activePeriod, array $metrics): stri
     </div>
 </section>
 
-<?php if ($staffTotalPages > 1): ?>
 <section class="card no-print" style="padding:14px 18px; margin-bottom:18px;">
     <div class="topbar" style="margin:0;">
         <p class="muted" style="margin:0;">Agents affiches : page <?= e((string) $staffPage) ?> / <?= e((string) $staffTotalPages) ?> · total <?= e((string) $staffTotalCount) ?></p>
@@ -202,7 +206,6 @@ $managerActionHint = static function (array $activePeriod, array $metrics): stri
         </div>
     </div>
 </section>
-<?php endif; ?>
 
 <?php if (!empty($flash_success)): ?><div class="flash-ok"><?= e($flash_success) ?></div><?php endif; ?>
 <?php if (!empty($flash_error)): ?><div class="flash-bad"><?= e($flash_error) ?></div><?php endif; ?>
@@ -281,9 +284,9 @@ require base_path('app/Views/partials/module_quick_nav.php');
         <tr>
             <th>Agent</th>
             <th>Role</th>
-            <th>Jour</th>
-            <th>Semaine</th>
-            <th>Mois</th>
+            <?php if ($disciplineScoreMode === 'day'): ?><th>Score jour</th><?php endif; ?>
+            <?php if ($disciplineScoreMode === 'week'): ?><th>Score semaine</th><?php endif; ?>
+            <?php if ($disciplineScoreMode === 'month'): ?><th>Score mois</th><?php endif; ?>
             <th>Statut / periode</th>
             <th>Retraits / signaux</th>
             <th>Sanction proposee</th>
@@ -294,7 +297,7 @@ require base_path('app/Views/partials/module_quick_nav.php');
         <tbody>
         <?php if ($gaugeRows === []): ?>
             <tr>
-                <td colspan="10" class="muted">Aucune jauge disponible pour cette periode.</td>
+                <td colspan="<?= e((string) $disciplineTableColspan) ?>" class="muted">Aucune jauge disponible pour cette periode.</td>
             </tr>
         <?php endif; ?>
         <?php foreach ($gaugeRows as $row): ?>
@@ -312,9 +315,9 @@ require base_path('app/Views/partials/module_quick_nav.php');
             <tr>
                 <td><strong><?= e((string) ($row['full_name'] ?? '')) ?></strong></td>
                 <td><?= e(restaurant_role_label($row['role_code'] ?? null)) ?></td>
-                <td><strong><?= e($scoreLine($dailyScore)) ?></strong></td>
-                <td><strong><?= e($scoreLine($weeklyScore)) ?></strong></td>
-                <td><strong><?= e($scoreLine($monthlyScore)) ?></strong></td>
+                <?php if ($disciplineScoreMode === 'day'): ?><td><strong><?= e($scoreLine($dailyScore)) ?></strong></td><?php endif; ?>
+                <?php if ($disciplineScoreMode === 'week'): ?><td><strong><?= e($scoreLine($weeklyScore)) ?></strong></td><?php endif; ?>
+                <?php if ($disciplineScoreMode === 'month'): ?><td><strong><?= e($scoreLine($monthlyScore)) ?></strong></td><?php endif; ?>
                 <td>
                     <span class="pill <?= e($zoneClass($active['zone'] ?? 'non_evalue')) ?>"><?= e($statusLabel($active)) ?></span>
                     <div class="muted" style="font-size:0.84rem; margin-top:6px;"><?= e($disciplinePeriodLabel) ?></div>
@@ -333,7 +336,7 @@ require base_path('app/Views/partials/module_quick_nav.php');
             </tr>
             <?php if ($detailRows !== []): ?>
                 <tr>
-                    <td colspan="10" class="muted" style="font-size:0.9rem;">
+                    <td colspan="<?= e((string) $disciplineTableColspan) ?>" class="muted" style="font-size:0.9rem;">
                         <strong>Trace detaillee</strong>
                         <ul style="margin:8px 0 0; padding-left:18px;">
                             <?php foreach ($detailRows as $detailRow): ?>

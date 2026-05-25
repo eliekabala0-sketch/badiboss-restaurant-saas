@@ -436,6 +436,7 @@ final class DashboardController
             'owner_insights_loaded' => $loadOwnerInsights,
             'owner_insights_query' => http_build_query($insightsQuery),
             'owner_insights_warning' => $ownerInsightsWarning,
+            'suppress_app_shell_nav' => true,
         ]));
 
         audit_access('dashboard', $restaurantId, 'screens', 'owner-dashboard', 'Consultation tableau de bord restaurant');
@@ -506,21 +507,34 @@ final class DashboardController
         $pagedUsers = array_slice($allStaffUsers, ($page - 1) * $perPage, $perPage);
         $pagedUserIds = array_values(array_map(static fn (array $u): int => (int) ($u['id'] ?? 0), $pagedUsers));
         $payrollPreviewWarning = null;
-        if ($loadHeavyRequested) {
-            $disciplineRows = $staffDisc->gaugesSnapshotRestaurantDailyLight($restaurantId, $disciplineDate, $pagedUserIds);
-            $preview = $staffDisc->payrollMonthPreviewLight($restaurantId, $monthIn, $disciplineRows, $pagedUserIds);
-            $payrollPreviewWarning = 'Details disciplinaires avances temporairement indisponibles. La paie rapide reste disponible.';
-            $loadHeavy = false;
-        } else {
-            try {
-                $preview = $staffDisc->payrollMonthPreview($restaurantId, $monthIn, $loadHeavy, $pagedUserIds);
-            } catch (\Throwable $e) {
-                error_log('[PAYROLL_PREVIEW_FALLBACK] rid=' . $restaurantId . ' actor=' . (int) ($actor['id'] ?? 0) . ' ' . $e->getMessage());
-                $disciplineRows = $staffDisc->gaugesSnapshotRestaurantDailyLight($restaurantId, $disciplineDate, $pagedUserIds);
+        try {
+            if ($loadHeavyRequested) {
+                $disciplineRows = $staffDisc->gaugesSnapshotRestaurantOperational($restaurantId, 'month', $disciplineDate, $pagedUserIds);
                 $preview = $staffDisc->payrollMonthPreviewLight($restaurantId, $monthIn, $disciplineRows, $pagedUserIds);
                 $payrollPreviewWarning = 'Details disciplinaires avances temporairement indisponibles. La paie rapide reste disponible.';
                 $loadHeavy = false;
+            } else {
+                $preview = $staffDisc->payrollMonthPreview($restaurantId, $monthIn, $loadHeavy, $pagedUserIds);
             }
+        } catch (\Throwable $e) {
+            error_log('[PAYROLL_PREVIEW_FALLBACK] rid=' . $restaurantId . ' actor=' . (int) ($actor['id'] ?? 0) . ' ' . $e->getMessage());
+            try {
+                $disciplineRows = $staffDisc->gaugesSnapshotRestaurantOperational($restaurantId, 'month', $disciplineDate, $pagedUserIds);
+                $preview = $staffDisc->payrollMonthPreviewLight($restaurantId, $monthIn, $disciplineRows, $pagedUserIds);
+                $payrollPreviewWarning = 'Details disciplinaires avances temporairement indisponibles. La paie rapide reste disponible.';
+            } catch (\Throwable $fallbackError) {
+                error_log('[PAYROLL_PREVIEW_EMPTY_FALLBACK] rid=' . $restaurantId . ' actor=' . (int) ($actor['id'] ?? 0) . ' ' . $fallbackError->getMessage());
+                $safeMonth = preg_match('/^(\d{4}-\d{2})/', $monthIn, $m) ? $m[1] : substr($todayY, 0, 7);
+                $preview = [
+                    'month' => $safeMonth,
+                    'period_label' => 'Mois ' . $safeMonth,
+                    'period_start' => $safeMonth . '-01',
+                    'period_end' => substr($todayY, 0, 7) === $safeMonth ? $todayY : $safeMonth . '-31',
+                    'rows' => [],
+                ];
+                $payrollPreviewWarning = 'Calcul paie temporairement indisponible. La page reste ouverte, avec pagination et total agents visibles.';
+            }
+            $loadHeavy = false;
         }
 
         view('owner/prepare-payroll', [
@@ -598,13 +612,23 @@ final class DashboardController
             $payrollProfiles[$uid] = $pr;
         }
 
-        $disciplineAlertsWarning = null;
+        $disciplineRows = [];
+        $disciplineRowsWarning = null;
+        try {
+            $disciplineRows = $staffDisc->gaugesSnapshotRestaurantOperational($restaurantId, $preset, $anchorYmd, $pagedUserIds);
+        } catch (\Throwable $e) {
+            error_log('[DISCIPLINE_PERIOD_FALLBACK] rid=' . $restaurantId . ' preset=' . $preset . ' date=' . $anchorYmd . ' actor=' . (int) ($actor['id'] ?? 0) . ' ' . $e->getMessage());
+            $disciplineRows = $staffDisc->gaugesSnapshotRestaurantDailyLight($restaurantId, $anchorYmd, $pagedUserIds);
+            $disciplineRowsWarning = 'Lecture discipline detaillee temporairement indisponible. Une lecture legere de la date choisie reste affichee.';
+        }
+
+        $disciplineAlertsWarning = $disciplineRowsWarning;
         try {
             $disciplineAlerts = $loadAlerts ? $staffDisc->listDisciplinaryAlerts($restaurantId) : [];
         } catch (\Throwable $e) {
             error_log('[DISCIPLINE_ALERTS_FALLBACK] rid=' . $restaurantId . ' actor=' . (int) ($actor['id'] ?? 0) . ' ' . $e->getMessage());
             $disciplineAlerts = [];
-            $disciplineAlertsWarning = 'Alertes detaillees temporairement indisponibles. La discipline du jour reste disponible.';
+            $disciplineAlertsWarning = trim((string) $disciplineAlertsWarning . ' Alertes detaillees temporairement indisponibles.');
             $loadAlerts = false;
         }
 
@@ -618,7 +642,7 @@ final class DashboardController
             'discipline_period_label' => (string) ($periodWindow['label'] ?? ''),
             'discipline_schedule' => $staffDisc->disciplineWorkScheduleForRestaurant($restaurantId),
             'alerts' => $disciplineAlerts,
-            'gauge_rows' => $staffDisc->gaugesSnapshotRestaurantDailyLight($restaurantId, $anchorYmd, $pagedUserIds),
+            'gauge_rows' => $disciplineRows,
             'discipline_heavy_loaded' => false,
             'discipline_alerts_loaded' => $loadAlerts,
             'discipline_alerts_warning' => $disciplineAlertsWarning,

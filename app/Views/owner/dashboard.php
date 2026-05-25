@@ -22,8 +22,8 @@ $currentUserName = trim((string) ($user['full_name'] ?? 'Equipe'));
 $currentUserRole = restaurant_role_label($user['role_code'] ?? null);
 $currentUserIdentity = trim($currentUserRole . ' ' . $currentUserName);
 $dashboardPrimaryNav = [];
-if (!restaurant_status_blocks_operations($restaurant['status'] ?? null) && $can_access_reports) {
-    $dashboardPrimaryNav[] = ['label' => 'Rapport', 'href' => '/rapport'];
+if (can_access('tenant.dashboard.view')) {
+    $dashboardPrimaryNav[] = ['label' => 'Tableau de bord', 'href' => '/owner'];
 }
 if (!restaurant_status_blocks_operations($restaurant['status'] ?? null) && $can_access_sales) {
     $dashboardPrimaryNav[] = ['label' => 'Ventes', 'href' => '/ventes'];
@@ -43,6 +43,10 @@ if (can_access('staff.team_gauges.view')) {
 if (can_access('payroll.prepare.view')) {
     $dashboardPrimaryNav[] = ['label' => 'Paie', 'href' => '/owner/paie/preparer'];
 }
+if (!restaurant_status_blocks_operations($restaurant['status'] ?? null) && $can_access_reports) {
+    $dashboardPrimaryNav[] = ['label' => 'Rapports', 'href' => '/rapport'];
+}
+$dashboardPrimaryNav[] = ['label' => 'Deconnexion', 'href' => '/logout', 'muted' => true];
 $decisionBadgeClass = static function (?string $status): string {
     return match ((string) $status) {
         'EN_ATTENTE_VALIDATION_MANAGER' => 'badge-progress',
@@ -708,22 +712,6 @@ $saleRemittanceHist = $sale_remittance_history ?? [];
             </div>
         </details>
     <?php endif; ?>
-</section>
-<?php endif; ?>
-
-<?php if (false): ?>
-<section class="card" style="padding:24px; margin-top:24px;">
-    <h2 style="margin-top:0;">Orientation rapide</h2>
-    <div class="nav" style="margin-bottom:0;">
-        <?php if (!restaurant_status_blocks_operations($restaurant['status'] ?? null) && $can_access_stock): ?><a href="/stock">Ouvrir Stock</a><?php endif; ?>
-        <?php if (!restaurant_status_blocks_operations($restaurant['status'] ?? null) && $can_access_kitchen): ?><a href="/cuisine">Ouvrir Cuisine</a><?php endif; ?>
-        <?php if (!restaurant_status_blocks_operations($restaurant['status'] ?? null) && $can_access_sales): ?><a href="/ventes">Ouvrir Ventes</a><?php endif; ?>
-        <?php if (!restaurant_status_blocks_operations($restaurant['status'] ?? null) && $can_access_reports): ?><a href="/rapport">Voir les rapports</a><?php endif; ?>
-        <?php if (!restaurant_status_blocks_operations($restaurant['status'] ?? null) && $can_access_cash): ?><a href="/caisse">Ouvrir Caisse</a><?php endif; ?>
-        <?php if (!restaurant_status_blocks_operations($restaurant['status'] ?? null)): ?><a href="/owner/menu">Voir le menu</a><?php endif; ?>
-        <?php if (can_access('payroll.prepare.view')): ?><a href="/owner/paie/preparer">Préparer la paie</a><?php endif; ?>
-        <?php if (can_access('tenant.access.manage')): ?><a href="/owner/access">Rôles et accès</a><?php endif; ?>
-    </div>
 </section>
 <?php endif; ?>
 

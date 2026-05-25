@@ -791,10 +791,20 @@ final class StaffDisciplineService
      *
      * @return list<array{user_id:int, full_name:string, role_code:?string, gauges: array<string,mixed>}>
      */
-    public function gaugesSnapshotRestaurantOperational(int $restaurantId, string $preset, string $anchorYmd): array
+    public function gaugesSnapshotRestaurantOperational(int $restaurantId, string $preset, string $anchorYmd, ?array $onlyUserIds = null): array
     {
         $this->ensureSchema();
         $users = Container::getInstance()->get('roleAdmin')->listUsersForRestaurant($restaurantId);
+        $allowedUserIds = null;
+        if (is_array($onlyUserIds)) {
+            $allowedUserIds = [];
+            foreach ($onlyUserIds as $candidateId) {
+                $candidateId = (int) $candidateId;
+                if ($candidateId > 0) {
+                    $allowedUserIds[$candidateId] = true;
+                }
+            }
+        }
         $out = [];
         foreach ($users as $u) {
             $uid = (int) ($u['id'] ?? 0);
@@ -802,6 +812,9 @@ final class StaffDisciplineService
                 continue;
             }
             if (($u['status'] ?? '') !== 'active') {
+                continue;
+            }
+            if (is_array($allowedUserIds) && !isset($allowedUserIds[$uid])) {
                 continue;
             }
             try {

@@ -1199,7 +1199,8 @@ foreach ($notificationSources as $candidate) {
             <strong data-live-banner-text>Nouvelle alerte</strong>
             <button type="button" class="button-muted" onclick="this.parentElement.hidden = true;">Masquer</button>
         </div>
-        <?php if (current_user() !== null): ?>
+        <?php $suppressAppShellNav = !empty($suppress_app_shell_nav ?? false); ?>
+        <?php if (current_user() !== null && !$suppressAppShellNav): ?>
             <section id="app-notification-optin" class="notification-optin no-print" title="Onglet ouvert ou reduit : OK. Navigateur ferme : push complet requis.">
                 <div class="notification-optin-copy">
                     <strong>Notifications terrain</strong>
@@ -1209,7 +1210,7 @@ foreach ($notificationSources as $candidate) {
                 <button id="app-notification-toggle" type="button" class="button-muted" title="Onglet ouvert ou reduit : OK. Navigateur ferme : push complet requis.">Activer alertes</button>
             </section>
         <?php endif; ?>
-        <?php if (current_user() !== null): ?>
+        <?php if (current_user() !== null && !$suppressAppShellNav): ?>
             <?php if ((current_user()['scope'] ?? null) !== 'super_admin' && !empty($current_restaurant_context ?? null)): ?>
                 <section class="context-bar">
                     <div class="context-identity">
@@ -1261,7 +1262,7 @@ foreach ($notificationSources as $candidate) {
                     <?php if (can_access('tenant.dashboard.view')): ?><a href="/owner">Tableau de bord</a><?php endif; ?>
                     <?php if (can_access('staff.team_gauges.view')): ?><a href="/owner/discipline">Discipline</a><?php endif; ?>
                     <?php if (can_access('menu.view')): ?><a href="/owner/menu">Menu</a><?php endif; ?>
-                    <?php if (can_access('payroll.prepare.view')): ?><a href="/owner/paie/preparer">Préparer la paie</a><?php endif; ?>
+                    <?php if (can_access('payroll.prepare.view')): ?><a href="/owner/paie/preparer">Paie</a><?php endif; ?>
                     <?php if (!can_access('staff.team_gauges.view') && (current_user()['scope'] ?? null) !== 'super_admin'): ?><a href="/ma-discipline">Ma discipline</a><?php endif; ?>
                     <?php if (can_access('stock.view')): ?><a href="/stock">Stock</a><?php endif; ?>
                     <?php if (can_access('kitchen.view')): ?><a href="/cuisine">Cuisine</a><?php endif; ?>
