@@ -1044,6 +1044,15 @@ final class StaffDisciplineService
             $base = (float) ($profile['base_salary_monthly'] ?? 0);
             $bonus = max(0.0, (float) ($profile['bonus_monthly'] ?? 0));
             $currency = (string) ($profile['currency'] ?? 'USD');
+            $monthlyScore = $gauges['monthly_avg'] ?? ($activePeriod['score'] ?? null);
+            $monthlyScore = is_numeric($monthlyScore) ? (float) $monthlyScore : null;
+            $retentionPct = $this->proposedSalaryRetentionPercent($monthlyScore);
+            $retentionAmount = round($base * ($retentionPct / 100), 2);
+            $net = round(max(0, $base - $retentionAmount + $bonus), 2);
+            $unjustifiedDays = (int) ($metrics['absences_injustifiees'] ?? 0);
+            $inactiveDays = (int) ($metrics['jours_sans_activite_mesuree'] ?? 0);
+            $lateHits = (int) ($metrics['late_remittance_hits'] ?? 0);
+            $shortfallHits = (int) ($metrics['manquants_caisse_hits'] ?? 0);
 
             $rows[] = [
                 'user_id' => $uid,
@@ -1051,25 +1060,25 @@ final class StaffDisciplineService
                 'role_code' => (string) ($u['role_code'] ?? ''),
                 'base_salary_monthly' => $base,
                 'currency' => $currency,
-                'monthly_score_avg' => null,
-                'monthly_score_raw_avg' => null,
+                'monthly_score_avg' => $monthlyScore,
+                'monthly_score_raw_avg' => $monthlyScore,
                 'monthly_score_cap' => null,
-                'monthly_score_zone' => (string) ($activePeriod['zone'] ?? 'non_evalue'),
-                'retention_proposed_pct' => 0,
-                'retention_amount_est' => 0,
+                'monthly_score_zone' => $this->zoneFromScoreNullable($monthlyScore),
+                'retention_proposed_pct' => $retentionPct,
+                'retention_amount_est' => $retentionAmount,
                 'bonus_monthly' => $bonus,
-                'unjustified_absence_days' => (int) ($metrics['absences_injustifiees'] ?? 0),
+                'unjustified_absence_days' => $unjustifiedDays,
                 'justified_absence_days' => (int) ($metrics['absences_justifiees_maladie'] ?? 0),
                 'rest_days_recorded' => 0,
                 'deduction_absence_est' => 0,
                 'service_start_ymd' => $profile['service_start_ymd'] ?? null,
                 'profile_note' => $profile['profile_note'] ?? null,
-                'net_pay_proposed' => round(max(0, $base + $bonus), 2),
+                'net_pay_proposed' => $net,
                 'attendance_days_recorded' => 0,
                 'measured_activity_days' => 0,
                 'ledger_penalty_points_month' => 0,
-                'cash_shortfall_hits' => (int) ($metrics['manquants_caisse_hits'] ?? 0),
-                'late_remittance_hits' => (int) ($metrics['late_remittance_hits'] ?? 0),
+                'cash_shortfall_hits' => $shortfallHits,
+                'late_remittance_hits' => $lateHits,
                 'late_remittance_max_delay_days' => (int) ($metrics['late_remittance_max_delay_days'] ?? 0),
                 'activity_pct_vs_role_avg' => $metrics['activite_pct_moyenne_periode'] ?? null,
                 'discipline_cap_reasons' => [],
@@ -1079,7 +1088,12 @@ final class StaffDisciplineService
                 'week_score' => $gauges['weekly_avg'] ?? null,
                 'month_score' => $gauges['monthly_avg'] ?? null,
                 'month_note' => 'Vue rapide active : retenues detaillees deferrees pour eviter un blocage en plein service.',
-                'non_evaluated_reason' => (($activePeriod['score'] ?? null) === null) ? (string) ($activePeriod['note'] ?? 'Non evalue.') : '',
+                'monthly_mention' => $this->payrollMonthlyMention($monthlyScore),
+                'retention_reason_summary' => $this->payrollRetentionReasonSummary($monthlyScore, $unjustifiedDays, $inactiveDays, $lateHits, $shortfallHits),
+                'inactive_days' => $inactiveDays,
+                'applicable_days' => (int) ($metrics['jours_evalues_periode'] ?? ($activePeriod['jours_moyennes'] ?? 0)),
+                'worked_days' => (int) ($metrics['measured_activity_days'] ?? ($metrics['activite_actions'] ?? 0)),
+                'non_evaluated_reason' => ($monthlyScore === null) ? (string) ($activePeriod['note'] ?? 'Non evalue.') : '',
             ];
         }
 

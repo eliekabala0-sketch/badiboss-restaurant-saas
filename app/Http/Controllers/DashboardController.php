@@ -508,18 +508,16 @@ final class DashboardController
         $pagedUserIds = array_values(array_map(static fn (array $u): int => (int) ($u['id'] ?? 0), $pagedUsers));
         $payrollPreviewWarning = null;
         try {
-            if ($loadHeavyRequested) {
-                $disciplineRows = $staffDisc->gaugesSnapshotRestaurantOperational($restaurantId, 'month', $disciplineDate, $pagedUserIds);
-                $preview = $staffDisc->payrollMonthPreviewLight($restaurantId, $monthIn, $disciplineRows, $pagedUserIds);
-                $payrollPreviewWarning = 'Details disciplinaires avances temporairement indisponibles. La paie rapide reste disponible.';
-                $loadHeavy = false;
-            } else {
-                $preview = $staffDisc->payrollMonthPreview($restaurantId, $monthIn, $loadHeavy, $pagedUserIds);
-            }
+            $disciplineRows = $staffDisc->gaugesSnapshotRestaurantOperational($restaurantId, 'month', $disciplineDate, $pagedUserIds);
+            $preview = $staffDisc->payrollMonthPreviewLight($restaurantId, $monthIn, $disciplineRows, $pagedUserIds);
+            $payrollPreviewWarning = $loadHeavyRequested
+                ? 'Details disciplinaires avances temporairement indisponibles. La paie mensuelle paginee reste disponible.'
+                : null;
+            $loadHeavy = false;
         } catch (\Throwable $e) {
             error_log('[PAYROLL_PREVIEW_FALLBACK] rid=' . $restaurantId . ' actor=' . (int) ($actor['id'] ?? 0) . ' ' . $e->getMessage());
             try {
-                $disciplineRows = $staffDisc->gaugesSnapshotRestaurantOperational($restaurantId, 'month', $disciplineDate, $pagedUserIds);
+                $disciplineRows = $staffDisc->gaugesSnapshotRestaurantDailyLight($restaurantId, $disciplineDate, $pagedUserIds);
                 $preview = $staffDisc->payrollMonthPreviewLight($restaurantId, $monthIn, $disciplineRows, $pagedUserIds);
                 $payrollPreviewWarning = 'Details disciplinaires avances temporairement indisponibles. La paie rapide reste disponible.';
             } catch (\Throwable $fallbackError) {
