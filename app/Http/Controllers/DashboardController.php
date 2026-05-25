@@ -587,7 +587,7 @@ final class DashboardController
             static fn (array $u): bool => ($u['status'] ?? '') === 'active' && (string) ($u['role_code'] ?? '') !== 'owner',
         ));
         $page = max(1, (int) ($request->query['page'] ?? 1));
-        $perPage = 12;
+        $perPage = 4;
         $totalStaff = count($attUsers);
         $totalPages = max(1, (int) ceil(max(1, $totalStaff) / $perPage));
         if ($page > $totalPages) {
@@ -613,10 +613,14 @@ final class DashboardController
         $disciplineRows = [];
         $disciplineRowsWarning = null;
         try {
-            $disciplineRows = $staffDisc->gaugesSnapshotRestaurantOperational($restaurantId, $preset, $anchorYmd, $pagedUserIds);
+            if (in_array($preset, ['today', 'yesterday', 'date'], true)) {
+                $disciplineRows = $staffDisc->gaugesSnapshotRestaurantDailyLight($restaurantId, $periodWindow['start']->format('Y-m-d'), $pagedUserIds);
+            } else {
+                $disciplineRows = $staffDisc->gaugesSnapshotRestaurantOperational($restaurantId, $preset, $anchorYmd, $pagedUserIds);
+            }
         } catch (\Throwable $e) {
             error_log('[DISCIPLINE_PERIOD_FALLBACK] rid=' . $restaurantId . ' preset=' . $preset . ' date=' . $anchorYmd . ' actor=' . (int) ($actor['id'] ?? 0) . ' ' . $e->getMessage());
-            $disciplineRows = $staffDisc->gaugesSnapshotRestaurantDailyLight($restaurantId, $anchorYmd, $pagedUserIds);
+            $disciplineRows = $staffDisc->gaugesSnapshotRestaurantDailyLight($restaurantId, $periodWindow['start']->format('Y-m-d'), $pagedUserIds);
             $disciplineRowsWarning = 'Lecture discipline detaillee temporairement indisponible. Une lecture legere de la date choisie reste affichee.';
         }
 
