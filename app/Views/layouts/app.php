@@ -909,30 +909,30 @@ foreach ($notificationSources as $candidate) {
             notificationToggle.title = notificationLimitLabel;
             notificationStatus.title = notificationLimitLabel;
             if (!notificationsEnabled) {
-                notificationToggle.textContent = 'Activer alertes';
+                notificationToggle.textContent = 'Activer son';
                 notificationToggle.disabled = false;
-                notificationStatus.textContent = 'Onglet reduit : OK.';
+                notificationStatus.textContent = 'Cliquez pour tester la sonnerie et les notifications.';
                 return;
             }
             if (systemPermission === 'granted') {
                 notificationToggle.textContent = 'Alertes actives';
                 notificationToggle.disabled = true;
-                notificationStatus.textContent = 'Son actif.';
+                notificationStatus.textContent = 'Son active. Notifications navigateur autorisees.';
                 return;
             }
             if (systemPermission === 'denied') {
-                notificationToggle.textContent = 'Reactiver alertes';
+                notificationToggle.textContent = 'Activer son';
                 notificationToggle.disabled = false;
-                notificationStatus.textContent = 'Autorisation refusee.';
+                notificationStatus.textContent = audioReady ? 'Son active. Notifications navigateur refusees.' : 'Activer le son. Notifications navigateur refusees.';
                 return;
             }
             if (systemPermission === 'unsupported') {
                 notificationToggle.textContent = 'Activer son';
-                notificationToggle.disabled = notificationsEnabled;
-                notificationStatus.textContent = 'Son dans l app.';
+                notificationToggle.disabled = audioReady;
+                notificationStatus.textContent = audioReady ? 'Son active dans l app.' : 'Activer le son.';
                 return;
             }
-            notificationToggle.textContent = 'Activer alertes';
+            notificationToggle.textContent = 'Activer son';
             notificationToggle.disabled = false;
             notificationStatus.textContent = audioReady ? 'Son pret.' : 'Activer le son.';
         };
