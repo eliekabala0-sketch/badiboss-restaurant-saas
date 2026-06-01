@@ -26,6 +26,15 @@ final class StaffDisciplineService
     /** @var array<string, string> */
     private array $engagementStartYmdCache = [];
 
+    /** @var array<string, ?string> */
+    private array $userFirstDisciplineEvidenceYmdCache = [];
+
+    /** @var array<int, string> */
+    private array $restaurantActivityStartYmdCache = [];
+
+    /** @var array<int, ?string> */
+    private array $lastOperationalResetDayYmdCache = [];
+
     public function __construct(private readonly Database $database)
     {
     }
@@ -218,6 +227,10 @@ final class StaffDisciplineService
         if ($userId <= 0) {
             return null;
         }
+        $cacheKey = $restaurantId . ':' . $userId . ':' . $tz->getName();
+        if (array_key_exists($cacheKey, $this->userFirstDisciplineEvidenceYmdCache)) {
+            return $this->userFirstDisciplineEvidenceYmdCache[$cacheKey];
+        }
         $pdo = $this->database->pdo();
         $candidates = [];
 
@@ -298,10 +311,14 @@ final class StaffDisciplineService
         }
 
         if ($candidates === []) {
+            $this->userFirstDisciplineEvidenceYmdCache[$cacheKey] = null;
+
             return null;
         }
 
         sort($candidates);
+
+        $this->userFirstDisciplineEvidenceYmdCache[$cacheKey] = $candidates[0];
 
         return $candidates[0];
     }
@@ -760,21 +777,32 @@ final class StaffDisciplineService
 
     public function restaurantActivityStartYmd(int $restaurantId): string
     {
+        if (array_key_exists($restaurantId, $this->restaurantActivityStartYmdCache)) {
+            return $this->restaurantActivityStartYmdCache[$restaurantId];
+        }
         $manual = $this->restaurantDisciplineManualStartYmd($restaurantId);
         if ($manual !== null) {
+            $this->restaurantActivityStartYmdCache[$restaurantId] = $manual;
+
             return $manual;
         }
         $firstOp = $this->firstRestaurantCommercialActivityYmd($restaurantId);
         if ($firstOp !== null && $firstOp !== '' && !str_starts_with($firstOp, '0000')) {
+            $this->restaurantActivityStartYmdCache[$restaurantId] = $firstOp;
+
             return $firstOp;
         }
         $r = Container::getInstance()->get('restaurantAdmin')->findRestaurant($restaurantId);
         $created = (string) ($r['created_at'] ?? '');
         if ($created !== '') {
-            return substr($created, 0, 10);
+            $this->restaurantActivityStartYmdCache[$restaurantId] = substr($created, 0, 10);
+
+            return $this->restaurantActivityStartYmdCache[$restaurantId];
         }
 
-        return Container::getInstance()->get('reportService')->todayForRestaurant($restaurantId);
+        $this->restaurantActivityStartYmdCache[$restaurantId] = Container::getInstance()->get('reportService')->todayForRestaurant($restaurantId);
+
+        return $this->restaurantActivityStartYmdCache[$restaurantId];
     }
 
     private function restaurantDisciplineManualStartYmd(int $restaurantId): ?string
@@ -842,6 +870,9 @@ final class StaffDisciplineService
 
     public function lastOperationalResetDayYmd(int $restaurantId): ?string
     {
+        if (array_key_exists($restaurantId, $this->lastOperationalResetDayYmdCache)) {
+            return $this->lastOperationalResetDayYmdCache[$restaurantId];
+        }
         $st = $this->database->pdo()->prepare(
             'SELECT DATE(created_at) AS d FROM audit_logs
              WHERE restaurant_id = :rid AND action_name IN ("super_admin_data_reset","super_admin_stock_reset")
@@ -850,8 +881,12 @@ final class StaffDisciplineService
         $st->execute(['rid' => $restaurantId]);
         $d = $st->fetchColumn();
         if (!is_string($d) || $d === '' || str_starts_with($d, '0000')) {
+            $this->lastOperationalResetDayYmdCache[$restaurantId] = null;
+
             return null;
         }
+
+        $this->lastOperationalResetDayYmdCache[$restaurantId] = $d;
 
         return $d;
     }
