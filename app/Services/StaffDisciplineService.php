@@ -201,15 +201,109 @@ final class StaffDisciplineService
             $createdYmd = $glob;
         }
         $manual = trim((string) ($row['service_start_ymd'] ?? ''));
+        $firstEvidence = $this->userFirstDisciplineEvidenceDayYmd($restaurantId, $userId, $tz);
         if ($manual !== '' && preg_match('/^\d{4}-\d{2}-\d{2}$/', $manual)) {
-            $base = $manual;
+            $base = ($firstEvidence !== null && $firstEvidence < $manual) ? $firstEvidence : $manual;
         } else {
-            $base = $createdYmd;
+            $base = $firstEvidence !== null ? min($createdYmd, $firstEvidence) : $createdYmd;
         }
         $out = max($glob, $base);
         $this->engagementStartYmdCache[$cacheKey] = $out;
 
         return $out;
+    }
+
+    private function userFirstDisciplineEvidenceDayYmd(int $restaurantId, int $userId, DateTimeZone $tz): ?string
+    {
+        if ($userId <= 0) {
+            return null;
+        }
+        $pdo = $this->database->pdo();
+        $candidates = [];
+
+        $queries = [
+            [
+                'SELECT MIN(day_ymd) AS d
+                 FROM staff_score_ledger
+                 WHERE restaurant_id = :rid AND user_id = :uid',
+                static fn ($d): ?string => is_string($d) && preg_match('/^\d{4}-\d{2}-\d{2}$/', $d) ? $d : null,
+            ],
+            [
+                'SELECT MIN(COALESCE(sale_day_ymd, remittance_day_ymd, DATE(requested_at), DATE(created_at))) AS d
+                 FROM cash_transfers
+                 WHERE restaurant_id = :rid AND from_user_id = :uid',
+                static fn ($d): ?string => is_string($d) && preg_match('/^\d{4}-\d{2}-\d{2}$/', $d) ? $d : null,
+            ],
+            [
+                'SELECT MIN(' . sql_sale_activity_datetime_expr('s', 'sr') . ') AS d
+                 FROM sales s
+                 ' . sql_sale_activity_left_join_server_request('s', 'sr') . '
+                 WHERE s.restaurant_id = :rid AND s.server_id = :uid',
+                function ($d) use ($tz): ?string {
+                    if (!is_string($d) || trim($d) === '') {
+                        return null;
+                    }
+                    try {
+                        return (new DateTimeImmutable($d, new DateTimeZone('UTC')))->setTimezone($tz)->format('Y-m-d');
+                    } catch (\Throwable) {
+                        return null;
+                    }
+                },
+            ],
+            [
+                'SELECT MIN(sri.prepared_at) AS d
+                 FROM server_request_items sri
+                 INNER JOIN server_requests sr ON sr.id = sri.request_id
+                 WHERE sr.restaurant_id = :rid AND sri.technical_confirmed_by = :uid',
+                function ($d) use ($tz): ?string {
+                    if (!is_string($d) || trim($d) === '') {
+                        return null;
+                    }
+                    try {
+                        return (new DateTimeImmutable($d, new DateTimeZone('UTC')))->setTimezone($tz)->format('Y-m-d');
+                    } catch (\Throwable) {
+                        return null;
+                    }
+                },
+            ],
+            [
+                'SELECT MIN(created_at) AS d
+                 FROM audit_logs
+                 WHERE restaurant_id = :rid AND user_id = :uid
+                   AND module_name IN ("sales","cash","stock","kitchen","discipline")',
+                function ($d) use ($tz): ?string {
+                    if (!is_string($d) || trim($d) === '') {
+                        return null;
+                    }
+                    try {
+                        return (new DateTimeImmutable($d, new DateTimeZone('UTC')))->setTimezone($tz)->format('Y-m-d');
+                    } catch (\Throwable) {
+                        return null;
+                    }
+                },
+            ],
+        ];
+
+        foreach ($queries as [$sql, $normalize]) {
+            try {
+                $st = $pdo->prepare($sql);
+                $st->execute(['rid' => $restaurantId, 'uid' => $userId]);
+                $ymd = $normalize($st->fetchColumn());
+            } catch (\Throwable) {
+                $ymd = null;
+            }
+            if ($ymd !== null && !str_starts_with($ymd, '0000')) {
+                $candidates[] = $ymd;
+            }
+        }
+
+        if ($candidates === []) {
+            return null;
+        }
+
+        sort($candidates);
+
+        return $candidates[0];
     }
 
     /** @return array{status: string, created_at: string}|null */
