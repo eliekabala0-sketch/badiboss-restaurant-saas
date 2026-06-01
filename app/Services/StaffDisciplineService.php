@@ -726,7 +726,7 @@ final class StaffDisciplineService
         }
         $anchor = $anchorYmd !== '' && preg_match('/^\d{4}-\d{2}-\d{2}$/', $anchorYmd) ? $anchorYmd : $todayY;
 
-        if (!$this->isOwnerDisciplineRole($this->resolveRoleCodeForUser($restaurantId, $userId))) {
+        if ($preset === 'today' && $anchor === $todayY && !$this->isOwnerDisciplineRole($this->resolveRoleCodeForUser($restaurantId, $userId))) {
             $this->syncAbsenceEscalationsForUser($restaurantId, $userId);
         }
 
@@ -752,8 +752,6 @@ final class StaffDisciplineService
         }
 
         $yesterday = (new DateTimeImmutable($todayY . ' 00:00:00', $tz))->modify('-1 day')->format('Y-m-d');
-        $base = $this->gaugesOperationalSummaryStats($restaurantId, $userId, $preset, $anchor, $todayY, $tz);
-
         $active = match ($preset) {
             'today' => $this->snapshotDayGauge($restaurantId, $userId, $todayY, 'Aujourd’hui', $tz),
             'yesterday' => $this->snapshotDayGauge($restaurantId, $userId, $yesterday, 'Hier', $tz),
@@ -763,6 +761,26 @@ final class StaffDisciplineService
             'prev_month' => $this->snapshotCalendarMonthGauge($restaurantId, $userId, $anchor, true, $tz, $todayY),
             default => $this->snapshotDayGauge($restaurantId, $userId, $todayY, 'Aujourd’hui', $tz),
         };
+
+        if (in_array($preset, ['week', 'month', 'prev_month'], true)) {
+            $refY = $this->operationalReferenceDayYmd($restaurantId, $preset, $anchor, $todayY, $tz);
+            $daily = $this->scoreForDayOrNull($restaurantId, $userId, $refY, $tz);
+            $weekly = $preset === 'week'
+                ? ($active['score'] ?? null)
+                : $this->averageLastDaysNullable($restaurantId, $userId, $refY, 7, $tz);
+            $monthly = in_array($preset, ['month', 'prev_month'], true)
+                ? ($active['score'] ?? null)
+                : null;
+            $base = [
+                'daily' => $daily,
+                'weekly_avg' => $weekly,
+                'monthly_avg' => $monthly,
+                'zone' => $this->zoneFromScoreNullable(is_numeric($monthly) ? (float) $monthly : null),
+                'ledger_preview' => array_slice($this->listLedgerForUserMonth($restaurantId, $userId, substr($refY, 0, 7) . '-01'), -12),
+            ];
+        } else {
+            $base = $this->gaugesOperationalSummaryStats($restaurantId, $userId, $preset, $anchor, $todayY, $tz);
+        }
 
         $roleCode = $this->resolveRoleCodeForUser($restaurantId, $userId);
         $rowMetrics = $this->buildOperationalRowMetrics($restaurantId, $userId, $roleCode, $preset, $anchor, $active);
