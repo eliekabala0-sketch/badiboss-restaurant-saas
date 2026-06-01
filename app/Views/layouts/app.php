@@ -967,7 +967,7 @@ foreach ($notificationSources as $candidate) {
             if (detail.system === false) {
                 return;
             }
-            if (document.visibilityState === 'visible' && document.hasFocus()) {
+            if (document.visibilityState === 'visible' && document.hasFocus() && detail.forceSystem !== true) {
                 return;
             }
             var body = String(message);
@@ -1103,11 +1103,17 @@ foreach ($notificationSources as $candidate) {
             scheduleNotificationPoll(true);
             window.BadibossNotify.push(
                 systemPermission === 'granted'
-                    ? 'Notifications navigateur et sonnerie activées pour ce navigateur.'
-                    : 'Sonnerie activée. Autorisez aussi les notifications navigateur si votre appareil le propose.',
+                    ? 'Son active. Notification navigateur test envoyee.'
+                    : 'Son active. Autorisez aussi les notifications navigateur si votre appareil le propose.',
                 systemPermission === 'granted' ? 'success' : 'warning',
                 8000,
-                { silent: false, system: false }
+                {
+                    silent: false,
+                    system: systemPermission === 'granted',
+                    forceSystem: systemPermission === 'granted',
+                    tag: 'badiboss-notification-test',
+                    url: window.location.href
+                }
             );
         };
         var currentRole = document.body ? (document.body.getAttribute('data-current-role') || '') : '';

@@ -479,18 +479,28 @@ final class DashboardController
         $staffDisc = Container::getInstance()->get('staffDiscipline');
         $staffDisc->ensureSchema();
         $todayY = Container::getInstance()->get('reportService')->todayForRestaurant($restaurantId);
-        $disciplinePreset = strtolower(trim((string) ($request->query['preset'] ?? 'today')));
-        $disciplineAllowed = ['today', 'yesterday', 'date', 'week', 'month', 'prev_month'];
-        if (!in_array($disciplinePreset, $disciplineAllowed, true)) {
-            $disciplinePreset = 'today';
-        }
-        $disciplineDateRaw = trim((string) ($request->query['date'] ?? ''));
-        $disciplineDate = preg_match('/^\d{4}-\d{2}-\d{2}$/', $disciplineDateRaw) ? $disciplineDateRaw : $todayY;
-        $disciplineWindow = Container::getInstance()->get('reportService')->operationalPeriodWindow($restaurantId, $disciplinePreset, $disciplineDate);
         $monthIn = trim((string) ($request->query['month'] ?? ''));
         if ($monthIn === '') {
             $monthIn = substr($todayY, 0, 7);
         }
+        $safeMonth = preg_match('/^(\d{4}-\d{2})/', $monthIn, $monthMatch) ? $monthMatch[1] : substr($todayY, 0, 7);
+        try {
+            $monthEndYmd = (new \DateTimeImmutable($safeMonth . '-01'))->modify('last day of this month')->format('Y-m-d');
+        } catch (\Throwable) {
+            $monthEndYmd = $todayY;
+        }
+        $payrollMonthAnchor = substr($todayY, 0, 7) === $safeMonth ? $todayY : $monthEndYmd;
+        $disciplinePresetRaw = trim((string) ($request->query['preset'] ?? ''));
+        $disciplinePreset = strtolower($disciplinePresetRaw !== '' ? $disciplinePresetRaw : 'month');
+        $disciplineAllowed = ['today', 'yesterday', 'date', 'week', 'month', 'prev_month'];
+        if (!in_array($disciplinePreset, $disciplineAllowed, true)) {
+            $disciplinePreset = 'month';
+        }
+        $disciplineDateRaw = trim((string) ($request->query['date'] ?? ''));
+        $hasExplicitDisciplineDate = preg_match('/^\d{4}-\d{2}-\d{2}$/', $disciplineDateRaw) === 1;
+        $disciplineDate = $hasExplicitDisciplineDate ? $disciplineDateRaw : $payrollMonthAnchor;
+        $disciplineWindowPreset = ($disciplinePreset === 'today' && $hasExplicitDisciplineDate) ? 'date' : $disciplinePreset;
+        $disciplineWindow = Container::getInstance()->get('reportService')->operationalPeriodWindow($restaurantId, $disciplineWindowPreset, $disciplineDate);
         $loadHeavyRequested = (string) ($request->query['heavy'] ?? '') === '1';
         $loadHeavy = false;
         $allStaffUsers = array_values(array_filter(
@@ -508,10 +518,9 @@ final class DashboardController
         $pagedUserIds = array_values(array_map(static fn (array $u): int => (int) ($u['id'] ?? 0), $pagedUsers));
         $payrollPreviewWarning = null;
         try {
-            $disciplineRows = $staffDisc->gaugesSnapshotRestaurantOperational($restaurantId, 'month', $disciplineDate, $pagedUserIds);
-            $preview = $staffDisc->payrollMonthPreviewLight($restaurantId, $monthIn, $disciplineRows, $pagedUserIds);
+            $preview = $staffDisc->payrollMonthPreview($restaurantId, $safeMonth, false, $pagedUserIds);
             $payrollPreviewWarning = $loadHeavyRequested
-                ? 'Details disciplinaires avances temporairement indisponibles. La paie mensuelle paginee reste disponible.'
+                ? 'Details journaliers avances temporairement differes. La paie mensuelle reelle reste calculee sur le mois demande.'
                 : null;
             $loadHeavy = false;
         } catch (\Throwable $e) {
