@@ -249,6 +249,7 @@ $module_nav_items = [
     ['label' => 'Date', 'href' => '/owner/discipline?' . http_build_query(['restaurant_id' => $disciplineRestaurantId > 0 ? $disciplineRestaurantId : null, 'preset' => 'date', 'date' => $disciplineAnchorDate, 'alerts' => $disciplineAlertsLoaded ? '1' : null])],
     ['label' => 'Semaine', 'href' => $periodHref('week', $disciplineAnchorDate, $disciplineAlertsLoaded, $disciplineRestaurantId)],
     ['label' => 'Mois', 'href' => $periodHref('month', $disciplineAnchorDate, $disciplineAlertsLoaded, $disciplineRestaurantId)],
+    ['label' => 'Mois precedent', 'href' => $periodHref('prev_month', $todayYmd, $disciplineAlertsLoaded, $disciplineRestaurantId)],
     ['label' => 'Alertes', 'href' => '/owner/discipline?' . http_build_query(['restaurant_id' => $disciplineRestaurantId > 0 ? $disciplineRestaurantId : null, 'preset' => $disciplinePreset, 'date' => $disciplineAnchorDate, 'alerts' => 1])],
     ['label' => 'Sanctions', 'href' => '#discipline-tableau'],
     ['label' => 'Clemence', 'href' => '#discipline-actions'],

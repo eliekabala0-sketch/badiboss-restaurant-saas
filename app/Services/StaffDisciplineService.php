@@ -4042,9 +4042,15 @@ final class StaffDisciplineService
             $label = 'Mois précédent · ' . $start->format('m/Y');
         } else {
             $start = $anchor->modify('first day of this month')->setTime(0, 0, 0);
-            $endClamp = min($anchor->format('Y-m-d'), $todayYmd);
-            $end = new DateTimeImmutable($endClamp . ' 00:00:00', $tz);
-            $label = 'Mois en cours · ' . $start->format('m/Y');
+            $anchorMonth = $anchor->format('Y-m');
+            $todayMonth = substr($todayYmd, 0, 7);
+            if ($anchorMonth < $todayMonth) {
+                $end = $start->modify('first day of next month')->modify('-1 day')->setTime(0, 0, 0);
+            } else {
+                $endClamp = min($anchor->format('Y-m-d'), $todayYmd);
+                $end = new DateTimeImmutable($endClamp . ' 00:00:00', $tz);
+            }
+            $label = 'Mois de ' . $start->format('m/Y');
         }
         $glob = $this->effectiveGlobalStartYmd($restaurantId);
         $cursor = $start->format('Y-m-d') >= $glob ? $start : new DateTimeImmutable($glob . ' 00:00:00', $tz);

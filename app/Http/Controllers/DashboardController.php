@@ -574,13 +574,19 @@ final class DashboardController
         $staffDisc->ensureSchema();
         $todayY = Container::getInstance()->get('reportService')->todayForRestaurant($restaurantId);
         $preset = strtolower(trim((string) ($request->query['preset'] ?? 'today')));
-        $allowed = ['today', 'yesterday', 'date', 'week', 'month', 'prev_month'];
+        $allowed = ['today', 'day', 'yesterday', 'date', 'week', 'month', 'prev_month'];
         if (!in_array($preset, $allowed, true)) {
             $preset = 'today';
         }
         $anchorRaw = trim((string) ($request->query['date'] ?? ''));
-        $anchorYmd = preg_match('/^\d{4}-\d{2}-\d{2}$/', $anchorRaw) ? $anchorRaw : $todayY;
-        $periodWindow = Container::getInstance()->get('reportService')->operationalPeriodWindow($restaurantId, $preset, $anchorYmd);
+        $hasExplicitAnchor = preg_match('/^\d{4}-\d{2}-\d{2}$/', $anchorRaw) === 1;
+        $anchorYmd = $hasExplicitAnchor ? $anchorRaw : $todayY;
+        $displayPreset = $preset === 'day' ? 'today' : $preset;
+        $periodPreset = $displayPreset;
+        if ($displayPreset === 'today' && $hasExplicitAnchor) {
+            $periodPreset = 'date';
+        }
+        $periodWindow = Container::getInstance()->get('reportService')->operationalPeriodWindow($restaurantId, $periodPreset, $anchorYmd);
         $loadAlerts = (string) ($request->query['alerts'] ?? '') === '1';
         $users = Container::getInstance()->get('roleAdmin')->listUsersForRestaurant($restaurantId);
         $attUsers = array_values(array_filter(
@@ -614,13 +620,13 @@ final class DashboardController
         $disciplineRows = [];
         $disciplineRowsWarning = null;
         try {
-            if (in_array($preset, ['today', 'yesterday', 'date'], true)) {
+            if (in_array($periodPreset, ['today', 'yesterday', 'date'], true)) {
                 $disciplineRows = $staffDisc->gaugesSnapshotRestaurantDailyLight($restaurantId, $periodWindow['start']->format('Y-m-d'), $pagedUserIds);
             } else {
-                $disciplineRows = $staffDisc->gaugesSnapshotRestaurantOperational($restaurantId, $preset, $anchorYmd, $pagedUserIds);
+                $disciplineRows = $staffDisc->gaugesSnapshotRestaurantOperational($restaurantId, $periodPreset, $anchorYmd, $pagedUserIds);
             }
         } catch (\Throwable $e) {
-            error_log('[DISCIPLINE_PERIOD_FALLBACK] rid=' . $restaurantId . ' preset=' . $preset . ' date=' . $anchorYmd . ' actor=' . (int) ($actor['id'] ?? 0) . ' ' . $e->getMessage());
+            error_log('[DISCIPLINE_PERIOD_FALLBACK] rid=' . $restaurantId . ' preset=' . $periodPreset . ' date=' . $anchorYmd . ' actor=' . (int) ($actor['id'] ?? 0) . ' ' . $e->getMessage());
             $disciplineRows = $staffDisc->gaugesSnapshotRestaurantDailyLight($restaurantId, $periodWindow['start']->format('Y-m-d'), $pagedUserIds);
             $disciplineRowsWarning = 'Lecture discipline detaillee temporairement indisponible. Une lecture legere de la date choisie reste affichee.';
         }
@@ -640,7 +646,7 @@ final class DashboardController
             'user' => $actor,
             'restaurant' => Container::getInstance()->get('restaurantAdmin')->findRestaurant($restaurantId),
             'today_ymd' => $todayY,
-            'discipline_preset' => $preset,
+            'discipline_preset' => $displayPreset,
             'discipline_anchor_date' => $anchorYmd,
             'discipline_period_label' => (string) ($periodWindow['label'] ?? ''),
             'discipline_schedule' => $staffDisc->disciplineWorkScheduleForRestaurant($restaurantId),
