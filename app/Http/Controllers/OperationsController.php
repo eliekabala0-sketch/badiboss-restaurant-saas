@@ -23,6 +23,11 @@ final class OperationsController
         $movements = Container::getInstance()->get('stockService')->listMovementHistoryRows($restaurantId);
         $stockCategoryFilter = trim((string) ($request->query['stock_cat'] ?? 'all'));
         $stockItemIdsForFilter = stock_item_ids_matching_category_filter($items, $stockCategoryFilter);
+        $stockControlItemId = max(0, (int) ($request->query['sc_item_id'] ?? 0));
+        $stockControlItemIds = $stockItemIdsForFilter;
+        if ($stockControlItemId > 0) {
+            $stockControlItemIds = [$stockControlItemId];
+        }
         $movementsDisplay = $stockItemIdsForFilter === null
             ? $movements
             : array_values(array_filter(
@@ -55,11 +60,12 @@ final class OperationsController
         }
         $stockControlBundle = null;
         if (can_access('stock.control.report.view')) {
-            $stockControlBundle = Container::getInstance()->get('stockControlReport')->buildBundle($restaurantId, $scDate, $scPeriod);
+            $stockControlBundle = Container::getInstance()->get('stockControlReport')->buildBundle($restaurantId, $scDate, $scPeriod, $stockControlItemIds);
         }
         $stockControlStockQuery = http_build_query(array_filter([
             'sc_date' => $scDate,
             'sc_period' => $scPeriod,
+            'sc_item_id' => $stockControlItemId > 0 ? $stockControlItemId : null,
             'stock_cat' => ($stockCategoryFilter !== 'all' && $stockCategoryFilter !== '') ? $stockCategoryFilter : null,
         ], static fn ($v): bool => $v !== null && $v !== ''));
 
@@ -89,6 +95,7 @@ final class OperationsController
             'stock_control_bundle' => $stockControlBundle,
             'stock_control_return_to' => 'stock',
             'stock_control_stock_query' => $stockControlStockQuery,
+            'stock_control_item_id' => $stockControlItemId,
         ]));
 
         audit_access('stock', $restaurantId, 'screens', 'stock', 'Consultation module stock');

@@ -15,16 +15,22 @@ $articles = $scb['articles'] ?? [];
 $cats = $scb['categories'] ?? [];
 $plates = $scb['prepared_plates'] ?? [];
 $checks = $scb['checks_recent'] ?? [];
+$summary = is_array($scb['summary'] ?? null) ? $scb['summary'] : [];
 $periodLabel = (string) ($scb['period_label'] ?? '');
 $dateYmd = (string) ($scb['date_ymd'] ?? '');
 $periodKey = (string) ($scb['period_key'] ?? 'daily');
 $stockQs = $stock_control_stock_query ?? '';
+$selectedStockControlItemId = (int) ($stock_control_item_id ?? 0);
+$stockControlCurrency = restaurant_currency(is_array($restaurant ?? null) ? $restaurant : []);
+$stockControlItems = is_array($items ?? null) ? $items : [];
 ?>
 <style>
 .stock-control-wrap details { margin-top: 14px; }
 .stock-control-wrap summary { cursor: pointer; font-weight: 600; }
 .stock-cc-gap { color: #fecaca; font-weight: 700; }
 .stock-cc-ok { color: #86efac; }
+.stock-cc-status { white-space: nowrap; }
+.stock-cc-filter { display:grid; gap:12px; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); align-items:end; margin:12px 0; }
 @media (max-width: 720px) {
     .stock-cc-desktop-table { display: none !important; }
     .stock-cc-cards { display: grid !important; gap: 12px; }
@@ -41,12 +47,88 @@ $stockQs = $stock_control_stock_query ?? '';
             <p class="muted" style="margin-top:0;"><?= e((string) ($scb['formula_note'] ?? '')) ?></p>
             <p style="margin:10px 0;"><strong>Période affichée</strong> : <?= e($dateYmd) ?> · <?= e($periodKey) ?></p>
 
+            <?php if ($retTo === 'stock'): ?>
+            <form method="get" action="/stock" class="stock-cc-filter">
+                <?= $ridHidden ?>
+                <label>Date
+                    <input type="date" name="sc_date" value="<?= e($dateYmd) ?>">
+                </label>
+                <label>Periode
+                    <select name="sc_period">
+                        <option value="daily" <?= $periodKey === 'daily' ? 'selected' : '' ?>>Jour</option>
+                        <option value="weekly" <?= $periodKey === 'weekly' ? 'selected' : '' ?>>Semaine</option>
+                        <option value="monthly" <?= $periodKey === 'monthly' ? 'selected' : '' ?>>Mois</option>
+                    </select>
+                </label>
+                <label>Produit
+                    <select name="sc_item_id">
+                        <option value="0">Tous les produits</option>
+                        <?php foreach ($stockControlItems as $it): ?>
+                            <?php if (!empty($it['archived_at'])) { continue; } ?>
+                            <option value="<?= e((string) (int) ($it['id'] ?? 0)) ?>" <?= $selectedStockControlItemId === (int) ($it['id'] ?? 0) ? 'selected' : '' ?>><?= e((string) ($it['name'] ?? '')) ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                </label>
+                <?php if (($stock_category_filter ?? 'all') !== 'all' && ($stock_category_filter ?? '') !== ''): ?>
+                    <input type="hidden" name="stock_cat" value="<?= e((string) $stock_category_filter) ?>">
+                <?php endif; ?>
+                <button type="submit">Actualiser</button>
+            </form>
+            <?php endif; ?>
+
             <details open style="margin-top:14px;">
                 <summary>Résumé (période sélectionnée)</summary>
                 <div class="grid stats" style="margin-top:12px;">
                     <article class="card stat"><span>Articles suivis</span><strong><?= e((string) count($articles)) ?></strong></article>
                     <article class="card stat"><span>Plats préparés restants</span><strong><?= e((string) count($plates)) ?></strong></article>
                     <article class="card stat"><span>Derniers contrôles physiques</span><strong><?= e((string) count($checks)) ?></strong></article>
+                    <article class="card stat"><span>Avec comptage periode</span><strong><?= e((string) (int) ($summary['with_physical_check'] ?? 0)) ?></strong></article>
+                    <article class="card stat"><span>Manquants</span><strong><?= e((string) (int) ($summary['manquant'] ?? 0)) ?></strong></article>
+                    <article class="card stat"><span>Valeur ecarts</span><strong><?= e(format_money((float) ($summary['gap_value_total'] ?? 0), $stockControlCurrency)) ?></strong></article>
+                </div>
+            </details>
+
+            <details open style="margin-top:14px;">
+                <summary>Stock attendu vs reel</summary>
+                <div class="report-table-desktop stock-cc-desktop-table" style="overflow-x:auto; margin-top:12px;">
+                    <table class="table-clean" style="width:100%; border-collapse:collapse; font-size:0.92rem;">
+                        <thead><tr>
+                            <th>Produit</th>
+                            <th>Stock attendu</th>
+                            <th>Stock reel</th>
+                            <th>Ecart</th>
+                            <th>Valeur ecart</th>
+                            <th>Ventes liees</th>
+                            <th>Statut</th>
+                            <th>Rupture probable</th>
+                        </tr></thead>
+                        <tbody>
+                        <?php foreach ($articles as $ar): ?>
+                            <?php $gapQty = (float) ($ar['gap_qty_total'] ?? 0); ?>
+                            <tr>
+                                <td><strong><?= e((string) ($ar['name'] ?? '')) ?></strong><br><span class="muted"><?= e((string) ($ar['unit_name'] ?? '')) ?></span></td>
+                                <td><?= e((string) ($ar['expected_total_end'] ?? 0)) ?></td>
+                                <td><?= e((string) ($ar['actual_total_found'] ?? 0)) ?><?php if (empty($ar['physical_check_found'])): ?><br><span class="muted">systeme</span><?php endif; ?></td>
+                                <td class="<?= $gapQty < -0.0001 ? 'stock-cc-gap' : ($gapQty > 0.0001 ? 'stock-cc-ok' : '') ?>"><?= e((string) ($ar['gap_qty_total'] ?? 0)) ?></td>
+                                <td><?= e(format_money((float) ($ar['gap_value_total'] ?? 0), $stockControlCurrency)) ?></td>
+                                <td><?= e((string) ($ar['sales_linked_consumption_qty'] ?? 0)) ?><br><span class="muted"><?= e((string) (int) ($ar['sales_linked_lines'] ?? 0)) ?> ligne(s)</span></td>
+                                <td><span class="pill stock-cc-status <?= e((string) ($ar['stock_status_class'] ?? 'badge-neutral')) ?>"><?= e((string) ($ar['stock_status_label'] ?? 'A verifier')) ?></span></td>
+                                <td class="muted"><?= e((string) ($ar['probable_breakpoint'] ?? '')) ?></td>
+                            </tr>
+                        <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                </div>
+                <div class="stock-cc-cards">
+                    <?php foreach ($articles as $ar): ?>
+                        <article class="report-agent-card">
+                            <strong><?= e((string) ($ar['name'] ?? '')) ?></strong>
+                            <p>Attendu <strong><?= e((string) ($ar['expected_total_end'] ?? 0)) ?></strong> · Reel <strong><?= e((string) ($ar['actual_total_found'] ?? 0)) ?></strong></p>
+                            <p>Ecart <strong><?= e((string) ($ar['gap_qty_total'] ?? 0)) ?></strong> · <?= e(format_money((float) ($ar['gap_value_total'] ?? 0), $stockControlCurrency)) ?></p>
+                            <p><span class="pill <?= e((string) ($ar['stock_status_class'] ?? 'badge-neutral')) ?>"><?= e((string) ($ar['stock_status_label'] ?? 'A verifier')) ?></span></p>
+                            <p class="muted"><?= e((string) ($ar['probable_breakpoint'] ?? '')) ?></p>
+                        </article>
+                    <?php endforeach; ?>
                 </div>
             </details>
 
@@ -194,9 +276,9 @@ $stockQs = $stock_control_stock_query ?? '';
                                     <td><?= e((string) ($ar['name'] ?? '')) ?>
                                         <input type="hidden" name="pc_stock_item_id[<?= (string) $idx ?>]" value="<?= e((string) (int) ($ar['id'] ?? 0)) ?>">
                                     </td>
-                                    <td><?= e((string) ($ar['qty_store_now'] ?? '')) ?></td>
+                                    <td><?= e((string) ($ar['expected_store_end'] ?? ($ar['qty_store_now'] ?? ''))) ?></td>
                                     <td><input name="pc_found_store[<?= (string) $idx ?>]" type="text" inputmode="decimal" style="width:88px;" placeholder="—"></td>
-                                    <td><?= e((string) ($ar['qty_kitchen_now'] ?? '')) ?></td>
+                                    <td><?= e((string) ($ar['expected_kitchen_end'] ?? ($ar['qty_kitchen_now'] ?? ''))) ?></td>
                                     <td><input name="pc_found_kitchen[<?= (string) $idx ?>]" type="text" inputmode="decimal" style="width:88px;" placeholder="—"></td>
                                     <td><input name="pc_gap_motif[<?= (string) $idx ?>]" type="text" style="min-width:160px;" placeholder="Si écart"></td>
                                 </tr>
