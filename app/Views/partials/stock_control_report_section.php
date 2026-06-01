@@ -22,7 +22,9 @@ $periodKey = (string) ($scb['period_key'] ?? 'daily');
 $stockQs = $stock_control_stock_query ?? '';
 $selectedStockControlItemId = (int) ($stock_control_item_id ?? 0);
 $stockControlCurrency = restaurant_currency(is_array($restaurant ?? null) ? $restaurant : []);
-$stockControlItems = is_array($items ?? null) ? $items : [];
+$stockControlItems = is_array($stock_control_items ?? null)
+    ? $stock_control_items
+    : (is_array($items ?? null) ? $items : []);
 ?>
 <style>
 .stock-control-wrap details { margin-top: 14px; }

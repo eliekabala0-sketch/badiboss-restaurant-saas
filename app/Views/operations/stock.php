@@ -32,6 +32,7 @@ $itemsActive = array_values(array_filter(
     $items,
     static fn (array $it): bool => empty($it['archived_at'])
 ));
+$stock_control_items = $itemsActive;
 $itemsArchived = array_values(array_filter(
     $items,
     static fn (array $it): bool => !empty($it['archived_at'])
