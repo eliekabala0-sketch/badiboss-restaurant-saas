@@ -167,14 +167,14 @@ final class StaffDisciplineService
      * Premier jour où la discipline s’applique : max(début restaurant / post-reset,
      * date sur le profil paie, sinon date de création du compte — fuseau rapports).
      */
-    public function effectiveAgentEngagementStartYmd(int $restaurantId, int $userId, DateTimeZone $tz): string
+    public function effectiveAgentEngagementStartYmd(int $restaurantId, int $userId, DateTimeZone $tz, ?string $asOfYmd = null): string
     {
         $this->ensureSchema();
-        $cacheKey = $restaurantId . ':' . $userId . ':' . $tz->getName();
+        $cacheKey = $restaurantId . ':' . $userId . ':' . $tz->getName() . ':' . (string) $asOfYmd;
         if (array_key_exists($cacheKey, $this->engagementStartYmdCache)) {
             return $this->engagementStartYmdCache[$cacheKey];
         }
-        $glob = $this->effectiveGlobalStartYmd($restaurantId);
+        $glob = $this->effectiveGlobalStartYmd($restaurantId, $asOfYmd);
         $st = $this->database->pdo()->prepare(
             'SELECT u.created_at, p.service_start_ymd
              FROM users u
@@ -595,7 +595,7 @@ final class StaffDisciplineService
         $rs = Container::getInstance()->get('reportService');
         $refY = $this->operationalReferenceDayYmd($restaurantId, $preset, $anchorYmd, $todayY, $tz);
         $daily = $this->scoreForDayOrNull($restaurantId, $userId, $refY, $tz);
-        $glob = $this->effectiveGlobalStartYmd($restaurantId);
+        $glob = $this->effectiveGlobalStartYmd($restaurantId, $refY);
         if ($preset === 'week') {
             $win = $rs->operationalPeriodWindow($restaurantId, 'week', $anchorYmd);
             $first = max($glob, $win['start']->format('Y-m-d'));
@@ -658,8 +658,8 @@ final class StaffDisciplineService
         if ($fromYmd > $toYmd) {
             return null;
         }
-        $glob = $this->effectiveGlobalStartYmd($restaurantId);
-        $engagement = $this->effectiveAgentEngagementStartYmd($restaurantId, $userId, $tz);
+        $glob = $this->effectiveGlobalStartYmd($restaurantId, $toYmd);
+        $engagement = $this->effectiveAgentEngagementStartYmd($restaurantId, $userId, $tz, $toYmd);
         try {
             $start = max($fromYmd, $glob, $engagement);
             $endD = new DateTimeImmutable($toYmd . ' 00:00:00', $tz);
@@ -1668,7 +1668,7 @@ final class StaffDisciplineService
         string $toYmd,
         DateTimeZone $tz,
     ): int {
-        $eng = $this->effectiveAgentEngagementStartYmd($restaurantId, $userId, $tz);
+        $eng = $this->effectiveAgentEngagementStartYmd($restaurantId, $userId, $tz, $toYmd);
         $start = max($fromYmd, $eng);
         if ($start > $toYmd) {
             return 0;
@@ -1742,7 +1742,7 @@ final class StaffDisciplineService
         string $toYmd,
         DateTimeZone $tz,
     ): int {
-        $eng = $this->effectiveAgentEngagementStartYmd($restaurantId, $userId, $tz);
+        $eng = $this->effectiveAgentEngagementStartYmd($restaurantId, $userId, $tz, $toYmd);
         $start = max($fromYmd, $eng);
         if ($start > $toYmd) {
             return 0;
@@ -2187,7 +2187,7 @@ final class StaffDisciplineService
             $effectiveStart = (string) ($monthBreakdown['effective_period_start'] ?? max(
                 $start,
                 $restaurantStartYmd,
-                $this->effectiveAgentEngagementStartYmd($restaurantId, $uid, $tz)
+                $this->effectiveAgentEngagementStartYmd($restaurantId, $uid, $tz, $end)
             ));
 
             $rows[] = [
@@ -3338,7 +3338,7 @@ final class StaffDisciplineService
             $ledgerReasons[(string) ($ln['reason_code'] ?? '')] = true;
         }
 
-        $glob = $this->effectiveGlobalStartYmd($restaurantId);
+        $glob = $this->effectiveGlobalStartYmd($restaurantId, $dayYmd);
         if ($dayYmd < $glob) {
             return [
                 'evaluated' => false,
@@ -3357,7 +3357,7 @@ final class StaffDisciplineService
             ];
         }
 
-        $engagementYmd = $this->effectiveAgentEngagementStartYmd($restaurantId, $userId, $tz);
+        $engagementYmd = $this->effectiveAgentEngagementStartYmd($restaurantId, $userId, $tz, $dayYmd);
         if ($dayYmd < $engagementYmd) {
             return [
                 'evaluated' => false,
@@ -3545,8 +3545,8 @@ final class StaffDisciplineService
         DateTimeZone $tz,
         int $maxDays,
     ): int {
-        $glob = $this->effectiveGlobalStartYmd($restaurantId);
-        $engagement = $this->effectiveAgentEngagementStartYmd($restaurantId, $userId, $tz);
+        $glob = $this->effectiveGlobalStartYmd($restaurantId, $endYmd);
+        $engagement = $this->effectiveAgentEngagementStartYmd($restaurantId, $userId, $tz, $endYmd);
         $firstActivityYmd = $this->userFirstActivityDayYmd($restaurantId, $userId, $tz);
         if ($firstActivityYmd === null) {
             return 0;
@@ -3812,8 +3812,8 @@ final class StaffDisciplineService
 
     private function averageLastDaysNullable(int $restaurantId, int $userId, string $todayYmd, int $days, DateTimeZone $tz): ?float
     {
-        $glob = $this->effectiveGlobalStartYmd($restaurantId);
-        $engagement = $this->effectiveAgentEngagementStartYmd($restaurantId, $userId, $tz);
+        $glob = $this->effectiveGlobalStartYmd($restaurantId, $todayYmd);
+        $engagement = $this->effectiveAgentEngagementStartYmd($restaurantId, $userId, $tz, $todayYmd);
         try {
             $cursor = new DateTimeImmutable($todayYmd . ' 00:00:00', $tz);
         } catch (\Throwable) {
@@ -3849,8 +3849,8 @@ final class StaffDisciplineService
         } catch (\Throwable) {
             return null;
         }
-        $glob = $this->effectiveGlobalStartYmd($restaurantId);
-        $engagement = $this->effectiveAgentEngagementStartYmd($restaurantId, $userId, $tz);
+        $glob = $this->effectiveGlobalStartYmd($restaurantId, $todayYmd);
+        $engagement = $this->effectiveAgentEngagementStartYmd($restaurantId, $userId, $tz, $todayYmd);
         $monthStartYmd = $monthFirst->format('Y-m-d') >= $glob ? $monthFirst->format('Y-m-d') : $glob;
         $startYmd = max($monthStartYmd, $engagement);
         try {
@@ -3879,14 +3879,20 @@ final class StaffDisciplineService
         return is_finite($r) ? $r : null;
     }
 
-    private function effectiveGlobalStartYmd(int $restaurantId): string
+    private function effectiveGlobalStartYmd(int $restaurantId, ?string $asOfYmd = null): string
     {
         $activity = $this->restaurantActivityStartYmd($restaurantId);
         $reset = $this->lastOperationalResetDayYmd($restaurantId);
         $starts = [$activity];
         if ($reset !== null) {
             try {
-                $starts[] = (new DateTimeImmutable($reset))->modify('+1 day')->format('Y-m-d');
+                $scopeYmd = (is_string($asOfYmd) && preg_match('/^\d{4}-\d{2}-\d{2}$/', $asOfYmd) === 1)
+                    ? $asOfYmd
+                    : Container::getInstance()->get('reportService')->todayForRestaurant($restaurantId);
+                if ($reset <= $scopeYmd) {
+                    $resetStart = (new DateTimeImmutable($reset))->modify('+1 day')->format('Y-m-d');
+                    $starts[] = $resetStart > $scopeYmd ? $scopeYmd : $resetStart;
+                }
             } catch (\Throwable) {
             }
         }
@@ -3950,7 +3956,7 @@ final class StaffDisciplineService
      */
     private function snapshotDayGauge(int $restaurantId, int $userId, string $dayYmd, string $titre, DateTimeZone $tz): array
     {
-        $glob = $this->effectiveGlobalStartYmd($restaurantId);
+        $glob = $this->effectiveGlobalStartYmd($restaurantId, $dayYmd);
         if ($dayYmd < $glob) {
             return [
                 'titre' => $titre,
@@ -4006,12 +4012,13 @@ final class StaffDisciplineService
      */
     private function snapshotOperationalWeekGauge(int $restaurantId, int $userId, string $anchorYmd, DateTimeZone $tz): array
     {
-        $glob = $this->effectiveGlobalStartYmd($restaurantId);
         $win = Container::getInstance()->get('reportService')->operationalPeriodWindow($restaurantId, 'week', $anchorYmd);
+        $weekEndYmd = $win['end']->modify('-1 day')->format('Y-m-d');
+        $glob = $this->effectiveGlobalStartYmd($restaurantId, $weekEndYmd);
         $titre = (string) ($win['label'] ?? 'Semaine');
         $start = $win['start'];
         $endExcl = $win['end'];
-        $engagement = $this->effectiveAgentEngagementStartYmd($restaurantId, $userId, $tz);
+        $engagement = $this->effectiveAgentEngagementStartYmd($restaurantId, $userId, $tz, $weekEndYmd);
         $floor = max($glob, $engagement);
         $role = $this->resolveRoleCodeForUser($restaurantId, $userId);
         $sum = 0.0;
@@ -4076,8 +4083,8 @@ final class StaffDisciplineService
      */
     private function snapshotRollingAverageGauge(int $restaurantId, int $userId, string $anchorYmd, int $days, string $titre, DateTimeZone $tz): array
     {
-        $glob = $this->effectiveGlobalStartYmd($restaurantId);
-        $engagement = $this->effectiveAgentEngagementStartYmd($restaurantId, $userId, $tz);
+        $glob = $this->effectiveGlobalStartYmd($restaurantId, $anchorYmd);
+        $engagement = $this->effectiveAgentEngagementStartYmd($restaurantId, $userId, $tz, $anchorYmd);
         $floor = max($glob, $engagement);
         try {
             $end = new DateTimeImmutable($anchorYmd . ' 00:00:00', $tz);
@@ -4169,9 +4176,9 @@ final class StaffDisciplineService
             }
             $label = 'Mois de ' . $start->format('m/Y');
         }
-        $glob = $this->effectiveGlobalStartYmd($restaurantId);
+        $glob = $this->effectiveGlobalStartYmd($restaurantId, $end->format('Y-m-d'));
         $cursor = $start->format('Y-m-d') >= $glob ? $start : new DateTimeImmutable($glob . ' 00:00:00', $tz);
-        $engagement = $this->effectiveAgentEngagementStartYmd($restaurantId, $userId, $tz);
+        $engagement = $this->effectiveAgentEngagementStartYmd($restaurantId, $userId, $tz, $end->format('Y-m-d'));
         $cursorY = max($cursor->format('Y-m-d'), $engagement);
         try {
             $cursor = new DateTimeImmutable($cursorY . ' 00:00:00', $tz);
