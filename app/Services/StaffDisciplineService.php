@@ -2056,6 +2056,29 @@ final class StaffDisciplineService
             $inactiveDays = (int) ($monthMetrics['days_without_measured_activity'] ?? 0);
             $scoreRetentionAmt = round($base * ($retentionPct / 100), 2);
             $shortfallAmount = round((float) ($shortfallByUser[$uid] ?? 0), 2);
+            $shortfallHits = array_key_exists('cash_shortfall_hits', $monthMetrics)
+                ? (int) ($monthMetrics['cash_shortfall_hits'] ?? 0)
+                : ($roleCode === 'cashier_server'
+                    ? $this->ledgerReasonCountForUserDayRange(
+                        $restaurantId,
+                        $uid,
+                        $start,
+                        $end,
+                        ['server_shortfall_today', 'server_shortfall_legacy'],
+                    )
+                    : 0);
+            $lateRemittance = null;
+            if (!array_key_exists('late_remittance_hits', $monthMetrics) || !array_key_exists('late_remittance_max_delay_days', $monthMetrics)) {
+                $lateRemittance = $roleCode === 'cashier_server'
+                    ? $this->serverLateRemittanceMetricsForRange($restaurantId, $uid, $start, $end)
+                    : ['late_count' => 0, 'max_delay_days' => 0];
+            }
+            $lateRemittanceHits = array_key_exists('late_remittance_hits', $monthMetrics)
+                ? (int) ($monthMetrics['late_remittance_hits'] ?? 0)
+                : (int) ($lateRemittance['late_count'] ?? 0);
+            $lateRemittanceMaxDelay = array_key_exists('late_remittance_max_delay_days', $monthMetrics)
+                ? (int) ($monthMetrics['late_remittance_max_delay_days'] ?? 0)
+                : (int) ($lateRemittance['max_delay_days'] ?? 0);
             $otherPenaltyAmount = 0.0;
             $net = round(max(0, $base - $scoreRetentionAmt - $shortfallAmount - $otherPenaltyAmount + $bonus), 2);
 
@@ -2100,10 +2123,10 @@ final class StaffDisciplineService
                 'attendance_days_recorded' => $attDays,
                 'measured_activity_days' => (int) ($monthMetrics['measured_activity_days'] ?? 0),
                 'ledger_penalty_points_month' => $ledgerPenaltyPts,
-                'cash_shortfall_hits' => (int) ($monthMetrics['cash_shortfall_hits'] ?? 0),
+                'cash_shortfall_hits' => $shortfallHits,
                 'cash_shortfall_amount_est' => $shortfallAmount,
-                'late_remittance_hits' => (int) ($monthMetrics['late_remittance_hits'] ?? 0),
-                'late_remittance_max_delay_days' => (int) ($monthMetrics['late_remittance_max_delay_days'] ?? 0),
+                'late_remittance_hits' => $lateRemittanceHits,
+                'late_remittance_max_delay_days' => $lateRemittanceMaxDelay,
                 'activity_pct_vs_role_avg' => $monthMetrics['activity_pct_vs_role_avg'] ?? null,
                 'discipline_cap_reasons' => $disciplineMonth['cap_reasons'] ?? [],
                 'other_penalties_amount' => $otherPenaltyAmount,
@@ -2112,8 +2135,8 @@ final class StaffDisciplineService
                     $monthlyScore,
                     $unjDays,
                     $inactiveDays,
-                    (int) ($monthMetrics['late_remittance_hits'] ?? 0),
-                    (int) ($monthMetrics['cash_shortfall_hits'] ?? 0)
+                    $lateRemittanceHits,
+                    $shortfallHits
                 ),
                 'period_effective_start' => $effectiveStart,
                 'restaurant_start_ymd' => $restaurantStartYmd,
