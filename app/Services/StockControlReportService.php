@@ -71,6 +71,7 @@ final class StockControlReportService
         $futureAggByItem = $this->movementAggregatesAfterPeriod($restaurantId, $endAt, $tz);
         $salesSignalsByItem = $this->salesStockSignalsForPeriod($restaurantId, $startAt, $endAt);
         $physicalByItem = $this->latestPhysicalChecksForPeriod($restaurantId, $startAt, $endAt);
+        $purchaseCostsByItem = $this->purchaseUnitCostsForPeriod($restaurantId, $startAt, $endAt);
         $articles = [];
         foreach ($items as $si) {
             $sid = (int) $si['id'];
@@ -100,7 +101,8 @@ final class StockControlReportService
             $physical = $physicalByItem[$sid] ?? null;
             $qtyStore = (float) ($si['quantity_in_stock'] ?? 0);
             $qtyKitchen = (float) ($si['kitchen_qty'] ?? 0);
-            $unitCost = (float) ($si['estimated_unit_cost'] ?? 0);
+            $costInfo = $this->resolveUnitCost($si, $purchaseCostsByItem[$sid] ?? null);
+            $unitCost = (float) ($costInfo['unit_cost'] ?? 0);
 
             $deltaMagasin = (float) $agg['entrees'] + (float) $agg['retours'] + (float) $agg['corrections_magasin']
                 - (float) $agg['sortie_cuisine'] - (float) $agg['sortie_autre'] - (float) $agg['pertes'];
@@ -123,21 +125,30 @@ final class StockControlReportService
             $foundTotal = round($foundStore + $foundKitchen, 4);
             $gapQty = round($foundTotal - $expectedTotal, 4);
             $gapValue = round($gapQty * $unitCost, 2);
+            $missingQty = round(max(0.0, -1 * $gapQty), 4);
+            $missingValue = round($missingQty * $unitCost, 2);
             $salesLinkedQty = (float) ($salesSignal['sales_linked_consumption_qty'] ?? 0);
             $stockStatus = $this->stockControlStatus($gapQty, $expectedTotal, $hasPhysical, $salesLinkedQty, (float) $agg['conso_cuisine']);
+            $currentTotalQty = round($qtyStore + $qtyKitchen, 4);
 
             $macro = stock_control_macro_category((string) ($si['category_label'] ?? ''));
+            $controlGroup = $macro === 'Boissons' ? 'boisson' : 'general';
 
             $articles[] = [
                 'id' => $sid,
                 'name' => (string) ($si['name'] ?? ''),
                 'category_label' => trim((string) ($si['category_label'] ?? '')),
                 'macro_category' => $macro,
+                'control_group' => $controlGroup,
                 'unit_name' => (string) ($si['unit_name'] ?? ''),
                 'estimated_unit_cost' => round($unitCost, 4),
+                'unit_cost_source' => (string) ($costInfo['source'] ?? 'non_renseigne'),
+                'unit_cost_label' => (string) ($costInfo['label'] ?? 'Prix a renseigner'),
                 'qty_store_now' => round($qtyStore, 4),
                 'qty_kitchen_now' => round($qtyKitchen, 4),
-                'qty_total_available' => round($qtyStore + $qtyKitchen, 4),
+                'qty_total_available' => $currentTotalQty,
+                'stock_total_qty' => $currentTotalQty,
+                'stock_total_value' => round($currentTotalQty * $unitCost, 2),
                 'opening_store' => round($openingStore, 4),
                 'opening_kitchen' => round($openingKitchen, 4),
                 'opening_total' => round($openingStore + $openingKitchen, 4),
@@ -161,6 +172,8 @@ final class StockControlReportService
                 'physical_check_at' => $hasPhysical ? (string) ($physical['created_at'] ?? '') : null,
                 'gap_qty_total' => $gapQty,
                 'gap_value_total' => $gapValue,
+                'missing_qty_total' => $missingQty,
+                'missing_value_total' => $missingValue,
                 'stock_status_key' => $stockStatus['key'],
                 'stock_status_label' => $stockStatus['label'],
                 'stock_status_class' => $stockStatus['class'],
@@ -173,6 +186,7 @@ final class StockControlReportService
 
         $categories = $this->rollupCategories($articles);
         $summary = $this->expectedStockSummary($articles);
+        $controlGroups = $this->stockControlGroups($articles);
 
         return [
             'period_label' => $periodLabel,
@@ -182,6 +196,7 @@ final class StockControlReportService
             'period_key' => $period,
             'formula_note' => 'Stock attendu = stock initial periode + entrees validees + retours valides + ajustements valides - pertes validees - sorties validees - consommations validees liees cuisine/ventes. Les ventes validees et les produits servis au serveur alimentent le signal ventes liees; le stock reel vient du dernier comptage physique de la periode quand il existe, sinon du stock systeme courant.',
             'summary' => $summary,
+            'control_groups' => $controlGroups,
             'articles' => $articles,
             'categories' => $categories,
             'prepared_plates' => $this->preparedPlatesKitchenRemaining($restaurantId),
@@ -198,6 +213,7 @@ final class StockControlReportService
         $pdo = $this->database->pdo();
 
         $ids = $post['pc_stock_item_id'] ?? [];
+        $foundTotalRaw = $post['pc_found_total'] ?? [];
         $foundStoreRaw = $post['pc_found_store'] ?? [];
         $foundKitchenRaw = $post['pc_found_kitchen'] ?? [];
         $motifs = $post['pc_gap_motif'] ?? [];
@@ -226,16 +242,21 @@ final class StockControlReportService
             if ($stockItemId <= 0) {
                 continue;
             }
+            $ft = isset($foundTotalRaw[$i]) ? trim((string) $foundTotalRaw[$i]) : '';
             $fs = isset($foundStoreRaw[$i]) ? trim((string) $foundStoreRaw[$i]) : '';
             $fk = isset($foundKitchenRaw[$i]) ? trim((string) $foundKitchenRaw[$i]) : '';
-            if ($fs === '' && $fk === '') {
+            if ($ft === '' && $fs === '' && $fk === '') {
                 continue;
             }
 
+            $foundTotal = $ft === '' ? null : $this->parseDecimal($ft);
             $foundS = $fs === '' ? null : $this->parseDecimal($fs);
             $foundK = $fk === '' ? null : $this->parseDecimal($fk);
-            if ($foundS === null && $foundK === null) {
+            if ($foundTotal === null && $foundS === null && $foundK === null) {
                 continue;
+            }
+            if ($foundTotal !== null && $foundTotal < 0) {
+                throw new \RuntimeException('La quantite trouvee ne peut pas etre negative.');
             }
             if (($foundS !== null && $foundS < 0) || ($foundK !== null && $foundK < 0)) {
                 throw new \RuntimeException('Les quantités trouvées ne peuvent pas être négatives.');
@@ -248,8 +269,13 @@ final class StockControlReportService
             $eStore = (float) ($exp['expected_store_end'] ?? ($exp['qty_store_now'] ?? 0));
             $eKitchen = (float) ($exp['expected_kitchen_end'] ?? ($exp['qty_kitchen_now'] ?? 0));
 
-            $useStore = $foundS ?? $eStore;
-            $useKitchen = $foundK ?? $eKitchen;
+            if ($foundTotal !== null) {
+                $useKitchen = $eKitchen;
+                $useStore = $foundTotal - $useKitchen;
+            } else {
+                $useStore = $foundS ?? $eStore;
+                $useKitchen = $foundK ?? $eKitchen;
+            }
 
             $gapS = round($useStore - $eStore, 4);
             $gapK = round($useKitchen - $eKitchen, 4);
@@ -499,6 +525,9 @@ final class StockControlReportService
                 'actual_total_found' => 0.0,
                 'gap_qty_total' => 0.0,
                 'gap_value_total' => 0.0,
+                'missing_qty_total' => 0.0,
+                'missing_value_total' => 0.0,
+                'stock_total_value' => 0.0,
                 'sales_linked_consumption_qty' => 0.0,
             ];
             $map[$cat]['opening_store'] += (float) ($a['opening_store'] ?? 0);
@@ -514,13 +543,18 @@ final class StockControlReportService
             $map[$cat]['actual_total_found'] += (float) ($a['actual_total_found'] ?? 0);
             $map[$cat]['gap_qty_total'] += (float) ($a['gap_qty_total'] ?? 0);
             $map[$cat]['gap_value_total'] += (float) ($a['gap_value_total'] ?? 0);
+            $map[$cat]['missing_qty_total'] += (float) ($a['missing_qty_total'] ?? 0);
+            $map[$cat]['missing_value_total'] += (float) ($a['missing_value_total'] ?? 0);
+            $map[$cat]['stock_total_value'] += (float) ($a['stock_total_value'] ?? 0);
             $map[$cat]['sales_linked_consumption_qty'] += (float) ($a['sales_linked_consumption_qty'] ?? 0);
         }
         foreach ($map as &$row) {
-            foreach (['opening_store', 'period_entrees', 'period_sortie_cuisine', 'period_sortie_autre', 'period_conso_cuisine', 'period_pertes', 'qty_store_now', 'qty_kitchen_now', 'qty_total_available', 'expected_total_end', 'actual_total_found', 'gap_qty_total', 'sales_linked_consumption_qty'] as $k) {
+            foreach (['opening_store', 'period_entrees', 'period_sortie_cuisine', 'period_sortie_autre', 'period_conso_cuisine', 'period_pertes', 'qty_store_now', 'qty_kitchen_now', 'qty_total_available', 'expected_total_end', 'actual_total_found', 'gap_qty_total', 'missing_qty_total', 'sales_linked_consumption_qty'] as $k) {
                 $row[$k] = round((float) $row[$k], 4);
             }
             $row['gap_value_total'] = round((float) $row['gap_value_total'], 2);
+            $row['missing_value_total'] = round((float) $row['missing_value_total'], 2);
+            $row['stock_total_value'] = round((float) $row['stock_total_value'], 2);
         }
         unset($row);
         $list = array_values($map);
@@ -581,6 +615,81 @@ final class StockControlReportService
         }
 
         return $out;
+    }
+
+    /**
+     * @return array<int, array{unit_cost: float, quantity: float, value: float}>
+     */
+    private function purchaseUnitCostsForPeriod(int $restaurantId, DateTimeImmutable $startAt, DateTimeImmutable $endAt): array
+    {
+        $st = $this->database->pdo()->prepare(
+            'SELECT sm.stock_item_id AS sid,
+                    COALESCE(SUM(sm.quantity), 0) AS qty,
+                    COALESCE(SUM(CASE
+                        WHEN COALESCE(sm.total_cost_snapshot, 0) > 0 THEN sm.total_cost_snapshot
+                        WHEN COALESCE(sm.unit_cost_snapshot, 0) > 0 THEN sm.unit_cost_snapshot * sm.quantity
+                        ELSE 0
+                    END), 0) AS val
+             FROM stock_movements sm
+             WHERE sm.restaurant_id = :rid
+               AND sm.movement_type = "ENTREE"
+               AND sm.status = "VALIDE"
+               AND COALESCE(sm.validated_at, sm.created_at) >= :start_at
+               AND COALESCE(sm.validated_at, sm.created_at) < :end_at
+             GROUP BY sm.stock_item_id'
+        );
+        $st->execute([
+            'rid' => $restaurantId,
+            'start_at' => $startAt->format('Y-m-d H:i:s'),
+            'end_at' => $endAt->format('Y-m-d H:i:s'),
+        ]);
+
+        $out = [];
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            $sid = (int) ($row['sid'] ?? 0);
+            $qty = (float) ($row['qty'] ?? 0);
+            $value = (float) ($row['val'] ?? 0);
+            if ($sid <= 0 || $qty <= self::EPS || $value <= self::EPS) {
+                continue;
+            }
+            $out[$sid] = [
+                'unit_cost' => round($value / $qty, 4),
+                'quantity' => round($qty, 4),
+                'value' => round($value, 2),
+            ];
+        }
+
+        return $out;
+    }
+
+    /**
+     * @param array<string, mixed> $stockItem
+     * @param array{unit_cost: float, quantity: float, value: float}|null $purchaseCost
+     * @return array{unit_cost: float, source: string, label: string}
+     */
+    private function resolveUnitCost(array $stockItem, ?array $purchaseCost): array
+    {
+        $estimated = (float) ($stockItem['estimated_unit_cost'] ?? 0);
+        if ($estimated > self::EPS) {
+            return [
+                'unit_cost' => round($estimated, 4),
+                'source' => 'prix_article',
+                'label' => 'Prix article',
+            ];
+        }
+        if (is_array($purchaseCost) && (float) ($purchaseCost['unit_cost'] ?? 0) > self::EPS) {
+            return [
+                'unit_cost' => round((float) $purchaseCost['unit_cost'], 4),
+                'source' => 'achat_moyen',
+                'label' => 'Prix calcule achat total / quantite',
+            ];
+        }
+
+        return [
+            'unit_cost' => 0.0,
+            'source' => 'non_renseigne',
+            'label' => 'Prix a renseigner',
+        ];
     }
 
     /**
@@ -737,6 +846,14 @@ final class StockControlReportService
             'actual_total' => 0.0,
             'gap_qty_total' => 0.0,
             'gap_value_total' => 0.0,
+            'missing_qty_total' => 0.0,
+            'missing_value_total' => 0.0,
+            'stock_store_qty' => 0.0,
+            'stock_kitchen_qty' => 0.0,
+            'stock_total_qty' => 0.0,
+            'stock_store_value' => 0.0,
+            'stock_kitchen_value' => 0.0,
+            'stock_total_value' => 0.0,
             'sales_linked_consumption_qty' => 0.0,
             'with_physical_check' => 0,
             'conforme' => 0,
@@ -750,6 +867,17 @@ final class StockControlReportService
             $summary['actual_total'] += (float) ($row['actual_total_found'] ?? 0);
             $summary['gap_qty_total'] += (float) ($row['gap_qty_total'] ?? 0);
             $summary['gap_value_total'] += (float) ($row['gap_value_total'] ?? 0);
+            $summary['missing_qty_total'] += (float) ($row['missing_qty_total'] ?? 0);
+            $summary['missing_value_total'] += (float) ($row['missing_value_total'] ?? 0);
+            $unitCost = (float) ($row['estimated_unit_cost'] ?? 0);
+            $storeQty = (float) ($row['qty_store_now'] ?? 0);
+            $kitchenQty = (float) ($row['qty_kitchen_now'] ?? 0);
+            $summary['stock_store_qty'] += $storeQty;
+            $summary['stock_kitchen_qty'] += $kitchenQty;
+            $summary['stock_total_qty'] += (float) ($row['stock_total_qty'] ?? ($storeQty + $kitchenQty));
+            $summary['stock_store_value'] += $storeQty * $unitCost;
+            $summary['stock_kitchen_value'] += $kitchenQty * $unitCost;
+            $summary['stock_total_value'] += (float) ($row['stock_total_value'] ?? (($storeQty + $kitchenQty) * $unitCost));
             $summary['sales_linked_consumption_qty'] += (float) ($row['sales_linked_consumption_qty'] ?? 0);
             if (!empty($row['physical_check_found'])) {
                 $summary['with_physical_check']++;
@@ -759,12 +887,67 @@ final class StockControlReportService
                 $summary[$key]++;
             }
         }
-        foreach (['expected_total', 'actual_total', 'gap_qty_total', 'sales_linked_consumption_qty'] as $key) {
+        foreach (['expected_total', 'actual_total', 'gap_qty_total', 'missing_qty_total', 'stock_store_qty', 'stock_kitchen_qty', 'stock_total_qty', 'sales_linked_consumption_qty'] as $key) {
             $summary[$key] = round((float) $summary[$key], 4);
         }
-        $summary['gap_value_total'] = round((float) $summary['gap_value_total'], 2);
+        foreach (['gap_value_total', 'missing_value_total', 'stock_store_value', 'stock_kitchen_value', 'stock_total_value'] as $key) {
+            $summary[$key] = round((float) $summary[$key], 2);
+        }
 
         return $summary;
+    }
+
+    /**
+     * @param list<array<string, mixed>> $articles
+     * @return array<string, array<string, mixed>>
+     */
+    private function stockControlGroups(array $articles): array
+    {
+        $groups = [
+            'boisson' => $this->emptyControlGroup('Controle Boisson'),
+            'general' => $this->emptyControlGroup('Controle Stock General'),
+            'global' => $this->emptyControlGroup('Total global manquant'),
+        ];
+        foreach ($articles as $row) {
+            $key = (string) ($row['control_group'] ?? 'general') === 'boisson' ? 'boisson' : 'general';
+            foreach ([$key, 'global'] as $target) {
+                $groups[$target]['articles_count']++;
+                $groups[$target]['expected_total'] += (float) ($row['expected_total_end'] ?? 0);
+                $groups[$target]['actual_total'] += (float) ($row['actual_total_found'] ?? 0);
+                $groups[$target]['gap_qty_total'] += (float) ($row['gap_qty_total'] ?? 0);
+                $groups[$target]['gap_value_total'] += (float) ($row['gap_value_total'] ?? 0);
+                $groups[$target]['missing_qty_total'] += (float) ($row['missing_qty_total'] ?? 0);
+                $groups[$target]['missing_value_total'] += (float) ($row['missing_value_total'] ?? 0);
+            }
+        }
+        foreach ($groups as &$group) {
+            foreach (['expected_total', 'actual_total', 'gap_qty_total', 'missing_qty_total'] as $key) {
+                $group[$key] = round((float) $group[$key], 4);
+            }
+            foreach (['gap_value_total', 'missing_value_total'] as $key) {
+                $group[$key] = round((float) $group[$key], 2);
+            }
+        }
+        unset($group);
+
+        return $groups;
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function emptyControlGroup(string $label): array
+    {
+        return [
+            'label' => $label,
+            'articles_count' => 0,
+            'expected_total' => 0.0,
+            'actual_total' => 0.0,
+            'gap_qty_total' => 0.0,
+            'gap_value_total' => 0.0,
+            'missing_qty_total' => 0.0,
+            'missing_value_total' => 0.0,
+        ];
     }
 
     private function parseDecimal(string $raw): float

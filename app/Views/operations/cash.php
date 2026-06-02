@@ -9,6 +9,12 @@ $pendingServerSales = $cash['pending_server_sales'] ?? [];
 $cashiers = $cash['cashiers'] ?? [];
 $cashTodaySnapC = $cash_today_snapshot ?? null;
 $cashClarityToday = is_array($cashTodaySnapC['cash_clarity_today'] ?? null) ? $cashTodaySnapC['cash_clarity_today'] : [];
+$cashClarityPeriod = is_array($cash_clarity_period ?? null) ? $cash_clarity_period : [];
+$cashPreset = (string) ($cash_preset ?? 'today');
+$cashBaseDate = (string) ($cash_base_date ?? date('Y-m-d'));
+$cashRidQs = ((current_user()['scope'] ?? null) === 'super_admin' && !empty($restaurant['id']))
+    ? '&restaurant_id=' . rawurlencode((string) (int) $restaurant['id'])
+    : '';
 $dayHoldCash = $day_start_hold ?? ['blocked' => false, 'reasons' => []];
 $cashPulse = $module_today_pulse ?? [];
 $cashRegBack = $regularization_backlog ?? [];
@@ -43,6 +49,52 @@ $module_nav_items = [
 ];
 require base_path('app/Views/partials/module_quick_nav.php');
 ?>
+
+<section class="card no-print" style="padding:16px 18px; margin-bottom:20px;">
+    <strong>Changer la periode</strong>
+    <div class="toolbar-actions" style="margin-top:12px; flex-wrap:wrap;">
+        <a class="button-muted" href="/caisse?cash_preset=today<?= e($cashRidQs) ?>">Jour</a>
+        <a class="button-muted" href="/caisse?cash_preset=yesterday<?= e($cashRidQs) ?>">Hier</a>
+        <form method="get" action="/caisse" style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+            <?php if ((current_user()['scope'] ?? null) === 'super_admin'): ?>
+                <input type="hidden" name="restaurant_id" value="<?= e((string) $restaurant['id']) ?>">
+            <?php endif; ?>
+            <input type="hidden" name="cash_preset" value="date">
+            <input type="date" name="date" value="<?= e($cashBaseDate) ?>">
+            <button type="submit" class="button-muted">Date</button>
+        </form>
+        <a class="button-muted" href="/caisse?cash_preset=week&date=<?= e(rawurlencode($cashBaseDate)) ?><?= e($cashRidQs) ?>">Semaine</a>
+        <a class="button-muted" href="/caisse?cash_preset=month&date=<?= e(rawurlencode($cashBaseDate)) ?><?= e($cashRidQs) ?>">Mois</a>
+        <a class="button-muted" href="/caisse?cash_preset=prev_month&date=<?= e(rawurlencode($cashBaseDate)) ?><?= e($cashRidQs) ?>">Mois precedent</a>
+        <a class="button-muted" href="/caisse?cash_preset=all<?= e($cashRidQs) ?>">Tout</a>
+    </div>
+</section>
+
+<?php if (is_array($cashTodaySnapC) && $cashTodaySnapC !== []): ?>
+<?php
+$cashReality = $cashPreset === 'all' ? [] : ($cashClarityPeriod !== [] ? $cashClarityPeriod : $cashClarityToday);
+$cashSold = $cashPreset === 'all' ? (float) ($summary['total_sold'] ?? 0) : (float) ($cashReality['sales_activity_total'] ?? ($cashTodaySnapC['activity_day_sales_total_today'] ?? 0));
+$cashPaid = $cashPreset === 'all' ? (float) ($summary['total_remitted_to_cash'] ?? 0) : (float) ($cashReality['server_remittance_total_physical'] ?? ($cashReality['server_remittance_total'] ?? 0));
+$cashReceived = $cashPreset === 'all' ? (float) ($summary['total_received_by_cash'] ?? 0) : (float) ($cashReality['cashier_received_sales_physical'] ?? ($cashReality['cashier_received_sales'] ?? 0));
+$cashNotValidated = max(0.0, (float) ($cashReality['physical_receipt_gap'] ?? ($cashPaid - $cashReceived)));
+$cashNotPaid = max(0.0, (float) ($cashReality['activity_gap_sales_vs_attributed_remittance'] ?? ($cashSold - $cashPaid)));
+$cashBalance = $cashPreset === 'all' ? (float) ($summary['cash_balance'] ?? 0) : (float) ($cashReality['cash_balance'] ?? ($cashTodaySnapC['cash_balance_current'] ?? 0));
+$cashAfterExpenses = $cashBalance - (float) ($cashPreset === 'all' ? ($summary['cash_expenses'] ?? 0) : ($cashReality['cash_expenses'] ?? ($cashTodaySnapC['expenses_today'] ?? 0)));
+?>
+<section class="card" style="padding:22px; margin-bottom:20px; border-left:4px solid #0f766e;">
+    <h2 style="margin:0 0 12px; text-transform:uppercase;">Realite du jour</h2>
+    <p class="muted" style="margin:0 0 12px;">Periode affichee : <?php if ($cashPreset === 'all'): ?>Tout l historique<?php else: ?><?= e((string) ($cashReality['period_from'] ?? ($filters['date_from'] ?? ''))) ?><?php if (($cashReality['period_to'] ?? ($filters['date_to'] ?? '')) !== ($cashReality['period_from'] ?? ($filters['date_from'] ?? ''))): ?> -> <?= e((string) ($cashReality['period_to'] ?? ($filters['date_to'] ?? ''))) ?><?php endif; ?><?php endif; ?></p>
+    <div class="grid stats">
+        <article class="card stat"><span>Vendu aujourd hui</span><strong><?= e(format_money($cashSold, $restaurantCurrency)) ?></strong></article>
+        <article class="card stat"><span>Verse aujourd hui</span><strong><?= e(format_money($cashPaid, $restaurantCurrency)) ?></strong></article>
+        <article class="card stat"><span>Verse non valide</span><strong><?= e(format_money($cashNotValidated, $restaurantCurrency)) ?></strong></article>
+        <article class="card stat"><span>Montant attendu caisse</span><strong><?= e(format_money($cashSold, $restaurantCurrency)) ?></strong></article>
+        <article class="card stat"><span>Montant pas encore verse</span><strong><?= e(format_money($cashNotPaid, $restaurantCurrency)) ?></strong></article>
+        <article class="card stat"><span>Total reel caisse</span><strong><?= e(format_money($cashReceived, $restaurantCurrency)) ?></strong></article>
+        <article class="card stat"><span>Total apres depenses</span><strong><?= e(format_money($cashAfterExpenses, $restaurantCurrency)) ?></strong></article>
+    </div>
+</section>
+<?php endif; ?>
 
 <?php if (is_array($cashTodaySnapC) && $cashTodaySnapC !== []): ?>
 <section class="card" id="cash-today" style="padding:22px; margin-bottom:20px;">

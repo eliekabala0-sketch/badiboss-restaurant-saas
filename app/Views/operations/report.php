@@ -181,6 +181,49 @@ require base_path('app/Views/partials/module_quick_nav.php');
 <?php require base_path('app/Views/partials/regularization_hold_banner.php'); ?>
 <?php require base_path('app/Views/partials/operational_period_tabs.php'); ?>
 
+<section class="card no-print" style="padding:16px 18px; margin-top:16px;">
+    <strong>Changer la periode</strong>
+    <div class="toolbar-actions" style="margin-top:12px; flex-wrap:wrap;">
+        <a class="button-muted" href="/rapport?report_preset=today<?= e($rptUserQ . $ridQsa) ?>">Jour</a>
+        <a class="button-muted" href="/rapport?report_preset=yesterday<?= e($rptUserQ . $ridQsa) ?>">Hier</a>
+        <form method="get" action="/rapport" style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+            <?php if ((current_user()['scope'] ?? null) === 'super_admin'): ?>
+                <input type="hidden" name="restaurant_id" value="<?= e((string) $restaurant['id']) ?>">
+            <?php endif; ?>
+            <input type="hidden" name="period" value="daily">
+            <input type="date" name="date" value="<?= e((string) ($report['selected_date'] ?? $date)) ?>">
+            <button type="submit" class="button-muted">Date</button>
+        </form>
+        <a class="button-muted" href="/rapport?report_preset=week<?= e($rptUserQ . $ridQsa) ?>">Semaine</a>
+        <a class="button-muted" href="/rapport?report_preset=month<?= e($rptUserQ . $ridQsa) ?>">Mois</a>
+        <a class="button-muted" href="/rapport?period=annual&date=<?= e(rawurlencode((string) ($report['selected_date'] ?? $date))) ?><?= e($rptUserQ . $ridQsa) ?>">Tout</a>
+    </div>
+</section>
+
+<?php
+$simpleCash = is_array($cashClarity ?? null) ? $cashClarity : [];
+$simpleSold = (float) ($simpleCash['sales_activity_total'] ?? ($report['general_report']['total_sold_value'] ?? 0));
+$simplePaid = (float) ($simpleCash['server_remittance_total'] ?? ($report['financial_report']['summary']['total_remitted_to_cash'] ?? 0));
+$simpleReceived = (float) ($simpleCash['cashier_received_sales'] ?? ($report['financial_report']['summary']['total_received_by_cash'] ?? 0));
+$simpleExpected = $simpleSold;
+$simpleNotPaid = max(0.0, (float) ($simpleCash['activity_gap_sales_vs_attributed_remittance'] ?? ($simpleSold - $simplePaid)));
+$simpleLoss = (float) ($report['general_report']['total_losses_value'] ?? 0);
+$simpleCashBalance = (float) ($simpleCash['cash_balance'] ?? ($report['financial_report']['summary']['cash_balance'] ?? 0));
+?>
+<section class="card" style="padding:22px; margin-top:16px; border-left:4px solid #0f766e;">
+    <h2 style="margin:0 0 12px;">Resume simple</h2>
+    <p class="muted" style="margin:0 0 12px;"><?= e((string) ($report['period_label'] ?? '')) ?></p>
+    <div class="grid stats">
+        <article class="card stat"><span>Montant vendu</span><strong><?= e(format_money($simpleSold, $restaurantCurrency)) ?></strong></article>
+        <article class="card stat"><span>Montant verse</span><strong><?= e(format_money($simplePaid, $restaurantCurrency)) ?></strong></article>
+        <article class="card stat"><span>Montant attendu</span><strong><?= e(format_money($simpleExpected, $restaurantCurrency)) ?></strong></article>
+        <article class="card stat"><span>Montant non verse</span><strong><?= e(format_money($simpleNotPaid, $restaurantCurrency)) ?></strong></article>
+        <article class="card stat"><span>Perte estimee</span><strong><?= e(format_money($simpleLoss, $restaurantCurrency)) ?></strong></article>
+        <article class="card stat"><span>Solde caisse reel</span><strong><?= e(format_money($simpleCashBalance, $restaurantCurrency)) ?></strong></article>
+    </div>
+    <p style="margin:14px 0 0;"><a class="button-muted" href="#report-detail">Voir detail</a></p>
+</section>
+
 <?php if (can_access('staff.team_gauges.view')): ?>
 <?php
 $dSchedRep = is_array($discipline_work_schedule ?? null) ? $discipline_work_schedule : [];
@@ -381,7 +424,37 @@ $reportCanDecideLateRemittance = in_array((string) (current_user()['role_code'] 
 </section>
 <?php endif; ?>
 
-<details class="card report-section-details no-print" style="padding:0; margin-top:20px;">
+<section class="card no-print" style="padding:0; margin-top:20px;">
+    <details class="report-section-details" open>
+        <summary><strong>Statistiques</strong> · ventes / caisse / stock / pertes / manquants / personnel</summary>
+        <div class="report-section-body">
+            <div class="toolbar-actions" style="flex-wrap:wrap; margin-bottom:14px;">
+                <a class="button-muted" href="#stats-ventes">Ventes</a>
+                <a class="button-muted" href="#stats-caisse">Caisse</a>
+                <a class="button-muted" href="#stats-stock">Stock</a>
+                <a class="button-muted" href="#stats-pertes">Pertes</a>
+                <a class="button-muted" href="#stats-manquants">Manquants</a>
+                <a class="button-muted" href="#stats-personnel">Personnel</a>
+            </div>
+            <div class="grid stats">
+                <article class="card stat" id="stats-ventes"><span>Evolution ventes</span><strong><?= e(format_money($simpleSold, $restaurantCurrency)) ?></strong></article>
+                <article class="card stat" id="stats-caisse"><span>Evolution versements</span><strong><?= e(format_money($simplePaid, $restaurantCurrency)) ?></strong></article>
+                <article class="card stat" id="stats-stock"><span>Valeur stock</span><strong><?= e(format_money((float) ($report['stock_report']['stock_value'] ?? 0), $restaurantCurrency)) ?></strong></article>
+                <article class="card stat" id="stats-pertes"><span>Evolution pertes</span><strong><?= e(format_money($simpleLoss, $restaurantCurrency)) ?></strong></article>
+                <article class="card stat" id="stats-manquants"><span>Manquants</span><strong><?= e(format_money($simpleNotPaid, $restaurantCurrency)) ?></strong></article>
+                <article class="card stat" id="stats-personnel"><span>Top serveur</span><strong><?= e((string) (($leaderboards['day']['best_server']['server_name'] ?? '') ?: 'Aucun')) ?></strong></article>
+            </div>
+            <?php $topCategory = $salesByCategory['categories'][0] ?? []; ?>
+            <div class="grid stats" style="margin-top:12px;">
+                <article class="card stat"><span>Categorie rentable</span><strong><?= e((string) (($topCategory['category_name'] ?? '') ?: 'A verifier')) ?></strong></article>
+                <article class="card stat"><span>Categorie a risque</span><strong><?= e(((float) ($report['stock_report']['stock_losses_value'] ?? 0) > 0) ? 'Stock avec pertes' : 'Aucune perte stock') ?></strong></article>
+                <article class="card stat"><span>Jour / semaine / mois</span><strong><?= e((string) ($report['period_label'] ?? '')) ?></strong></article>
+            </div>
+        </div>
+    </details>
+</section>
+
+<details id="report-detail" class="card report-section-details no-print" style="padding:0; margin-top:20px;">
 <summary><strong>Historique / Vue globale (détail période)</strong> · <?= e((string) ($report['period_label'] ?? '')) ?></summary>
 <div class="report-section-body" style="padding:16px;">
 

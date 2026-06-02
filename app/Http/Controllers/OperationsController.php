@@ -789,6 +789,37 @@ final class OperationsController
         ];
 
         $today = Container::getInstance()->get('reportService')->todayForRestaurant($restaurantId);
+        $cashPreset = (string) ($request->query['cash_preset'] ?? 'today');
+        if (!in_array($cashPreset, ['today', 'yesterday', 'date', 'week', 'month', 'prev_month', 'all'], true)) {
+            $cashPreset = 'today';
+        }
+        $cashBaseDate = (string) ($request->query['date'] ?? $today);
+        try {
+            $cashBase = new \DateTimeImmutable($cashBaseDate . ' 00:00:00');
+        } catch (\Throwable) {
+            $cashBase = new \DateTimeImmutable($today . ' 00:00:00');
+        }
+        if ($cashPreset !== 'all' && ($filters['date_from'] === '' || $filters['date_to'] === '')) {
+            if ($cashPreset === 'yesterday') {
+                $from = $cashBase->modify('-1 day')->format('Y-m-d');
+                $to = $from;
+            } elseif ($cashPreset === 'week') {
+                $from = $cashBase->modify('monday this week')->format('Y-m-d');
+                $to = $cashBase->modify('sunday this week')->format('Y-m-d');
+            } elseif ($cashPreset === 'month') {
+                $from = $cashBase->modify('first day of this month')->format('Y-m-d');
+                $to = $cashBase->modify('last day of this month')->format('Y-m-d');
+            } elseif ($cashPreset === 'prev_month') {
+                $prev = $cashBase->modify('first day of previous month');
+                $from = $prev->format('Y-m-d');
+                $to = $prev->modify('last day of this month')->format('Y-m-d');
+            } else {
+                $from = $cashBase->format('Y-m-d');
+                $to = $from;
+            }
+            $filters['date_from'] = $from;
+            $filters['date_to'] = $to;
+        }
         $clarityFrom = $filters['date_from'] !== '' ? $filters['date_from'] : $today;
         $clarityTo = $filters['date_to'] !== '' ? $filters['date_to'] : $today;
         $cashClarity = Container::getInstance()->get('cashService')->periodCashClarity($restaurantId, $clarityFrom, $clarityTo);
@@ -809,6 +840,8 @@ final class OperationsController
             'sales' => Container::getInstance()->get('salesService')->listSales($restaurantId),
             'users' => Container::getInstance()->get('roleAdmin')->listUsersForRestaurant($restaurantId),
             'filters' => $filters,
+            'cash_preset' => $cashPreset,
+            'cash_base_date' => $cashBase->format('Y-m-d'),
             'cash_clarity_period' => $cashClarity,
             'cash_today_snapshot' => Container::getInstance()->get('reportService')->cashTodayOperationalSnapshot($restaurantId),
             'day_start_hold' => $hold,
