@@ -20,7 +20,7 @@ final class OperationsController
         $incidentCatalog = $this->incidentCatalog();
         $kitchenStockBlocks = Container::getInstance()->get('stockService')->listKitchenStockRequestBlocks($restaurantId);
         $items = Container::getInstance()->get('stockService')->listItems($restaurantId);
-        $movements = Container::getInstance()->get('stockService')->listMovementHistoryRows($restaurantId);
+        $movements = Container::getInstance()->get('stockService')->listMovementHistoryRows($restaurantId, 80);
         $stockCategoryFilter = trim((string) ($request->query['stock_cat'] ?? 'all'));
         $stockItemIdsForFilter = stock_item_ids_matching_category_filter($items, $stockCategoryFilter);
         $stockControlItemId = max(0, (int) ($request->query['sc_item_id'] ?? 0));

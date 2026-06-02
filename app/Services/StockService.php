@@ -258,49 +258,53 @@ final class StockService
      *
      * @return list<array<string, mixed>>
      */
-    public function listMovementHistoryRows(int $restaurantId): array
+    public function listMovementHistoryRows(int $restaurantId, int $limit = 80): array
     {
         $this->ensureStockMovementEnum();
+        $limit = max(20, min($limit, 200));
         $categoryLabelSelect = $this->tableColumnExists('stock_items', 'category_label')
             ? 'si.category_label AS stock_item_category_label,'
             : 'NULL AS stock_item_category_label,';
+        $deltaExpression = 'CASE
+                WHEN sm.status <> "VALIDE" THEN 0
+                WHEN sm.movement_type IN ("ENTREE", "RETOUR_STOCK") THEN sm.quantity
+                WHEN sm.movement_type IN ("PERTE", "SORTIE", "SORTIE_CUISINE") THEN -ABS(sm.quantity)
+                WHEN sm.movement_type = "CORRECTION_INVENTAIRE" THEN sm.quantity
+                ELSE 0
+            END';
         $statement = $this->database->pdo()->prepare(
-            'SELECT sm.*, si.name AS stock_item_name, si.unit_name, ' . $categoryLabelSelect . '
-                    u.full_name AS user_name,
-                    ur.code AS user_role_code,
-                    v.full_name AS validated_by_name,
-                    vr.code AS validated_by_role_code
-             FROM stock_movements sm
-             INNER JOIN stock_items si ON si.id = sm.stock_item_id
-             INNER JOIN users u ON u.id = sm.user_id
-             LEFT JOIN roles ur ON ur.id = u.role_id
-             LEFT JOIN users v ON v.id = sm.validated_by
-             LEFT JOIN roles vr ON vr.id = v.role_id
-             WHERE sm.restaurant_id = :restaurant_id
-             ORDER BY sm.id ASC'
+            'SELECT ledger.*
+             FROM (
+                 SELECT sm.*, si.name AS stock_item_name, si.unit_name, ' . $categoryLabelSelect . '
+                        u.full_name AS user_name,
+                        ur.code AS user_role_code,
+                        v.full_name AS validated_by_name,
+                        vr.code AS validated_by_role_code,
+                        ' . $deltaExpression . ' AS quantity_delta_physical,
+                        COALESCE(SUM(' . $deltaExpression . ') OVER (
+                            PARTITION BY sm.stock_item_id
+                            ORDER BY sm.id ASC
+                            ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING
+                        ), 0) AS quantity_before_physical,
+                        COALESCE(SUM(' . $deltaExpression . ') OVER (
+                            PARTITION BY sm.stock_item_id
+                            ORDER BY sm.id ASC
+                            ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+                        ), 0) AS quantity_after_physical
+                 FROM stock_movements sm
+                 INNER JOIN stock_items si ON si.id = sm.stock_item_id
+                 INNER JOIN users u ON u.id = sm.user_id
+                 LEFT JOIN roles ur ON ur.id = u.role_id
+                 LEFT JOIN users v ON v.id = sm.validated_by
+                 LEFT JOIN roles vr ON vr.id = v.role_id
+                 WHERE sm.restaurant_id = :restaurant_id
+             ) ledger
+             ORDER BY ledger.id DESC
+             LIMIT ' . $limit
         );
         $statement->execute(['restaurant_id' => $restaurantId]);
-        $rows = $statement->fetchAll(PDO::FETCH_ASSOC);
-        if ($rows === []) {
-            return [];
-        }
 
-        $runningByItem = [];
-        $enriched = [];
-        foreach ($rows as $row) {
-            $itemId = (int) $row['stock_item_id'];
-            $runningByItem[$itemId] ??= 0.0;
-            $before = (float) $runningByItem[$itemId];
-            $deltaPhysical = $this->physicalStockLedgerDelta($row);
-            $after = $before + $deltaPhysical;
-            $row['quantity_before_physical'] = $before;
-            $row['quantity_delta_physical'] = $deltaPhysical;
-            $row['quantity_after_physical'] = $after;
-            $runningByItem[$itemId] = $after;
-            $enriched[] = $row;
-        }
-
-        return array_reverse($enriched);
+        return $statement->fetchAll(PDO::FETCH_ASSOC);
     }
 
     /**
