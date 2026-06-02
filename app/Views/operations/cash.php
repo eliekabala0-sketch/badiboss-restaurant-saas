@@ -79,7 +79,8 @@ $cashReceived = $cashPreset === 'all' ? (float) ($summary['total_received_by_cas
 $cashNotValidated = max(0.0, (float) ($cashReality['physical_receipt_gap'] ?? ($cashPaid - $cashReceived)));
 $cashNotPaid = max(0.0, (float) ($cashReality['activity_gap_sales_vs_attributed_remittance'] ?? ($cashSold - $cashPaid)));
 $cashBalance = $cashPreset === 'all' ? (float) ($summary['cash_balance'] ?? 0) : (float) ($cashReality['cash_balance'] ?? ($cashTodaySnapC['cash_balance_current'] ?? 0));
-$cashAfterExpenses = $cashBalance - (float) ($cashPreset === 'all' ? ($summary['cash_expenses'] ?? 0) : ($cashReality['cash_expenses'] ?? ($cashTodaySnapC['expenses_today'] ?? 0)));
+$cashExpensesPeriod = (float) ($cashPreset === 'all' ? ($summary['cash_expenses'] ?? 0) : ($cashReality['cash_expenses'] ?? ($cashTodaySnapC['expenses_today'] ?? 0)));
+$cashAfterExpenses = $cashReceived - $cashExpensesPeriod;
 ?>
 <section class="card" style="padding:22px; margin-bottom:20px; border-left:4px solid #0f766e;">
     <h2 style="margin:0 0 12px; text-transform:uppercase;">Realite du jour</h2>

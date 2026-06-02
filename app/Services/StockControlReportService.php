@@ -71,7 +71,8 @@ final class StockControlReportService
         $futureAggByItem = $this->movementAggregatesAfterPeriod($restaurantId, $endAt, $tz);
         $salesSignalsByItem = $this->salesStockSignalsForPeriod($restaurantId, $startAt, $endAt);
         $physicalByItem = $this->latestPhysicalChecksForPeriod($restaurantId, $startAt, $endAt);
-        $purchaseCostsByItem = $this->purchaseUnitCostsForPeriod($restaurantId, $startAt, $endAt);
+        $purchaseCostsByItem = $this->purchaseUnitCostsForPeriod($restaurantId, $startAt, $endAt)
+            + $this->purchaseUnitCostsForRestaurant($restaurantId);
         $articles = [];
         foreach ($items as $si) {
             $sid = (int) $si['id'];
@@ -643,6 +644,45 @@ final class StockControlReportService
             'start_at' => $startAt->format('Y-m-d H:i:s'),
             'end_at' => $endAt->format('Y-m-d H:i:s'),
         ]);
+
+        $out = [];
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            $sid = (int) ($row['sid'] ?? 0);
+            $qty = (float) ($row['qty'] ?? 0);
+            $value = (float) ($row['val'] ?? 0);
+            if ($sid <= 0 || $qty <= self::EPS || $value <= self::EPS) {
+                continue;
+            }
+            $out[$sid] = [
+                'unit_cost' => round($value / $qty, 4),
+                'quantity' => round($qty, 4),
+                'value' => round($value, 2),
+            ];
+        }
+
+        return $out;
+    }
+
+    /**
+     * @return array<int, array{unit_cost: float, quantity: float, value: float}>
+     */
+    private function purchaseUnitCostsForRestaurant(int $restaurantId): array
+    {
+        $st = $this->database->pdo()->prepare(
+            'SELECT sm.stock_item_id AS sid,
+                    COALESCE(SUM(sm.quantity), 0) AS qty,
+                    COALESCE(SUM(CASE
+                        WHEN COALESCE(sm.total_cost_snapshot, 0) > 0 THEN sm.total_cost_snapshot
+                        WHEN COALESCE(sm.unit_cost_snapshot, 0) > 0 THEN sm.unit_cost_snapshot * sm.quantity
+                        ELSE 0
+                    END), 0) AS val
+             FROM stock_movements sm
+             WHERE sm.restaurant_id = :rid
+               AND sm.movement_type = "ENTREE"
+               AND sm.status = "VALIDE"
+             GROUP BY sm.stock_item_id'
+        );
+        $st->execute(['rid' => $restaurantId]);
 
         $out = [];
         foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $row) {
