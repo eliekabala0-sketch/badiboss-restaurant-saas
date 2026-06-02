@@ -12,7 +12,7 @@ $kitchenStockRequestItemsByRequest = $kitchen_stock_request_items_by_request ?? 
 $stockCategoryFilter = $stock_category_filter ?? 'all';
 $stockCategoryLabels = $stock_category_labels ?? [];
 $stockItemIdsForFilter = $stock_item_ids_for_filter ?? null;
-$stock_movement_display_limit = 150;
+$stock_movement_display_limit = 50;
 $movements_display = $movements_display ?? $movements;
 $stock_movement_history = array_slice($movements_display, 0, $stock_movement_display_limit);
 $module_today_pulse = $module_today_pulse ?? [];
@@ -74,6 +74,44 @@ foreach ($stock_movement_history as $m) {
     $movementHistoryGroups[$groupKey]['rows'][] = $m;
 }
 uksort($movementHistoryGroups, static fn (string $a, string $b): int => strcmp($b, $a));
+
+$movementQuickSections = [
+    'entrees_stock' => ['label' => 'Entrees stock', 'rows' => []],
+    'sorties_stock' => ['label' => 'Sorties stock', 'rows' => []],
+    'entrees_boisson' => ['label' => 'Entrees boisson', 'rows' => []],
+    'sorties_boisson' => ['label' => 'Sorties boisson', 'rows' => []],
+    'entrees_cuisine' => ['label' => 'Entrees cuisine', 'rows' => []],
+    'sorties_cuisine' => ['label' => 'Sorties cuisine', 'rows' => []],
+    'controles' => ['label' => 'Controle physique', 'rows' => []],
+];
+$stockMovementEntryTypes = ['ENTREE', 'RETOUR_STOCK'];
+$stockMovementExitTypes = ['SORTIE', 'SORTIE_CUISINE', 'PERTE', 'CONSOMMATION_CUISINE'];
+
+foreach ($stock_movement_history as $movementRow) {
+    $movementType = (string) ($movementRow['movement_type'] ?? '');
+    $bucket = stock_item_category_bucket((string) ($movementRow['stock_item_category_label'] ?? ''));
+    if (in_array($movementType, $stockMovementEntryTypes, true)) {
+        $movementQuickSections['entrees_stock']['rows'][] = $movementRow;
+        if ($bucket === 'boissons') {
+            $movementQuickSections['entrees_boisson']['rows'][] = $movementRow;
+        }
+        if ($bucket === 'cuisine') {
+            $movementQuickSections['entrees_cuisine']['rows'][] = $movementRow;
+        }
+    }
+    if (in_array($movementType, $stockMovementExitTypes, true)) {
+        $movementQuickSections['sorties_stock']['rows'][] = $movementRow;
+        if ($bucket === 'boissons') {
+            $movementQuickSections['sorties_boisson']['rows'][] = $movementRow;
+        }
+        if ($bucket === 'cuisine' || in_array($movementType, ['SORTIE_CUISINE', 'CONSOMMATION_CUISINE'], true)) {
+            $movementQuickSections['sorties_cuisine']['rows'][] = $movementRow;
+        }
+    }
+    if ($movementType === 'CORRECTION_INVENTAIRE') {
+        $movementQuickSections['controles']['rows'][] = $movementRow;
+    }
+}
 
 $stockFilterHref = static function (string $token): string {
     if ($token === 'all') {
@@ -946,6 +984,68 @@ require base_path('app/Views/partials/module_quick_nav.php');
     <?php if ($stock_movement_history === []): ?>
         <p class="muted">Aucun mouvement enregistre pour ce restaurant<?= $stockCategoryFilter !== 'all' && $stockCategoryFilter !== '' ? ' dans ce filtre' : '' ?>.</p>
     <?php else: ?>
+        <div class="grid stats" style="margin:14px 0 18px;">
+            <?php foreach ($movementQuickSections as $sectionKey => $section): ?>
+                <article class="card stat">
+                    <span><?= e($section['label']) ?></span>
+                    <strong><?= e((string) count($section['rows'])) ?></strong>
+                </article>
+            <?php endforeach; ?>
+        </div>
+
+        <div class="section-stack" style="margin-bottom:18px;">
+            <?php foreach ($movementQuickSections as $sectionKey => $section): ?>
+                <?php $sectionRows = array_slice($section['rows'], 0, 20); ?>
+                <details class="compact-card" style="padding:0 0 10px;">
+                    <summary style="cursor:pointer; list-style:none; padding:12px 0; border-top:1px solid var(--line); display:flex; justify-content:space-between; gap:12px; align-items:center;">
+                        <span>
+                            <strong><?= e($section['label']) ?></strong>
+                            <span class="muted"> · <?= e((string) count($section['rows'])) ?> mouvement(s)</span>
+                        </span>
+                        <span class="muted">Voir details</span>
+                    </summary>
+                    <?php if ($sectionRows === []): ?>
+                        <p class="muted">Aucun mouvement dans ce groupe.</p>
+                    <?php else: ?>
+                        <div class="table-wrap" style="margin-top:8px;">
+                            <table>
+                                <thead>
+                                <tr>
+                                    <th>Date</th>
+                                    <th>Produit</th>
+                                    <th>Type</th>
+                                    <th>Quantite</th>
+                                    <th>Stock magasin</th>
+                                    <th>Statut</th>
+                                </tr>
+                                </thead>
+                                <tbody>
+                                <?php foreach ($sectionRows as $m): ?>
+                                    <tr>
+                                        <td><?= e(format_date_fr($m['created_at'] ?? null, $historyTimezone)) ?></td>
+                                        <td><strong><?= e((string) ($m['stock_item_name'] ?? '-')) ?></strong><br><span class="muted"><?= e((string) ($m['stock_item_category_label'] ?? 'Sans categorie')) ?></span></td>
+                                        <td><?= e(movement_type_label((string) ($m['movement_type'] ?? ''))) ?></td>
+                                        <td><?= e((string) ($m['quantity'] ?? 0)) ?> <?= e((string) ($m['unit_name'] ?? '')) ?></td>
+                                        <td><?= e((string) ($m['quantity_before_physical'] ?? '-')) ?> &rarr; <?= e((string) ($m['quantity_after_physical'] ?? '-')) ?></td>
+                                        <td><?= e(validation_status_label($m['status'] ?? null)) ?></td>
+                                    </tr>
+                                <?php endforeach; ?>
+                                </tbody>
+                            </table>
+                        </div>
+                        <?php if (count($section['rows']) > 20): ?>
+                            <p class="muted">Affichage rapide limite aux 20 mouvements les plus recents de ce groupe.</p>
+                        <?php endif; ?>
+                    <?php endif; ?>
+                </details>
+            <?php endforeach; ?>
+        </div>
+
+        <details class="compact-card" style="padding:0 0 10px;">
+            <summary style="cursor:pointer; list-style:none; padding:12px 0; border-top:1px solid var(--line); display:flex; justify-content:space-between; gap:12px; align-items:center;">
+                <span><strong>Historique par jour</strong><span class="muted"> · detail complet des mouvements charges</span></span>
+                <span class="muted">Ouvrir</span>
+            </summary>
         <?php foreach ($movementHistoryGroups as $mgroup): ?>
             <?php $mrows = $mgroup['rows']; ?>
             <details class="compact-card" style="margin-bottom:8px;">
@@ -999,6 +1099,7 @@ require base_path('app/Views/partials/module_quick_nav.php');
                 <?php endif; ?>
             </details>
         <?php endforeach; ?>
+        </details>
     <?php endif; ?>
 </section>
 

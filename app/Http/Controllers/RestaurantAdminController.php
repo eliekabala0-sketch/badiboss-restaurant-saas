@@ -41,6 +41,7 @@ final class RestaurantAdminController
         view('super-admin/restaurants/show', [
             'title' => 'Detail restaurant',
             'restaurant' => $restaurant,
+            'can_delete_test_restaurant' => $service->isTestRestaurant($restaurant),
             'plans' => $service->listPlans(),
             'roles' => $service->listRoles(),
             'subscription' => Container::getInstance()->get('subscriptionService')->summaryForRestaurant($restaurant),
@@ -97,9 +98,9 @@ final class RestaurantAdminController
         $normalizedCode = $tenantProvisioning->previewRestaurantCode($proposedCode);
 
         try {
-            $payload['logo_url'] = isset($_FILES['logo']) ? $upload->storeRestaurantImage($_FILES['logo'], $normalizedCode, 'logo') : null;
-            $payload['cover_image_url'] = isset($_FILES['photo']) ? $upload->storeRestaurantImage($_FILES['photo'], $normalizedCode, 'photo') : null;
-            $payload['favicon_url'] = isset($_FILES['favicon']) ? $upload->storeRestaurantImage($_FILES['favicon'], $normalizedCode, 'favicon') : null;
+            $payload['logo_url'] = $this->hasUploadedFile($_FILES['logo'] ?? null) ? $upload->storeRestaurantImage($_FILES['logo'], $normalizedCode, 'logo') : null;
+            $payload['cover_image_url'] = $this->hasUploadedFile($_FILES['photo'] ?? null) ? $upload->storeRestaurantImage($_FILES['photo'], $normalizedCode, 'photo') : null;
+            $payload['favicon_url'] = $this->hasUploadedFile($_FILES['favicon'] ?? null) ? $upload->storeRestaurantImage($_FILES['favicon'], $normalizedCode, 'favicon') : null;
             Container::getInstance()->get('tenantProvisioning')->createRestaurant($payload, $_SESSION['user']);
         } catch (\Throwable $exception) {
             error_log((string) $exception);
@@ -143,9 +144,9 @@ final class RestaurantAdminController
         }
 
         $upload = Container::getInstance()->get('uploadService');
-        $logoUrl = isset($_FILES['logo']) ? $upload->storeRestaurantImage($_FILES['logo'], (string) $restaurant['restaurant_code'], 'logo') : ($restaurant['logo_url'] ?? null);
-        $coverImageUrl = isset($_FILES['photo']) ? $upload->storeRestaurantImage($_FILES['photo'], (string) $restaurant['restaurant_code'], 'photo') : ($restaurant['cover_image_url'] ?? null);
-        $faviconUrl = isset($_FILES['favicon']) ? $upload->storeRestaurantImage($_FILES['favicon'], (string) $restaurant['restaurant_code'], 'favicon') : ($restaurant['favicon_url'] ?? null);
+        $logoUrl = $this->hasUploadedFile($_FILES['logo'] ?? null) ? $upload->storeRestaurantImage($_FILES['logo'], (string) $restaurant['restaurant_code'], 'logo') : ($restaurant['logo_url'] ?? null);
+        $coverImageUrl = $this->hasUploadedFile($_FILES['photo'] ?? null) ? $upload->storeRestaurantImage($_FILES['photo'], (string) $restaurant['restaurant_code'], 'photo') : ($restaurant['cover_image_url'] ?? null);
+        $faviconUrl = $this->hasUploadedFile($_FILES['favicon'] ?? null) ? $upload->storeRestaurantImage($_FILES['favicon'], (string) $restaurant['restaurant_code'], 'favicon') : ($restaurant['favicon_url'] ?? null);
 
         Container::getInstance()->get('restaurantAdmin')->updateBranding($restaurantId, [
             'public_name' => $request->input('public_name'),
@@ -196,6 +197,42 @@ final class RestaurantAdminController
 
         flash('success', 'Le statut du restaurant a ete mis a jour.');
         redirect('/super-admin/restaurants/' . $restaurantId);
+    }
+
+    public function deleteTestRestaurant(Request $request): void
+    {
+        authorize_access('platform.restaurants.manage');
+        $restaurantId = (int) $request->route('id');
+        $confirmation = trim((string) $request->input('confirmation', ''));
+        $service = Container::getInstance()->get('restaurantAdmin');
+        $restaurant = $service->findRestaurant($restaurantId);
+
+        if ($restaurant === null) {
+            flash('error', 'Restaurant introuvable.');
+            redirect('/super-admin/restaurants');
+        }
+
+        if (!$service->isTestRestaurant($restaurant)) {
+            flash('error', 'Impossible - restaurant reel.');
+            redirect('/super-admin/restaurants/' . $restaurantId);
+        }
+
+        if ($confirmation !== 'SUPPRIMER') {
+            flash('error', 'Confirmation obligatoire : saisir SUPPRIMER.');
+            redirect('/super-admin/restaurants/' . $restaurantId);
+        }
+
+        try {
+            $restaurantCode = (string) ($restaurant['restaurant_code'] ?? '');
+            $service->deleteTestRestaurant($restaurantId, $_SESSION['user']);
+            $this->deleteRestaurantUploadDirectory($restaurantCode);
+            flash('success', 'Restaurant test supprime definitivement.');
+        } catch (\Throwable $exception) {
+            error_log((string) $exception);
+            flash('error', ui_safe_message($exception->getMessage()));
+        }
+
+        redirect('/super-admin/restaurants');
     }
 
     public function declarePayment(Request $request): void
@@ -250,5 +287,39 @@ final class RestaurantAdminController
 
         flash('success', 'Abonnement active avec succes.');
         redirect('/super-admin/restaurants/' . $restaurantId);
+    }
+
+    private function hasUploadedFile(?array $file): bool
+    {
+        return is_array($file) && (int) ($file['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_NO_FILE;
+    }
+
+    private function deleteRestaurantUploadDirectory(string $restaurantCode): void
+    {
+        $restaurantCode = trim($restaurantCode);
+        if ($restaurantCode === '') {
+            return;
+        }
+
+        $base = realpath(base_path('public/uploads/restaurants'));
+        $target = realpath(base_path('public/uploads/restaurants/' . $restaurantCode));
+        if ($base === false || $target === false || !str_starts_with($target, $base . DIRECTORY_SEPARATOR)) {
+            return;
+        }
+
+        $iterator = new \RecursiveIteratorIterator(
+            new \RecursiveDirectoryIterator($target, \FilesystemIterator::SKIP_DOTS),
+            \RecursiveIteratorIterator::CHILD_FIRST
+        );
+
+        foreach ($iterator as $item) {
+            if ($item->isDir()) {
+                @rmdir($item->getPathname());
+            } else {
+                @unlink($item->getPathname());
+            }
+        }
+
+        @rmdir($target);
     }
 }

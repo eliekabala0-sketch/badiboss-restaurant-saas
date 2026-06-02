@@ -1224,6 +1224,10 @@ foreach ($notificationSources as $candidate) {
                             src="<?= e(restaurant_media_url_or_default($current_restaurant_context['logo_url'] ?? null, 'logo')) ?>"
                             alt="Logo restaurant"
                             class="context-logo"
+                            width="60"
+                            height="60"
+                            decoding="async"
+                            fetchpriority="high"
                             data-fallback-src="<?= e(restaurant_media_fallback_url('logo')) ?>"
                         >
                         <div>

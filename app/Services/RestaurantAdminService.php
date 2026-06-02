@@ -327,6 +327,71 @@ final class RestaurantAdminService
         ]);
     }
 
+    public function isTestRestaurant(array $restaurant): bool
+    {
+        $isTest = (int) ($restaurant['is_test'] ?? 0) === 1;
+        $code = (string) ($restaurant['restaurant_code'] ?? '');
+
+        return $isTest || is_sandbox_restaurant_code($code);
+    }
+
+    public function deleteTestRestaurant(int $restaurantId, array $actor): void
+    {
+        $current = $this->findRestaurant($restaurantId);
+        if ($current === null) {
+            throw new \RuntimeException('Restaurant introuvable.');
+        }
+
+        if (!$this->isTestRestaurant($current)) {
+            throw new \RuntimeException('Impossible - restaurant reel.');
+        }
+
+        $pdo = $this->database->pdo();
+        $userIds = $this->idsForColumn('users', 'restaurant_id', $restaurantId);
+
+        $pdo->beginTransaction();
+        try {
+            $pdo->exec('SET FOREIGN_KEY_CHECKS=0');
+
+            foreach ($this->tablesWithColumn('restaurant_id') as $table) {
+                if ($table === 'restaurants') {
+                    continue;
+                }
+
+                $statement = $pdo->prepare('DELETE FROM `' . str_replace('`', '``', $table) . '` WHERE restaurant_id = :restaurant_id');
+                $statement->execute(['restaurant_id' => $restaurantId]);
+            }
+
+            if ($userIds !== []) {
+                foreach ($this->tablesWithColumn('user_id') as $table) {
+                    if ($table === 'users' || $this->columnExists($table, 'restaurant_id')) {
+                        continue;
+                    }
+
+                    $placeholders = implode(',', array_fill(0, count($userIds), '?'));
+                    $statement = $pdo->prepare('DELETE FROM `' . str_replace('`', '``', $table) . '` WHERE user_id IN (' . $placeholders . ')');
+                    $statement->execute($userIds);
+                }
+            }
+
+            $statement = $pdo->prepare('DELETE FROM restaurants WHERE id = :id');
+            $statement->execute(['id' => $restaurantId]);
+
+            $pdo->exec('SET FOREIGN_KEY_CHECKS=1');
+            $pdo->commit();
+        } catch (\Throwable $exception) {
+            try {
+                $pdo->exec('SET FOREIGN_KEY_CHECKS=1');
+            } catch (\Throwable) {
+            }
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+
+            throw $exception;
+        }
+    }
+
     public function listSettings(int $restaurantId): array
     {
         $statement = $this->database->pdo()->prepare(
@@ -507,5 +572,46 @@ final class RestaurantAdminService
         ]);
 
         return (int) $statement->fetchColumn() > 0;
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function tablesWithColumn(string $column): array
+    {
+        $statement = $this->database->pdo()->prepare(
+            'SELECT table_name
+             FROM information_schema.columns
+             WHERE table_schema = DATABASE() AND column_name = :column_name
+             ORDER BY table_name ASC'
+        );
+        $statement->execute(['column_name' => $column]);
+
+        $tables = [];
+        foreach ($statement->fetchAll(PDO::FETCH_COLUMN) as $table) {
+            $table = (string) $table;
+            if (preg_match('/^[A-Za-z0-9_]+$/', $table) === 1) {
+                $tables[] = $table;
+            }
+        }
+
+        return $tables;
+    }
+
+    /**
+     * @return list<int>
+     */
+    private function idsForColumn(string $table, string $column, int $value): array
+    {
+        if (!$this->columnExists($table, $column) || !$this->columnExists($table, 'id')) {
+            return [];
+        }
+
+        $statement = $this->database->pdo()->prepare(
+            'SELECT id FROM `' . str_replace('`', '``', $table) . '` WHERE `' . str_replace('`', '``', $column) . '` = :value'
+        );
+        $statement->execute(['value' => $value]);
+
+        return array_values(array_map('intval', $statement->fetchAll(PDO::FETCH_COLUMN)));
     }
 }

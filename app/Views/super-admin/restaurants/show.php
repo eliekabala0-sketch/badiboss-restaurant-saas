@@ -22,6 +22,7 @@ $activeModules = array_values(array_filter(
     static fn (array $module): bool => (int) ($module['is_enabled'] ?? 0) === 1
 ));
 $recentAudits = (array) ($restaurant['recent_audits'] ?? []);
+$canDeleteTestRestaurant = (bool) ($can_delete_test_restaurant ?? false);
 ?>
 
 <section class="topbar">
@@ -180,19 +181,19 @@ $recentAudits = (array) ($restaurant['recent_audits'] ?? []);
             <div class="media-preview-grid">
                 <div class="media-preview">
                     <strong>Logo actuel</strong>
-                    <img src="<?= e($logoPreview) ?>" alt="Logo actuel" data-file-preview-image="restaurant-logo">
+                    <img src="<?= e($logoPreview) ?>" alt="Logo actuel" width="160" height="110" decoding="async" data-file-preview-image="restaurant-logo">
                     <small data-file-preview-name="restaurant-logo"><?= e($restaurant['logo_url'] ?? 'Visuel par defaut') ?></small>
                     <div class="muted">Compatible avec les anciennes URL déjà enregistrées.</div>
                 </div>
                 <div class="media-preview">
                     <strong>Photo actuelle</strong>
-                    <img src="<?= e($photoPreview) ?>" alt="Photo actuelle" data-file-preview-image="restaurant-photo">
+                    <img src="<?= e($photoPreview) ?>" alt="Photo actuelle" width="160" height="110" loading="lazy" decoding="async" data-file-preview-image="restaurant-photo">
                     <small data-file-preview-name="restaurant-photo"><?= e($restaurant['cover_image_url'] ?? 'Visuel par defaut') ?></small>
                     <div class="muted">Aperçu mis à jour après upload.</div>
                 </div>
                 <div class="media-preview">
                     <strong>Favicon actuel</strong>
-                    <img src="<?= e($faviconPreview) ?>" alt="Favicon actuel" data-file-preview-image="restaurant-favicon">
+                    <img src="<?= e($faviconPreview) ?>" alt="Favicon actuel" width="160" height="110" loading="lazy" decoding="async" data-file-preview-image="restaurant-favicon">
                     <small data-file-preview-name="restaurant-favicon"><?= e($restaurant['favicon_url'] ?? 'Visuel par defaut') ?></small>
                     <div class="muted">Aperçu mis à jour après upload.</div>
                 </div>
@@ -290,6 +291,42 @@ $recentAudits = (array) ($restaurant['recent_audits'] ?? []);
                     <button type="submit" class="button-muted">Archiver</button>
                 </form>
             </div>
+        </div>
+    </details>
+
+    <details class="card fold-card">
+        <summary>
+            <div>
+                <strong>Archive / suppression test</strong>
+                <div class="muted">Suppression definitive reservee aux restaurants test ou sandbox.</div>
+            </div>
+            <span class="pill <?= $canDeleteTestRestaurant ? 'badge-bad' : 'badge-neutral' ?>"><?= $canDeleteTestRestaurant ? 'Test uniquement' : 'Restaurant reel protege' ?></span>
+        </summary>
+        <div class="fold-body section-stack">
+            <div class="link-box">
+                <strong>Archive</strong>
+                <span class="muted">L archivage conserve les donnees et bloque seulement l exploitation courante.</span>
+                <form method="post" action="/super-admin/restaurants/<?= e((string) $restaurant['id']) ?>/status">
+                    <input type="hidden" name="status" value="archived">
+                    <button type="submit" class="button-muted">Archiver</button>
+                </form>
+            </div>
+            <?php if ($canDeleteTestRestaurant): ?>
+                <div class="link-box" style="border-color:rgba(185,28,28,.35);">
+                    <strong>Supprimer definitivement le restaurant test</strong>
+                    <span class="muted">Cette action supprime le restaurant test, ses utilisateurs test, fichiers test et donnees liees. Aucun restaurant client reel n est autorise ici.</span>
+                    <form method="post" action="/super-admin/restaurants/<?= e((string) $restaurant['id']) ?>/delete-test" onsubmit="return confirm('Supprimer definitivement ce restaurant test ?');">
+                        <label>Saisir SUPPRIMER pour confirmer</label>
+                        <input name="confirmation" placeholder="SUPPRIMER" autocomplete="off" required>
+                        <button type="submit">Supprimer definitivement</button>
+                    </form>
+                </div>
+            <?php else: ?>
+                <div class="link-box">
+                    <strong>Impossible - restaurant reel.</strong>
+                    <span class="muted">La suppression definitive est bloquee pour les restaurants clients actifs ou reels.</span>
+                </div>
+            <?php endif; ?>
         </div>
     </details>
 

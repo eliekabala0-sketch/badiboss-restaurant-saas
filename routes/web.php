@@ -55,6 +55,7 @@ $router->post('/super-admin/restaurants/{id}/update', [RestaurantAdminController
 $router->post('/super-admin/restaurants/{id}/branding', [RestaurantAdminController::class, 'updateBranding'], [AuthMiddleware::class, SuperAdminMiddleware::class]);
 $router->post('/super-admin/restaurants/{id}/settings', [RestaurantAdminController::class, 'updateSettings'], [AuthMiddleware::class, SuperAdminMiddleware::class]);
 $router->post('/super-admin/restaurants/{id}/status', [RestaurantAdminController::class, 'changeStatus'], [AuthMiddleware::class, SuperAdminMiddleware::class]);
+$router->post('/super-admin/restaurants/{id}/delete-test', [RestaurantAdminController::class, 'deleteTestRestaurant'], [AuthMiddleware::class, SuperAdminMiddleware::class]);
 $router->post('/super-admin/restaurants/{id}/subscription/activate', [RestaurantAdminController::class, 'activateSubscription'], [AuthMiddleware::class, SuperAdminMiddleware::class]);
 $router->get('/super-admin/users', [UserAdminController::class, 'index'], [AuthMiddleware::class, SuperAdminMiddleware::class]);
 $router->post('/super-admin/users', [UserAdminController::class, 'store'], [AuthMiddleware::class, SuperAdminMiddleware::class]);
