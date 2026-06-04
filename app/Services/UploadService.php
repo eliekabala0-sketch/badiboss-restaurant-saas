@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace App\Services;
 
+use App\Core\Container;
+
 final class UploadService
 {
     private const ALLOWED_EXTENSIONS = ['jpg', 'jpeg', 'png', 'webp'];
@@ -68,7 +70,10 @@ final class UploadService
             throw new \RuntimeException('Impossible d enregistrer le fichier televerse.');
         }
 
-        return rtrim($publicPrefix, '/') . '/' . $filename;
+        $publicPath = rtrim($publicPrefix, '/') . '/' . $filename;
+        $this->mirrorStoredImage($targetPath, $publicPath, $kind);
+
+        return $publicPath;
     }
 
     private function assetConfig(string $kind, string $sourceExtension): array
@@ -277,5 +282,65 @@ PS1;
             max(1, (int) round($sourceWidth * $ratio)),
             max(1, (int) round($sourceHeight * $ratio)),
         ];
+    }
+
+    private function mirrorStoredImage(string $absolutePath, string $publicPath, string $kind): void
+    {
+        if (!is_file($absolutePath) || !is_readable($absolutePath)) {
+            return;
+        }
+
+        $normalized = ltrim($publicPath, '/');
+        if (preg_match('#^uploads/restaurants/([^/]+)(?:/menu)?/([^/]+)$#', $normalized, $matches) !== 1) {
+            return;
+        }
+
+        try {
+            $pdo = Container::getInstance()->get('db')->pdo();
+            $pdo->exec(
+                'CREATE TABLE IF NOT EXISTS restaurant_media_assets (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    restaurant_code VARCHAR(120) NOT NULL,
+                    public_path VARCHAR(500) NOT NULL,
+                    filename VARCHAR(255) NOT NULL,
+                    kind VARCHAR(40) NOT NULL,
+                    mime_type VARCHAR(120) NOT NULL,
+                    file_size INT NOT NULL DEFAULT 0,
+                    content LONGBLOB NOT NULL,
+                    created_at DATETIME NOT NULL,
+                    updated_at DATETIME NOT NULL,
+                    UNIQUE KEY uq_restaurant_media_path (public_path),
+                    KEY idx_restaurant_media_lookup (restaurant_code, filename)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci'
+            );
+            $binary = file_get_contents($absolutePath);
+            if ($binary === false) {
+                return;
+            }
+            $statement = $pdo->prepare(
+                'INSERT INTO restaurant_media_assets
+                    (restaurant_code, public_path, filename, kind, mime_type, file_size, content, created_at, updated_at)
+                 VALUES
+                    (:restaurant_code, :public_path, :filename, :kind, :mime_type, :file_size, :content, NOW(), NOW())
+                 ON DUPLICATE KEY UPDATE
+                    restaurant_code = VALUES(restaurant_code),
+                    filename = VALUES(filename),
+                    kind = VALUES(kind),
+                    mime_type = VALUES(mime_type),
+                    file_size = VALUES(file_size),
+                    content = VALUES(content),
+                    updated_at = NOW()'
+            );
+            $statement->bindValue('restaurant_code', (string) $matches[1]);
+            $statement->bindValue('public_path', '/' . $normalized);
+            $statement->bindValue('filename', (string) $matches[2]);
+            $statement->bindValue('kind', $kind);
+            $statement->bindValue('mime_type', (string) (mime_content_type($absolutePath) ?: 'application/octet-stream'));
+            $statement->bindValue('file_size', strlen($binary), \PDO::PARAM_INT);
+            $statement->bindValue('content', $binary, \PDO::PARAM_LOB);
+            $statement->execute();
+        } catch (\Throwable $exception) {
+            error_log('[MEDIA_MIRROR] ' . $exception->getMessage());
+        }
     }
 }

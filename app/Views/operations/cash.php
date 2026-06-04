@@ -369,6 +369,9 @@ $rbCash = (int) (($cashRegBack['overdue_remis_a_caisse'] ?? 0) + ($cashRegBack['
                     </td>
                     <td><?= e(format_date_fr($transfer['received_at'] ?? $transfer['requested_at'] ?? $transfer['created_at'] ?? null)) ?></td>
                     <td>
+                        <div class="toolbar-actions" style="margin-bottom:10px;">
+                            <a href="/preuves/versements/<?= e((string) $transfer['id']) ?>" class="button-muted" target="_blank" rel="noopener noreferrer">Recu PAYE</a>
+                        </div>
                         <?php if (($transfer['status'] ?? '') === 'REMIS_A_CAISSE'): ?>
                             <form method="post" action="/caisse/transferts/<?= e((string) $transfer['id']) ?>/reception-caisse">
                                 <input name="amount_received" value="<?= e((string) ($transfer['amount'] ?? 0)) ?>">

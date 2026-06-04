@@ -17,6 +17,7 @@ use App\Services\MenuAdminService;
 use App\Services\OperationalResetService;
 use App\Services\StockResetService;
 use App\Services\PlatformSettingsService;
+use App\Services\ProofService;
 use App\Services\RegularizationGateService;
 use App\Services\ReportService;
 use App\Services\RestaurantAdminService;
@@ -114,6 +115,7 @@ final class App
         $container->set('auditQuery', new AuditQueryService($database));
         $container->set('tenantResolver', new TenantResolverService($database));
         $container->set('platformSettings', new PlatformSettingsService($database));
+        $container->set('proofService', new ProofService($database));
         $container->set('incidentService', new IncidentService($database));
         $container->set('stockService', new StockService($database));
         $container->set('correctionService', new CorrectionRequestService($database));

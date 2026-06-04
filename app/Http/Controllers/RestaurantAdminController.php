@@ -225,6 +225,7 @@ final class RestaurantAdminController
         try {
             $restaurantCode = (string) ($restaurant['restaurant_code'] ?? '');
             $service->deleteTestRestaurant($restaurantId, $_SESSION['user']);
+            $this->deleteRestaurantMediaAssetRows($restaurantCode);
             $this->deleteRestaurantUploadDirectory($restaurantCode);
             flash('success', 'Restaurant test supprime definitivement.');
         } catch (\Throwable $exception) {
@@ -321,5 +322,25 @@ final class RestaurantAdminController
         }
 
         @rmdir($target);
+    }
+
+    private function deleteRestaurantMediaAssetRows(string $restaurantCode): void
+    {
+        $restaurantCode = trim($restaurantCode);
+        if ($restaurantCode === '') {
+            return;
+        }
+
+        try {
+            $pdo = Container::getInstance()->get('db')->pdo();
+            $exists = $pdo->query("SHOW TABLES LIKE 'restaurant_media_assets'");
+            if ($exists === false || $exists->fetchColumn() === false) {
+                return;
+            }
+            $statement = $pdo->prepare('DELETE FROM restaurant_media_assets WHERE restaurant_code = :restaurant_code');
+            $statement->execute(['restaurant_code' => $restaurantCode]);
+        } catch (\Throwable $exception) {
+            error_log('[MEDIA_TEST_DELETE] ' . $exception->getMessage());
+        }
     }
 }

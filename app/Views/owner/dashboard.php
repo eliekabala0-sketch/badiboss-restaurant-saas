@@ -180,6 +180,7 @@ require base_path('app/Views/partials/module_quick_nav.php');
             <p class="muted" style="margin:6px 0 0;"><?= e((string) ($cashTodaySnapshot['period_label'] ?? '')) ?> · <?= e((string) ($cashTodaySnapshot['date_ymd'] ?? '')) ?></p>
         </div>
         <?php if (!empty($can_access_reports)): ?><a href="/rapport?report_preset=today" class="button-muted no-print">Ouvrir le rapport du jour</a><?php endif; ?>
+        <?php if (!empty($can_access_reports)): ?><a href="/preuves" class="button-muted no-print">Factures / preuves</a><?php endif; ?>
     </div>
     <div class="grid stats">
         <article class="card stat"><span>Ventes du jour</span><strong><?= e(format_money($cashSalesActivityToday, $restaurantCurrency)) ?></strong></article>

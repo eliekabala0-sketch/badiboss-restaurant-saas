@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Http\Controllers;
 
+use App\Core\Container;
 use App\Core\Request;
 
 final class MediaController
@@ -15,7 +16,9 @@ final class MediaController
 
         $this->serveUpload(
             base_path('public/uploads/restaurants/' . $restaurantCode . '/' . $filename),
-            $this->fallbackKindFromFilename($filename)
+            $this->fallbackKindFromFilename($filename),
+            $restaurantCode,
+            $filename
         );
     }
 
@@ -26,11 +29,13 @@ final class MediaController
 
         $this->serveUpload(
             base_path('public/uploads/restaurants/' . $restaurantCode . '/menu/' . $filename),
-            'photo'
+            'photo',
+            $restaurantCode,
+            $filename
         );
     }
 
-    private function serveUpload(string $absolutePath, string $fallbackKind): void
+    private function serveUpload(string $absolutePath, string $fallbackKind, string $restaurantCode, string $filename): void
     {
         if ($absolutePath !== '' && is_file($absolutePath) && is_readable($absolutePath)) {
             $mime = (string) (mime_content_type($absolutePath) ?: 'application/octet-stream');
@@ -56,7 +61,65 @@ final class MediaController
             return;
         }
 
+        if ($this->serveMirroredUpload($restaurantCode, $filename)) {
+            return;
+        }
+
         $this->renderFallback($fallbackKind);
+    }
+
+    private function serveMirroredUpload(string $restaurantCode, string $filename): bool
+    {
+        if ($restaurantCode === '' || $filename === '') {
+            return false;
+        }
+
+        try {
+            $pdo = Container::getInstance()->get('db')->pdo();
+            $table = $pdo->query("SHOW TABLES LIKE 'restaurant_media_assets'")->fetchColumn();
+            if ($table === false) {
+                return false;
+            }
+
+            $statement = $pdo->prepare(
+                'SELECT mime_type, file_size, content, updated_at
+                 FROM restaurant_media_assets
+                 WHERE restaurant_code = :restaurant_code AND filename = :filename
+                 ORDER BY id DESC
+                 LIMIT 1'
+            );
+            $statement->execute([
+                'restaurant_code' => $restaurantCode,
+                'filename' => $filename,
+            ]);
+            $asset = $statement->fetch(\PDO::FETCH_ASSOC);
+            if ($asset === false || !is_string($asset['content'] ?? null) || $asset['content'] === '') {
+                return false;
+            }
+
+            $updatedAt = strtotime((string) ($asset['updated_at'] ?? '')) ?: time();
+            $etag = '"' . sha1($restaurantCode . '|' . $filename . '|' . (string) ($asset['file_size'] ?? 0) . '|' . (string) ($asset['updated_at'] ?? '')) . '"';
+            header('Content-Type: ' . (string) ($asset['mime_type'] ?? 'application/octet-stream'));
+            header('Cache-Control: public, max-age=31536000, immutable');
+            header('ETag: ' . $etag);
+            header('Last-Modified: ' . gmdate('D, d M Y H:i:s', $updatedAt) . ' GMT');
+            header('X-Badiboss-Media-Source: database');
+
+            $clientEtag = (string) ($_SERVER['HTTP_IF_NONE_MATCH'] ?? '');
+            $clientModified = (string) ($_SERVER['HTTP_IF_MODIFIED_SINCE'] ?? '');
+            if ($clientEtag === $etag || ($clientModified !== '' && strtotime($clientModified) >= $updatedAt)) {
+                http_response_code(304);
+                return true;
+            }
+
+            echo $asset['content'];
+
+            return true;
+        } catch (\Throwable $exception) {
+            error_log('[MEDIA_DB_FALLBACK] ' . $exception->getMessage());
+
+            return false;
+        }
     }
 
     private function renderFallback(string $kind): void
@@ -64,14 +127,16 @@ final class MediaController
         $dataUrl = restaurant_media_fallback_url($kind);
         if (str_starts_with($dataUrl, 'data:image/svg+xml;utf8,')) {
             header('Content-Type: image/svg+xml; charset=UTF-8');
-            header('Cache-Control: public, max-age=604800');
+            header('Cache-Control: public, max-age=3600');
+            header('X-Badiboss-Media-Fallback: stable');
             echo rawurldecode(substr($dataUrl, strlen('data:image/svg+xml;utf8,')));
 
             return;
         }
 
         header('Content-Type: text/plain; charset=UTF-8');
-        header('Cache-Control: public, max-age=604800');
+        header('Cache-Control: public, max-age=3600');
+        header('X-Badiboss-Media-Fallback: stable');
         echo '';
     }
 

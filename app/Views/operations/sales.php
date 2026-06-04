@@ -1018,7 +1018,10 @@ $todayShort = (float) ($todayAgentCash['shortfall'] ?? 0);
                         <td><?= e(format_money($sale['total_amount'] ?? 0, $restaurantCurrency)) ?></td>
                         <td><?= e(validation_status_label($sale['status'] ?? null)) ?></td>
                         <td><?= e($tracking !== null && !empty($tracking['transfer_id']) ? cash_transfer_status_label($tracking['transfer_status'] ?? null) : 'En attente') ?></td>
-                        <td><a href="/ventes/factures/<?= e((string) $sale['id']) ?>" class="button-muted" target="_blank" rel="noopener noreferrer">Imprimer</a></td>
+                        <td>
+                            <a href="/preuves/commandes/<?= e((string) $sale['id']) ?>" class="button-muted" target="_blank" rel="noopener noreferrer">Voir facture</a>
+                            <a href="/preuves/commandes/<?= e((string) $sale['id']) ?>" class="button-muted" target="_blank" rel="noopener noreferrer">Imprimer / telecharger</a>
+                        </td>
                     </tr>
                 <?php endforeach; ?>
                 </tbody>

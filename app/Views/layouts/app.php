@@ -1279,6 +1279,7 @@ foreach ($notificationSources as $candidate) {
                     <?php if (can_access('sales.view')): ?><a href="/ventes">Ventes</a><?php endif; ?>
                     <?php if (can_access('cash.view')): ?><a href="/caisse">Caisse</a><?php endif; ?>
                     <?php if (can_access('reports.view')): ?><a href="/rapport">Rapports</a><?php endif; ?>
+                    <?php if (can_access('reports.view') || can_access('sales.view')): ?><a href="/preuves">Factures / preuves</a><?php endif; ?>
                 <?php endif; ?>
                 <a href="/logout">Déconnexion</a>
             </nav>

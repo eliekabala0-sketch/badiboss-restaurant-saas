@@ -21,6 +21,37 @@ final class OperationsController
         $kitchenStockBlocks = Container::getInstance()->get('stockService')->listKitchenStockRequestBlocks($restaurantId);
         $items = Container::getInstance()->get('stockService')->listItems($restaurantId);
         $movements = Container::getInstance()->get('stockService')->listMovementHistoryRows($restaurantId, 80);
+        $stockHistoryPreset = strtolower(trim((string) ($request->query['stock_history_preset'] ?? 'today')));
+        if (!in_array($stockHistoryPreset, ['today', 'yesterday', 'date', 'week', 'month', 'prev_month', 'all'], true)) {
+            $stockHistoryPreset = 'today';
+        }
+        $stockHistoryDate = trim((string) ($request->query['stock_history_date'] ?? ''));
+        if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $stockHistoryDate)) {
+            $stockHistoryDate = Container::getInstance()->get('reportService')->todayForRestaurant($restaurantId);
+        }
+        $stockHistoryWindow = null;
+        $movementsForHistory = $movements;
+        if ($stockHistoryPreset !== 'all') {
+            $stockHistoryWindow = Container::getInstance()->get('reportService')->operationalPeriodWindow(
+                $restaurantId,
+                $stockHistoryPreset,
+                $stockHistoryDate
+            );
+            $startHistory = $stockHistoryWindow['start'];
+            $endHistory = $stockHistoryWindow['end'];
+            $movementsForHistory = array_values(array_filter(
+                $movements,
+                static function (array $row) use ($startHistory, $endHistory): bool {
+                    try {
+                        $created = new \DateTimeImmutable((string) ($row['created_at'] ?? ''));
+                    } catch (\Throwable) {
+                        return false;
+                    }
+
+                    return $created >= $startHistory && $created < $endHistory;
+                }
+            ));
+        }
         $stockCategoryFilter = trim((string) ($request->query['stock_cat'] ?? 'all'));
         $stockItemIdsForFilter = stock_item_ids_matching_category_filter($items, $stockCategoryFilter);
         $stockControlItemId = max(0, (int) ($request->query['sc_item_id'] ?? 0));
@@ -29,9 +60,9 @@ final class OperationsController
             $stockControlItemIds = [$stockControlItemId];
         }
         $movementsDisplay = $stockItemIdsForFilter === null
-            ? $movements
+            ? $movementsForHistory
             : array_values(array_filter(
-                $movements,
+                $movementsForHistory,
                 static function (array $row) use ($stockItemIdsForFilter): bool {
                     return in_array((int) ($row['stock_item_id'] ?? 0), $stockItemIdsForFilter, true);
                 }
@@ -75,6 +106,9 @@ final class OperationsController
             'items' => $items,
             'movements' => $movements,
             'movements_display' => $movementsDisplay,
+            'stock_history_preset' => $stockHistoryPreset,
+            'stock_history_date' => $stockHistoryDate,
+            'stock_history_window' => $stockHistoryWindow,
             'stock_category_filter' => $stockCategoryFilter,
             'stock_item_ids_for_filter' => $stockItemIdsForFilter,
             'stock_category_labels' => $stockCategoryLabels,
@@ -896,11 +930,117 @@ final class OperationsController
     {
         $restaurantId = $this->resolveRestaurantId($request);
         authorize_access('sales.view');
+        $receipt = Container::getInstance()->get('proofService')->saleProof($restaurantId, (int) $request->route('id'));
+        $actor = current_user() ?? [];
+        if (
+            ($actor['role_code'] ?? null) === 'cashier_server'
+            && (int) ($receipt['sale']['server_id'] ?? 0) !== (int) ($actor['id'] ?? 0)
+        ) {
+            throw new \RuntimeException('Facture hors perimetre serveur.');
+        }
 
         view('operations/receipt', [
             'title' => 'Facture',
             'restaurant' => Container::getInstance()->get('restaurantAdmin')->findRestaurant($restaurantId),
-            'receipt' => Container::getInstance()->get('cashService')->printableReceipt($restaurantId, (int) $request->route('id')),
+            'receipt' => $receipt,
+        ]);
+    }
+
+    public function proofsIndex(Request $request): void
+    {
+        $restaurantId = $this->resolveRestaurantId($request);
+        $actor = current_user() ?? [];
+        if (($actor['role_code'] ?? null) === 'cashier_server') {
+            authorize_access('sales.view');
+        } else {
+            authorize_access('reports.view');
+        }
+
+        $filters = [
+            'date' => (string) ($request->query['date'] ?? ''),
+            'server_id' => (int) ($request->query['server_id'] ?? 0),
+            'type' => (string) ($request->query['type'] ?? 'all'),
+        ];
+        if (($actor['role_code'] ?? null) === 'cashier_server') {
+            $filters['server_id'] = (int) ($actor['id'] ?? 0);
+        }
+
+        view('operations/proofs-index', [
+            'title' => 'Factures / preuves',
+            'restaurant' => Container::getInstance()->get('restaurantAdmin')->findRestaurant($restaurantId),
+            'proof_index' => Container::getInstance()->get('proofService')->documentIndex($restaurantId, $filters),
+            'filters' => $filters,
+            'flash_success' => flash('success'),
+            'flash_error' => flash('error'),
+        ]);
+    }
+
+    public function printCashTransferProof(Request $request): void
+    {
+        $restaurantId = $this->resolveRestaurantId($request);
+        $actor = current_user() ?? [];
+        $proof = Container::getInstance()->get('proofService')->cashTransferProof($restaurantId, (int) $request->route('id'));
+        if (($actor['role_code'] ?? null) === 'cashier_server') {
+            authorize_access('sales.view');
+            if ((int) ($proof['transfer']['from_user_id'] ?? 0) !== (int) ($actor['id'] ?? 0)) {
+                throw new \RuntimeException('Recu de versement hors perimetre serveur.');
+            }
+        } else {
+            authorize_access('cash.view');
+        }
+
+        view('operations/proof-cash-transfer', [
+            'title' => 'Recu versement caisse',
+            'restaurant' => Container::getInstance()->get('restaurantAdmin')->findRestaurant($restaurantId),
+            'proof' => $proof,
+        ]);
+    }
+
+    public function printServerDailyProof(Request $request): void
+    {
+        $restaurantId = $this->resolveRestaurantId($request);
+        $actor = current_user() ?? [];
+        $serverId = (int) ($request->query['server_id'] ?? 0);
+        if (($actor['role_code'] ?? null) === 'cashier_server') {
+            authorize_access('sales.view');
+            $serverId = (int) ($actor['id'] ?? 0);
+        } else {
+            authorize_access('reports.view');
+        }
+
+        view('operations/proof-server-report', [
+            'title' => 'Rapport journalier serveur',
+            'restaurant' => Container::getInstance()->get('restaurantAdmin')->findRestaurant($restaurantId),
+            'proof' => Container::getInstance()->get('proofService')->serverPeriodProof(
+                $restaurantId,
+                $serverId,
+                'daily',
+                (string) ($request->query['date'] ?? '')
+            ),
+        ]);
+    }
+
+    public function printServerMonthlyProof(Request $request): void
+    {
+        $restaurantId = $this->resolveRestaurantId($request);
+        $actor = current_user() ?? [];
+        $serverId = (int) ($request->query['server_id'] ?? 0);
+        if (($actor['role_code'] ?? null) === 'cashier_server') {
+            authorize_access('sales.view');
+            $serverId = (int) ($actor['id'] ?? 0);
+        } else {
+            authorize_access('reports.view');
+        }
+
+        view('operations/proof-server-report', [
+            'title' => 'Rapport mensuel serveur',
+            'restaurant' => Container::getInstance()->get('restaurantAdmin')->findRestaurant($restaurantId),
+            'proof' => Container::getInstance()->get('proofService')->serverPeriodProof(
+                $restaurantId,
+                $serverId,
+                'monthly',
+                (string) ($request->query['month'] ?? '')
+            ),
         ]);
     }
 

@@ -15,10 +15,17 @@ $stockItemIdsForFilter = $stock_item_ids_for_filter ?? null;
 $stock_movement_display_limit = 50;
 $movements_display = $movements_display ?? $movements;
 $stock_movement_history = array_slice($movements_display, 0, $stock_movement_display_limit);
+$stockHistoryPreset = $stock_history_preset ?? 'today';
+$stockHistoryDate = $stock_history_date ?? $todayDate;
+$stockHistoryWindow = $stock_history_window ?? null;
+$stockHistoryLabel = $stockHistoryPreset === 'all'
+    ? 'Tout l historique charge'
+    : (string) ($stockHistoryWindow['label'] ?? 'Aujourd hui');
 $module_today_pulse = $module_today_pulse ?? [];
 $day_start_hold = $day_start_hold ?? ['blocked' => false, 'reasons' => []];
 $regularization_backlog = $regularization_backlog ?? [];
 $dash_tab_extra_qs = ($stockCategoryFilter !== 'all' && $stockCategoryFilter !== '') ? '&stock_cat=' . rawurlencode($stockCategoryFilter) : '';
+$dash_tab_extra_qs .= '&stock_history_preset=' . rawurlencode((string) $stockHistoryPreset) . '&stock_history_date=' . rawurlencode((string) $stockHistoryDate);
 ?>
 <style>
 @media (max-width: 900px) {
@@ -84,6 +91,7 @@ $movementQuickSections = [
     'sorties_cuisine' => ['label' => 'Sorties cuisine', 'rows' => []],
     'controles' => ['label' => 'Controle physique', 'rows' => []],
 ];
+$movementCategoryGroups = [];
 $stockMovementEntryTypes = ['ENTREE', 'RETOUR_STOCK'];
 $stockMovementExitTypes = ['SORTIE', 'SORTIE_CUISINE', 'PERTE', 'CONSOMMATION_CUISINE'];
 
@@ -111,7 +119,26 @@ foreach ($stock_movement_history as $movementRow) {
     if ($movementType === 'CORRECTION_INVENTAIRE') {
         $movementQuickSections['controles']['rows'][] = $movementRow;
     }
+
+    $categoryLabel = trim((string) ($movementRow['stock_item_category_label'] ?? 'Sans categorie'));
+    if ($categoryLabel === '') {
+        $categoryLabel = 'Sans categorie';
+    }
+    $itemName = trim((string) ($movementRow['stock_item_name'] ?? 'Article'));
+    if (!isset($movementCategoryGroups[$categoryLabel])) {
+        $movementCategoryGroups[$categoryLabel] = [
+            'label' => $categoryLabel,
+            'rows_count' => 0,
+            'items' => [],
+        ];
+    }
+    if (!isset($movementCategoryGroups[$categoryLabel]['items'][$itemName])) {
+        $movementCategoryGroups[$categoryLabel]['items'][$itemName] = [];
+    }
+    $movementCategoryGroups[$categoryLabel]['rows_count']++;
+    $movementCategoryGroups[$categoryLabel]['items'][$itemName][] = $movementRow;
 }
+ksort($movementCategoryGroups, SORT_NATURAL | SORT_FLAG_CASE);
 
 $stockFilterHref = static function (string $token): string {
     if ($token === 'all') {
@@ -119,6 +146,20 @@ $stockFilterHref = static function (string $token): string {
     }
 
     return '/stock?stock_cat=' . rawurlencode($token);
+};
+$stockHistoryHref = static function (string $preset, string $date, string $categoryToken = ''): string {
+    $query = ['stock_history_preset' => $preset];
+    if ($date !== '') {
+        $query['stock_history_date'] = $date;
+    }
+    if ($categoryToken !== '' && $categoryToken !== 'all') {
+        if (!str_starts_with($categoryToken, 'exact:') && !str_starts_with($categoryToken, 'bucket_')) {
+            $categoryToken = 'exact:' . rawurlencode($categoryToken);
+        }
+        $query['stock_cat'] = $categoryToken;
+    }
+
+    return '/stock?' . http_build_query($query);
 };
 
 $printStockHref = '/stock?print=1';
@@ -981,6 +1022,21 @@ require base_path('app/Views/partials/module_quick_nav.php');
             Affichage des <?= e((string) $stock_movement_display_limit) ?> plus recents sur <?= e((string) count($movements)) ?>.
         <?php endif; ?>
     </p>
+    <p class="muted"><strong>Periode historique :</strong> <?= e($stockHistoryLabel) ?></p>
+    <div class="toolbar-actions no-print" style="margin:12px 0 18px; align-items:center;">
+        <a class="button-muted" href="<?= e($stockHistoryHref('today', $todayDate, $stockCategoryFilter)) ?>">Aujourd hui</a>
+        <a class="button-muted" href="<?= e($stockHistoryHref('yesterday', $todayDate, $stockCategoryFilter)) ?>">Hier</a>
+        <a class="button-muted" href="<?= e($stockHistoryHref('week', $stockHistoryDate, $stockCategoryFilter)) ?>">Semaine</a>
+        <a class="button-muted" href="<?= e($stockHistoryHref('month', $stockHistoryDate, $stockCategoryFilter)) ?>">Mois</a>
+        <a class="button-muted" href="<?= e($stockHistoryHref('prev_month', $stockHistoryDate, $stockCategoryFilter)) ?>">Mois precedent</a>
+        <a class="button-muted" href="<?= e($stockHistoryHref('all', $stockHistoryDate, $stockCategoryFilter)) ?>">Tout</a>
+        <form method="get" action="/stock" style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+            <input type="hidden" name="stock_history_preset" value="date">
+            <?php if ($stockCategoryFilter !== 'all' && $stockCategoryFilter !== ''): ?><input type="hidden" name="stock_cat" value="<?= e($stockCategoryFilter) ?>"><?php endif; ?>
+            <input type="date" name="stock_history_date" value="<?= e((string) $stockHistoryDate) ?>" style="margin:0; width:auto;">
+            <button type="submit" class="button-muted">Date</button>
+        </form>
+    </div>
     <?php if ($stock_movement_history === []): ?>
         <p class="muted">Aucun mouvement enregistre pour ce restaurant<?= $stockCategoryFilter !== 'all' && $stockCategoryFilter !== '' ? ' dans ce filtre' : '' ?>.</p>
     <?php else: ?>
@@ -1040,6 +1096,54 @@ require base_path('app/Views/partials/module_quick_nav.php');
                 </details>
             <?php endforeach; ?>
         </div>
+
+        <details class="compact-card" style="padding:0 0 10px; margin-bottom:18px;">
+            <summary style="cursor:pointer; list-style:none; padding:12px 0; border-top:1px solid var(--line); display:flex; justify-content:space-between; gap:12px; align-items:center;">
+                <span><strong>Historique par categorie et article</strong><span class="muted"> - Coca, Fanta, Riz, Viande...</span></span>
+                <span class="muted">Ouvrir</span>
+            </summary>
+            <?php foreach ($movementCategoryGroups as $categoryKey => $categoryGroup): ?>
+                <details class="compact-card" style="margin:10px 0;">
+                    <summary style="cursor:pointer; list-style:none; display:flex; justify-content:space-between; gap:12px; align-items:center;">
+                        <strong><?= e((string) $categoryGroup['label']) ?></strong>
+                        <span class="muted"><?= e((string) $categoryGroup['rows_count']) ?> mouvement(s)</span>
+                    </summary>
+                    <div class="toolbar-actions no-print" style="margin:10px 0;">
+                        <a class="button-muted" href="<?= e($stockHistoryHref('today', $todayDate, (string) $categoryKey)) ?>">Aujourd hui</a>
+                        <a class="button-muted" href="<?= e($stockHistoryHref('yesterday', $todayDate, (string) $categoryKey)) ?>">Hier</a>
+                        <a class="button-muted" href="<?= e($stockHistoryHref('week', $stockHistoryDate, (string) $categoryKey)) ?>">Semaine</a>
+                        <a class="button-muted" href="<?= e($stockHistoryHref('month', $stockHistoryDate, (string) $categoryKey)) ?>">Mois</a>
+                        <a class="button-muted" href="<?= e($stockHistoryHref('prev_month', $stockHistoryDate, (string) $categoryKey)) ?>">Mois precedent</a>
+                        <a class="button-muted" href="<?= e($stockHistoryHref('all', $stockHistoryDate, (string) $categoryKey)) ?>">Tout</a>
+                    </div>
+                    <?php foreach ($categoryGroup['items'] as $itemName => $itemRows): ?>
+                        <details class="compact-card" style="margin:8px 0;">
+                            <summary style="cursor:pointer; list-style:none; display:flex; justify-content:space-between; gap:12px;">
+                                <strong><?= e((string) $itemName) ?></strong>
+                                <span class="muted"><?= e((string) count($itemRows)) ?> ligne(s)</span>
+                            </summary>
+                            <div class="table-wrap" style="margin-top:8px;">
+                                <table>
+                                    <thead><tr><th>Date</th><th>Type</th><th>Quantite</th><th>Stock magasin</th><th>Statut</th></tr></thead>
+                                    <tbody>
+                                    <?php foreach (array_slice($itemRows, 0, 12) as $m): ?>
+                                        <tr>
+                                            <td><?= e(format_date_fr($m['created_at'] ?? null, $historyTimezone)) ?></td>
+                                            <td><?= e(movement_type_label((string) ($m['movement_type'] ?? ''))) ?></td>
+                                            <td><?= e((string) ($m['quantity'] ?? 0)) ?> <?= e((string) ($m['unit_name'] ?? '')) ?></td>
+                                            <td><?= e((string) ($m['quantity_before_physical'] ?? '-')) ?> &rarr; <?= e((string) ($m['quantity_after_physical'] ?? '-')) ?></td>
+                                            <td><?= e(validation_status_label($m['status'] ?? null)) ?></td>
+                                        </tr>
+                                    <?php endforeach; ?>
+                                    </tbody>
+                                </table>
+                            </div>
+                            <?php if (count($itemRows) > 12): ?><p class="muted">Voir plus : affinez par date ou ouvrez Tout.</p><?php endif; ?>
+                        </details>
+                    <?php endforeach; ?>
+                </details>
+            <?php endforeach; ?>
+        </details>
 
         <details class="compact-card" style="padding:0 0 10px;">
             <summary style="cursor:pointer; list-style:none; padding:12px 0; border-top:1px solid var(--line); display:flex; justify-content:space-between; gap:12px; align-items:center;">

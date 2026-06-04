@@ -299,6 +299,10 @@ function restaurant_media_url(?string $value): ?string
 
 function restaurant_media_fallback_url(string $kind = 'logo'): string
 {
+    if ($kind === 'logo') {
+        return 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 280"><rect width="480" height="280" rx="28" fill="%23111827"/><rect x="40" y="40" width="400" height="200" rx="20" fill="%23D4AF37" opacity=".18"/><text x="50%" y="48%" text-anchor="middle" font-family="Arial,sans-serif" font-size="34" fill="%23F5F2EA">Logo temporairement</text><text x="50%" y="64%" text-anchor="middle" font-family="Arial,sans-serif" font-size="34" fill="%23F5F2EA">indisponible</text><text x="50%" y="80%" text-anchor="middle" font-family="Arial,sans-serif" font-size="20" fill="%23D4AF37">Reference conservee</text></svg>';
+    }
+
     return match ($kind) {
         'favicon' => 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128"><rect width="128" height="128" rx="24" fill="%23111827"/><text x="50%" y="56%" text-anchor="middle" dominant-baseline="middle" font-family="Arial,sans-serif" font-size="54" fill="%23F59E0B">B</text></svg>',
         'photo' => 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 540"><rect width="960" height="540" fill="%23F4F1EA"/><rect x="60" y="60" width="840" height="420" rx="28" fill="%23E5DED1" stroke="%23D4AF37" stroke-width="8"/><circle cx="290" cy="205" r="54" fill="%23D4AF37"/><path d="M165 390 330 255l120 108 114-84 171 111H165Z" fill="%23111827" opacity=".8"/><text x="50%" y="90%" text-anchor="middle" font-family="Arial,sans-serif" font-size="34" fill="%236B7280">Photo restaurant indisponible</text></svg>',

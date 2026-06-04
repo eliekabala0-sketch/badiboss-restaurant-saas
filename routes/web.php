@@ -117,6 +117,11 @@ $router->post('/cuisine/demandes-serveur/{id}/decliner', [OperationsController::
 $router->post('/cuisine/demandes-serveur/{id}/fourni', [OperationsController::class, 'fulfillServerRequestItem'], [AuthMiddleware::class, KitchenAccessMiddleware::class]);
 $router->get('/ventes', [OperationsController::class, 'sales'], [AuthMiddleware::class, SalesAccessMiddleware::class]);
 $router->get('/ventes/factures/{id}', [OperationsController::class, 'printSaleReceipt'], [AuthMiddleware::class, SalesAccessMiddleware::class]);
+$router->get('/preuves', [OperationsController::class, 'proofsIndex'], [AuthMiddleware::class]);
+$router->get('/preuves/commandes/{id}', [OperationsController::class, 'printSaleReceipt'], [AuthMiddleware::class]);
+$router->get('/preuves/versements/{id}', [OperationsController::class, 'printCashTransferProof'], [AuthMiddleware::class]);
+$router->get('/preuves/serveur/journalier', [OperationsController::class, 'printServerDailyProof'], [AuthMiddleware::class]);
+$router->get('/preuves/serveur/mensuel', [OperationsController::class, 'printServerMonthlyProof'], [AuthMiddleware::class]);
 $router->post('/ventes', [OperationsController::class, 'createSale'], [AuthMiddleware::class, SalesAccessMiddleware::class]);
 $router->post('/ventes/demandes', [OperationsController::class, 'createServerRequest'], [AuthMiddleware::class, SalesAccessMiddleware::class]);
 $router->post('/ventes/demandes/{id}/reception', [OperationsController::class, 'confirmServerRequestReceipt'], [AuthMiddleware::class, SalesAccessMiddleware::class]);
