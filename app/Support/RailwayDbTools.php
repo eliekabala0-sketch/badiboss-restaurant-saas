@@ -162,6 +162,7 @@ final class RailwayDbTools
             self::ensureOperationalPlans($pdo, $report);
             self::ensureRestaurantCurrency($pdo, $report);
             self::ensureCorrectionRequestsTable($pdo, $report);
+            self::ensureUsersRuntimeColumns($pdo, $report);
 
             self::ensureStockItemsRuntimeColumns($pdo, $report);
 
@@ -689,6 +690,59 @@ final class RailwayDbTools
         self::addStockItemsColumnIfMissing($pdo, $report, 'archived_at', 'DATETIME NULL', ['updated_at', 'created_at']);
         self::addStockItemsColumnIfMissing($pdo, $report, 'archived_by', 'BIGINT UNSIGNED NULL', ['archived_at', 'updated_at', 'created_at']);
         self::addStockItemsColumnIfMissing($pdo, $report, 'archive_reason', 'TEXT NULL', ['archived_by', 'archived_at', 'updated_at', 'created_at']);
+    }
+
+    private static function ensureUsersRuntimeColumns(PDO $pdo, array &$report): void
+    {
+        if (!self::tableExists($pdo, 'users')) {
+            $report['errors'][] = 'users table missing';
+
+            return;
+        }
+
+        self::addUsersColumnIfMissing($pdo, $report, 'disabled_at', 'DATETIME NULL', ['last_login_at', 'must_change_password']);
+        self::addUsersColumnIfMissing($pdo, $report, 'deleted_at', 'DATETIME NULL', ['archived_at', 'banned_at', 'disabled_at']);
+        self::addUsersColumnIfMissing($pdo, $report, 'status_reason', 'TEXT NULL', ['deleted_at', 'archived_at', 'banned_at']);
+    }
+
+    /**
+     * @param list<string> $preferredAnchors
+     */
+    private static function addUsersColumnIfMissing(PDO $pdo, array &$report, string $name, string $ddl, array $preferredAnchors): void
+    {
+        if (self::columnExists($pdo, 'users', $name)) {
+            $report['columns_existing'][] = 'users.' . $name;
+
+            return;
+        }
+
+        $after = '';
+        foreach ($preferredAnchors as $anchor) {
+            if (self::columnExists($pdo, 'users', $anchor)) {
+                $after = ' AFTER `' . str_replace('`', '``', $anchor) . '`';
+                break;
+            }
+        }
+
+        $ident = '`' . str_replace('`', '``', $name) . '`';
+        $sql = 'ALTER TABLE users ADD COLUMN ' . $ident . ' ' . $ddl . $after;
+
+        try {
+            $pdo->exec($sql);
+            $report['columns_added'][] = 'users.' . $name;
+        } catch (Throwable $e) {
+            if ($after === '') {
+                $report['errors'][] = 'users.' . $name . ': ' . self::mask($e->getMessage());
+
+                return;
+            }
+            try {
+                $pdo->exec('ALTER TABLE users ADD COLUMN ' . $ident . ' ' . $ddl);
+                $report['columns_added'][] = 'users.' . $name . ' (sans AFTER)';
+            } catch (Throwable $e2) {
+                $report['errors'][] = 'users.' . $name . ': ' . self::mask($e2->getMessage());
+            }
+        }
     }
 
     /**

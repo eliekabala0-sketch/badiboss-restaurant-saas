@@ -84,6 +84,10 @@ $router->post('/owner/menu/categories', [MenuAdminController::class, 'storeOwner
 $router->post('/owner/menu/items', [MenuAdminController::class, 'storeOwnerItem'], [AuthMiddleware::class, OwnerOrManagerMiddleware::class]);
 $router->post('/owner/menu/items/{id}/update', [MenuAdminController::class, 'updateOwnerItem'], [AuthMiddleware::class, OwnerOrManagerMiddleware::class]);
 $router->get('/owner/access', [TenantAccessController::class, 'index'], [AuthMiddleware::class, OwnerAreaMiddleware::class]);
+$router->get('/owner/users', [TenantAccessController::class, 'index'], [AuthMiddleware::class, OwnerAreaMiddleware::class]);
+$router->post('/owner/users', [TenantAccessController::class, 'storeUser'], [AuthMiddleware::class, OwnerAreaMiddleware::class]);
+$router->post('/owner/users/{id}/update', [TenantAccessController::class, 'updateUser'], [AuthMiddleware::class, OwnerAreaMiddleware::class]);
+$router->post('/owner/users/{id}/status', [TenantAccessController::class, 'changeUserStatus'], [AuthMiddleware::class, OwnerAreaMiddleware::class]);
 $router->get('/owner/access/users/{id}', [TenantAccessController::class, 'showUserHistory'], [AuthMiddleware::class, OwnerAreaMiddleware::class]);
 $router->post('/owner/access/roles', [TenantAccessController::class, 'storeRole'], [AuthMiddleware::class, OwnerAreaMiddleware::class]);
 $router->post('/owner/access/roles/{id}/permissions', [TenantAccessController::class, 'updateRolePermissions'], [AuthMiddleware::class, OwnerAreaMiddleware::class]);

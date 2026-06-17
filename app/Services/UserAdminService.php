@@ -10,27 +10,67 @@ use PDO;
 
 final class UserAdminService
 {
+    private array $userColumnCache = [];
+
     public function __construct(private readonly Database $database)
     {
     }
 
     public function listUsers(?int $restaurantId = null): array
     {
-        $sql = 'SELECT u.id, u.restaurant_id, u.role_id, u.full_name, u.email, u.phone, u.status, u.must_change_password,
-                       r.name AS role_name, r.code AS role_code, t.name AS restaurant_name, t.slug AS restaurant_slug
-                FROM users u
-                INNER JOIN roles r ON r.id = u.role_id
-                LEFT JOIN restaurants t ON t.id = u.restaurant_id';
+        return $this->listUsersPage($restaurantId, ['per_page' => 500, 'allow_large_page' => true])['items'];
+    }
 
+    public function listUsersPage(?int $restaurantId = null, array $filters = []): array
+    {
+        $page = max(1, (int) ($filters['page'] ?? 1));
+        $maxPerPage = !empty($filters['allow_large_page']) ? 500 : 50;
+        $perPage = min($maxPerPage, max(10, (int) ($filters['per_page'] ?? 20)));
+        $offset = ($page - 1) * $perPage;
+        $where = [];
         $params = [];
+
         if ($restaurantId !== null) {
-            $sql .= ' WHERE u.restaurant_id = :restaurant_id';
+            $where[] = 'u.restaurant_id = :restaurant_id';
             $params['restaurant_id'] = $restaurantId;
         }
 
-        $sql .= ' ORDER BY u.id DESC';
+        $search = trim((string) ($filters['search'] ?? ''));
+        if ($search !== '') {
+            $where[] = '(u.full_name LIKE :search OR u.email LIKE :search OR u.phone LIKE :search)';
+            $params['search'] = '%' . $search . '%';
+        }
+
+        $status = trim((string) ($filters['status'] ?? ''));
+        if ($status !== '') {
+            $where[] = 'u.status = :status';
+            $params['status'] = $this->normalizeStatus($status);
+        }
+
+        $roleId = (int) ($filters['role_id'] ?? 0);
+        if ($roleId > 0) {
+            $where[] = 'u.role_id = :role_id';
+            $params['role_id'] = $roleId;
+        }
+
+        $whereSql = $where === [] ? '' : ' WHERE ' . implode(' AND ', $where);
+        $optionalSelects = $this->userOptionalSelects();
+
+        $sql = 'SELECT u.id, u.restaurant_id, u.role_id, u.full_name, u.email, u.phone, u.status, u.must_change_password,
+                       u.last_login_at, u.banned_at, u.archived_at' . $optionalSelects . ',
+                       r.name AS role_name, r.code AS role_code, t.name AS restaurant_name, t.slug AS restaurant_slug
+                FROM users u
+                INNER JOIN roles r ON r.id = u.role_id
+                LEFT JOIN restaurants t ON t.id = u.restaurant_id'
+                . $whereSql
+                . ' ORDER BY u.id DESC LIMIT :limit OFFSET :offset';
         $statement = $this->database->pdo()->prepare($sql);
-        $statement->execute($params);
+        foreach ($params as $key => $value) {
+            $statement->bindValue(':' . $key, $value);
+        }
+        $statement->bindValue(':limit', $perPage, PDO::PARAM_INT);
+        $statement->bindValue(':offset', $offset, PDO::PARAM_INT);
+        $statement->execute();
 
         $users = $statement->fetchAll(PDO::FETCH_ASSOC);
         foreach ($users as &$user) {
@@ -38,7 +78,22 @@ final class UserAdminService
         }
         unset($user);
 
-        return $users;
+        $countStatement = $this->database->pdo()->prepare('SELECT COUNT(*) FROM users u' . $whereSql);
+        $countStatement->execute($params);
+        $total = (int) $countStatement->fetchColumn();
+
+        return [
+            'items' => $users,
+            'total' => $total,
+            'page' => $page,
+            'per_page' => $perPage,
+            'total_pages' => max(1, (int) ceil($total / $perPage)),
+            'filters' => [
+                'search' => $search,
+                'status' => $status,
+                'role_id' => $roleId,
+            ],
+        ];
     }
 
     public function createUser(array $payload, array $actor): void
@@ -46,23 +101,47 @@ final class UserAdminService
         $restaurantId = $this->normalizeRestaurantId($payload['restaurant_id'] ?? null);
         $role = Container::getInstance()->get('roleAdmin')->assertAssignableRoleForRestaurant((int) $payload['role_id'], $restaurantId);
 
-        $statement = $this->database->pdo()->prepare(
-            'INSERT INTO users
-            (restaurant_id, role_id, full_name, email, phone, password_hash, status, must_change_password, created_at, updated_at)
-             VALUES
-            (:restaurant_id, :role_id, :full_name, :email, :phone, :password_hash, :status, :must_change_password, NOW(), NOW())'
-        );
-
-        $statement->execute([
+        $status = $this->normalizeStatus((string) ($payload['status'] ?? 'active'));
+        $columns = ['restaurant_id', 'role_id', 'full_name', 'email', 'phone', 'password_hash', 'status', 'must_change_password', 'created_at', 'updated_at'];
+        $values = [':restaurant_id', ':role_id', ':full_name', ':email', ':phone', ':password_hash', ':status', ':must_change_password', 'NOW()', 'NOW()'];
+        $params = [
             'restaurant_id' => $restaurantId,
             'role_id' => (int) $role['id'],
             'full_name' => trim((string) $payload['full_name']),
             'email' => trim((string) $payload['email']),
             'phone' => trim((string) ($payload['phone'] ?? '')) ?: null,
             'password_hash' => password_hash((string) $payload['password'], PASSWORD_BCRYPT),
-            'status' => $payload['status'] ?? 'active',
+            'status' => $status,
             'must_change_password' => isset($payload['must_change_password']) ? 1 : 0,
-        ]);
+        ];
+
+        if ($this->userColumnExists('status_reason')) {
+            $columns[] = 'status_reason';
+            $values[] = ':status_reason';
+            $params['status_reason'] = trim((string) ($payload['status_reason'] ?? '')) ?: null;
+        }
+        if ($status === 'disabled' && $this->userColumnExists('disabled_at')) {
+            $columns[] = 'disabled_at';
+            $values[] = 'NOW()';
+        }
+        if ($status === 'banned') {
+            $columns[] = 'banned_at';
+            $values[] = 'NOW()';
+        }
+        if ($status === 'archived') {
+            $columns[] = 'archived_at';
+            $values[] = 'NOW()';
+            if ($this->userColumnExists('deleted_at')) {
+                $columns[] = 'deleted_at';
+                $values[] = 'NOW()';
+            }
+        }
+
+        $statement = $this->database->pdo()->prepare(
+            'INSERT INTO users (' . implode(', ', $columns) . ') VALUES (' . implode(', ', $values) . ')'
+        );
+
+        $statement->execute($params);
 
         $userId = (int) $this->database->pdo()->lastInsertId();
         $roleCode = (string) ($role['code'] ?? '');
@@ -82,6 +161,7 @@ final class UserAdminService
                 'restaurant_id' => $restaurantId,
                 'role_id' => $role['id'],
                 'role_code' => $roleCode,
+                'status' => $status,
             ],
             'justification' => 'Administrative user creation',
         ]);
@@ -151,23 +231,52 @@ final class UserAdminService
 
     public function changeStatus(int $userId, string $status, array $actor): void
     {
+        $this->changeStatusWithReason($userId, $status, '', $actor);
+    }
+
+    public function changeStatusWithReason(int $userId, string $status, string $reason, array $actor): void
+    {
         $current = $this->findUser($userId);
         if ($current === null) {
             return;
         }
 
-        $statement = $this->database->pdo()->prepare(
-            'UPDATE users
-             SET status = :status,
-                 banned_at = CASE WHEN :status = "banned" THEN NOW() ELSE banned_at END,
-                 archived_at = CASE WHEN :status = "archived" THEN NOW() ELSE archived_at END,
-                 updated_at = NOW()
-             WHERE id = :id'
-        );
-        $statement->execute([
+        $normalizedStatus = $this->normalizeStatus($status);
+        if ((int) ($actor['id'] ?? 0) === $userId && $normalizedStatus !== 'active') {
+            throw new \RuntimeException('Vous ne pouvez pas bloquer votre propre compte.');
+        }
+
+        $assignments = ['status = :status', 'updated_at = NOW()'];
+        $params = [
             'id' => $userId,
-            'status' => $status,
-        ]);
+            'status' => $normalizedStatus,
+        ];
+
+        if ($this->userColumnExists('status_reason')) {
+            $assignments[] = 'status_reason = :status_reason';
+            $params['status_reason'] = trim($reason) !== '' ? trim($reason) : null;
+        }
+        if ($this->userColumnExists('disabled_at')) {
+            $assignments[] = $normalizedStatus === 'disabled'
+                ? 'disabled_at = NOW()'
+                : ($normalizedStatus === 'active' ? 'disabled_at = NULL' : 'disabled_at = disabled_at');
+        }
+        $assignments[] = $normalizedStatus === 'banned'
+            ? 'banned_at = NOW()'
+            : ($normalizedStatus === 'active' ? 'banned_at = NULL' : 'banned_at = banned_at');
+        $assignments[] = $normalizedStatus === 'archived'
+            ? 'archived_at = NOW()'
+            : ($normalizedStatus === 'active' ? 'archived_at = NULL' : 'archived_at = archived_at');
+        if ($this->userColumnExists('deleted_at')) {
+            $assignments[] = $normalizedStatus === 'archived'
+                ? 'deleted_at = NOW()'
+                : ($normalizedStatus === 'active' ? 'deleted_at = NULL' : 'deleted_at = deleted_at');
+        }
+
+        $statement = $this->database->pdo()->prepare(
+            'UPDATE users SET ' . implode(', ', $assignments) . ' WHERE id = :id'
+        );
+        $statement->execute($params);
 
         Container::getInstance()->get('audit')->log([
             'restaurant_id' => $current['restaurant_id'] !== null ? (int) $current['restaurant_id'] : null,
@@ -179,9 +288,20 @@ final class UserAdminService
             'entity_type' => 'users',
             'entity_id' => (string) $userId,
             'old_values' => ['status' => $current['status']],
-            'new_values' => ['status' => $status],
+            'new_values' => ['status' => $normalizedStatus, 'reason' => trim($reason)],
             'justification' => 'Administrative user status change',
         ]);
+    }
+
+    public function updateRestaurantUser(int $userId, int $restaurantId, array $payload, array $actor): void
+    {
+        $current = $this->findUser($userId);
+        if ($current === null || (int) ($current['restaurant_id'] ?? 0) !== $restaurantId) {
+            throw new \RuntimeException('Utilisateur introuvable pour ce restaurant.');
+        }
+
+        $payload['restaurant_id'] = (string) $restaurantId;
+        $this->updateUser($userId, $payload, $actor);
     }
 
     public function registerPublicCustomer(array $restaurant, array $payload): int
@@ -250,6 +370,40 @@ final class UserAdminService
         $user = $statement->fetch(PDO::FETCH_ASSOC);
 
         return $user ?: null;
+    }
+
+    private function normalizeStatus(string $status): string
+    {
+        $status = trim($status);
+        if ($status === 'inactive' || $status === 'suspended') {
+            $status = 'disabled';
+        }
+
+        return in_array($status, ['active', 'disabled', 'banned', 'archived'], true) ? $status : 'active';
+    }
+
+    private function userOptionalSelects(): string
+    {
+        $selects = [];
+        foreach (['disabled_at', 'deleted_at', 'status_reason'] as $column) {
+            $selects[] = $this->userColumnExists($column) ? 'u.' . $column : 'NULL AS ' . $column;
+        }
+
+        return ', ' . implode(', ', $selects);
+    }
+
+    private function userColumnExists(string $column): bool
+    {
+        if (!array_key_exists($column, $this->userColumnCache)) {
+            $statement = $this->database->pdo()->prepare(
+                'SELECT COUNT(*) FROM information_schema.columns
+                 WHERE table_schema = DATABASE() AND table_name = "users" AND column_name = :column'
+            );
+            $statement->execute(['column' => $column]);
+            $this->userColumnCache[$column] = (int) $statement->fetchColumn() > 0;
+        }
+
+        return $this->userColumnCache[$column];
     }
 
     private function normalizeRestaurantId(mixed $value): ?int

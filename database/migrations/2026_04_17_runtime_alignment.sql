@@ -118,8 +118,11 @@ CREATE TABLE IF NOT EXISTS users (
     status ENUM('active', 'disabled', 'banned', 'archived') NOT NULL DEFAULT 'active',
     must_change_password TINYINT(1) NOT NULL DEFAULT 1,
     last_login_at DATETIME NULL,
+    disabled_at DATETIME NULL,
     banned_at DATETIME NULL,
     archived_at DATETIME NULL,
+    deleted_at DATETIME NULL,
+    status_reason TEXT NULL,
     created_at DATETIME NOT NULL,
     updated_at DATETIME NOT NULL
 );

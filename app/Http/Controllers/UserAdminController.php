@@ -16,10 +16,18 @@ final class UserAdminController
         $restaurantId = $restaurantId !== null && $restaurantId !== '' ? (int) $restaurantId : null;
 
         $restaurantService = Container::getInstance()->get('restaurantAdmin');
+        $userPage = Container::getInstance()->get('userAdmin')->listUsersPage($restaurantId, [
+            'search' => (string) ($request->query['q'] ?? ''),
+            'status' => (string) ($request->query['status'] ?? ''),
+            'role_id' => (int) ($request->query['role_id'] ?? 0),
+            'page' => (int) ($request->query['page'] ?? 1),
+            'per_page' => 20,
+        ]);
 
         view('super-admin/users/index', [
             'title' => 'Utilisateurs',
-            'users' => Container::getInstance()->get('userAdmin')->listUsers($restaurantId),
+            'users' => $userPage['items'],
+            'user_page' => $userPage,
             'roles' => $restaurantService->listRoles(),
             'restaurants' => $restaurantService->listRestaurants(),
             'selected_restaurant_id' => $restaurantId,
@@ -41,6 +49,7 @@ final class UserAdminController
             'phone' => (string) $request->input('phone'),
             'password' => (string) $request->input('password'),
             'status' => (string) $request->input('status', 'active'),
+            'status_reason' => (string) $request->input('status_reason', ''),
             'must_change_password' => $request->input('must_change_password'),
         ], $_SESSION['user']);
 
@@ -70,7 +79,12 @@ final class UserAdminController
     {
         authorize_access('platform.users.manage');
         $userId = (int) $request->route('id');
-        Container::getInstance()->get('userAdmin')->changeStatus($userId, (string) $request->input('status', 'active'), $_SESSION['user']);
+        Container::getInstance()->get('userAdmin')->changeStatusWithReason(
+            $userId,
+            (string) $request->input('status', 'active'),
+            (string) $request->input('status_reason', ''),
+            $_SESSION['user']
+        );
 
         flash('success', 'Le statut de l’utilisateur a été mis à jour.');
         redirect('/super-admin/users');

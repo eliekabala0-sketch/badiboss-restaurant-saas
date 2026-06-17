@@ -10,6 +10,8 @@ use PDO;
 
 final class RoleAdminService
 {
+    private ?array $permissionLabelCache = null;
+
     public function __construct(private readonly Database $database)
     {
     }
@@ -125,14 +127,52 @@ final class RoleAdminService
 
     public function listUsersForRestaurant(int $restaurantId): array
     {
+        return $this->listUsersForRestaurantPage($restaurantId, ['per_page' => 500, 'allow_large_page' => true])['items'];
+    }
+
+    public function listUsersForRestaurantPage(int $restaurantId, array $filters = []): array
+    {
+        $page = max(1, (int) ($filters['page'] ?? 1));
+        $maxPerPage = !empty($filters['allow_large_page']) ? 500 : 50;
+        $perPage = min($maxPerPage, max(10, (int) ($filters['per_page'] ?? 20)));
+        $offset = ($page - 1) * $perPage;
+        $where = ['u.restaurant_id = :restaurant_id'];
+        $params = ['restaurant_id' => $restaurantId];
+
+        $search = trim((string) ($filters['search'] ?? ''));
+        if ($search !== '') {
+            $where[] = '(u.full_name LIKE :search OR u.email LIKE :search OR u.phone LIKE :search)';
+            $params['search'] = '%' . $search . '%';
+        }
+
+        $status = trim((string) ($filters['status'] ?? ''));
+        if ($status !== '') {
+            $where[] = 'u.status = :status';
+            $params['status'] = in_array($status, ['active', 'disabled', 'banned', 'archived'], true) ? $status : 'active';
+        }
+
+        $roleId = (int) ($filters['role_id'] ?? 0);
+        if ($roleId > 0) {
+            $where[] = 'u.role_id = :role_id';
+            $params['role_id'] = $roleId;
+        }
+
+        $whereSql = implode(' AND ', $where);
         $statement = $this->database->pdo()->prepare(
-            'SELECT u.id, u.full_name, u.email, u.status, u.role_id, r.name AS role_name, r.code AS role_code
+            'SELECT u.id, u.full_name, u.email, u.phone, u.status, u.role_id, u.must_change_password, u.last_login_at,
+                    r.name AS role_name, r.code AS role_code
              FROM users u
              INNER JOIN roles r ON r.id = u.role_id
-             WHERE u.restaurant_id = :restaurant_id
-             ORDER BY u.full_name ASC'
+             WHERE ' . $whereSql . '
+             ORDER BY u.full_name ASC
+             LIMIT :limit OFFSET :offset'
         );
-        $statement->execute(['restaurant_id' => $restaurantId]);
+        foreach ($params as $key => $value) {
+            $statement->bindValue(':' . $key, $value);
+        }
+        $statement->bindValue(':limit', $perPage, PDO::PARAM_INT);
+        $statement->bindValue(':offset', $offset, PDO::PARAM_INT);
+        $statement->execute();
 
         $users = $statement->fetchAll(PDO::FETCH_ASSOC);
         foreach ($users as &$user) {
@@ -140,7 +180,22 @@ final class RoleAdminService
         }
         unset($user);
 
-        return $users;
+        $countStatement = $this->database->pdo()->prepare('SELECT COUNT(*) FROM users u WHERE ' . $whereSql);
+        $countStatement->execute($params);
+        $total = (int) $countStatement->fetchColumn();
+
+        return [
+            'items' => $users,
+            'total' => $total,
+            'page' => $page,
+            'per_page' => $perPage,
+            'total_pages' => max(1, (int) ceil($total / $perPage)),
+            'filters' => [
+                'search' => $search,
+                'status' => $status,
+                'role_id' => $roleId,
+            ],
+        ];
     }
 
     public function createTenantRole(int $restaurantId, array $payload, array $actor): void
@@ -364,14 +419,21 @@ final class RoleAdminService
         $losses->execute(['restaurant_id' => $restaurantId, 'user_id' => $userId]);
 
         $audits = $this->database->pdo()->prepare(
-            'SELECT module_name, action_name, created_at
+            'SELECT actor_name, actor_role_code, module_name, action_name, old_values_json, new_values_json, justification, created_at
              FROM audit_logs
              WHERE restaurant_id = :restaurant_id
-               AND user_id = :user_id
+               AND (
+                    user_id = :user_id
+                    OR (entity_type = "users" AND entity_id = :entity_id)
+               )
              ORDER BY id DESC
              LIMIT 40'
         );
-        $audits->execute(['restaurant_id' => $restaurantId, 'user_id' => $userId]);
+        $audits->execute([
+            'restaurant_id' => $restaurantId,
+            'user_id' => $userId,
+            'entity_id' => (string) $userId,
+        ]);
 
         return [
             'user' => $profile,
@@ -403,13 +465,18 @@ final class RoleAdminService
             return [];
         }
 
-        $labels = [];
-        foreach ($this->listPermissions() as $permission) {
-            if (!in_array((int) $permission['id'], $permissionIds, true)) {
-                continue;
+        if ($this->permissionLabelCache === null) {
+            $this->permissionLabelCache = [];
+            foreach ($this->listPermissions() as $permission) {
+                $this->permissionLabelCache[(int) $permission['id']] = (string) $permission['label'];
             }
+        }
 
-            $labels[] = (string) $permission['label'];
+        $labels = [];
+        foreach ($permissionIds as $permissionId) {
+            if (isset($this->permissionLabelCache[(int) $permissionId])) {
+                $labels[] = $this->permissionLabelCache[(int) $permissionId];
+            }
         }
 
         sort($labels);

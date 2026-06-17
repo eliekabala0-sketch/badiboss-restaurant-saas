@@ -120,7 +120,7 @@ final class AuthorizationService
         'payroll.prepare.view',
     ];
 
-    private ?array $permissionCache = null;
+    private array $permissionCache = [];
 
     public function __construct(private readonly Database $database)
     {
@@ -189,27 +189,31 @@ final class AuthorizationService
 
     private function permissionCodesForRole(int $roleId, int $restaurantId): array
     {
-        if ($this->permissionCache === null) {
-            $statement = $this->database->pdo()->query(
+        $cacheKey = $roleId . ':' . $restaurantId;
+        if (!isset($this->permissionCache[$cacheKey])) {
+            $statement = $this->database->pdo()->prepare(
                 'SELECT rp.role_id, rp.restaurant_id, p.code AS permission_code, rp.effect
                  FROM role_permissions rp
                  INNER JOIN permissions p ON p.id = rp.permission_id'
+                . ' WHERE rp.role_id = :role_id AND (rp.restaurant_id IS NULL OR rp.restaurant_id = :restaurant_id)'
             );
+            $statement->execute([
+                'role_id' => $roleId,
+                'restaurant_id' => $restaurantId,
+            ]);
 
-            $this->permissionCache = [];
+            $bucket = ['allow' => [], 'deny' => []];
             foreach ($statement->fetchAll(PDO::FETCH_ASSOC) as $row) {
-                $code = (string) $row['role_id'] . ':' . (string) ($row['restaurant_id'] ?? 0);
                 $effect = (string) $row['effect'];
-                $this->permissionCache[$code][$effect][] = (string) $row['permission_code'];
+                $bucket[$effect][] = (string) $row['permission_code'];
             }
+
+            $this->permissionCache[$cacheKey] = [
+                'allow' => array_values(array_unique($bucket['allow'])),
+                'deny' => array_values(array_unique($bucket['deny'])),
+            ];
         }
 
-        $scopedKey = $roleId . ':' . $restaurantId;
-        $globalKey = $roleId . ':0';
-
-        return [
-            'allow' => array_values(array_unique(array_merge($this->permissionCache[$globalKey]['allow'] ?? [], $this->permissionCache[$scopedKey]['allow'] ?? []))),
-            'deny' => array_values(array_unique(array_merge($this->permissionCache[$globalKey]['deny'] ?? [], $this->permissionCache[$scopedKey]['deny'] ?? []))),
-        ];
+        return $this->permissionCache[$cacheKey];
     }
 }

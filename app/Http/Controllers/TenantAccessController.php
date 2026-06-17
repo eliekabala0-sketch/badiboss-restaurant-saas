@@ -13,20 +13,96 @@ final class TenantAccessController
     {
         authorize_access('tenant.access.manage');
         $restaurantId = current_restaurant_id();
+        $accessEditor = (string) ($request->query['access_editor'] ?? '') === '1';
+        $roleAdmin = Container::getInstance()->get('roleAdmin');
+        $userPage = $roleAdmin->listUsersForRestaurantPage($restaurantId, [
+            'search' => (string) ($request->query['q'] ?? ''),
+            'status' => (string) ($request->query['status'] ?? ''),
+            'role_id' => (int) ($request->query['role_id'] ?? 0),
+            'page' => (int) ($request->query['page'] ?? 1),
+            'per_page' => 20,
+        ]);
 
         view('owner/access', [
-            'title' => 'Roles et acces',
-            'roles' => Container::getInstance()->get('roleAdmin')->listAssignableRoles($restaurantId),
-            'preset_roles' => Container::getInstance()->get('roleAdmin')->listPresetRoles($restaurantId),
-            'role_permissions' => Container::getInstance()->get('roleAdmin')->permissionIdsByRole($restaurantId),
-            'permissions' => Container::getInstance()->get('roleAdmin')->listPermissions(),
-            'permission_groups' => Container::getInstance()->get('roleAdmin')->listPermissionGroups(),
-            'users' => Container::getInstance()->get('roleAdmin')->listUsersForRestaurant($restaurantId),
+            'title' => 'Personnel et acces',
+            'roles' => $roleAdmin->listAssignableRoles($restaurantId),
+            'preset_roles' => $roleAdmin->listPresetRoles($restaurantId),
+            'role_permissions' => $accessEditor ? $roleAdmin->permissionIdsByRole($restaurantId) : [],
+            'permissions' => $accessEditor ? $roleAdmin->listPermissions() : [],
+            'permission_groups' => $accessEditor ? $roleAdmin->listPermissionGroups() : [],
+            'users' => $userPage['items'],
+            'user_page' => $userPage,
+            'access_editor' => $accessEditor,
             'flash_success' => flash('success'),
             'flash_error' => flash('error'),
         ]);
 
         audit_access('roles', $restaurantId, 'screens', 'tenant-access', 'Consultation roles et acces restaurant');
+    }
+
+    public function storeUser(Request $request): void
+    {
+        authorize_access('tenant.access.manage');
+        $restaurantId = current_restaurant_id();
+
+        Container::getInstance()->get('userAdmin')->createUser([
+            'restaurant_id' => (string) $restaurantId,
+            'role_id' => (int) $request->input('role_id'),
+            'full_name' => (string) $request->input('full_name'),
+            'email' => (string) $request->input('email'),
+            'phone' => (string) $request->input('phone'),
+            'password' => (string) $request->input('password'),
+            'status' => (string) $request->input('status', 'active'),
+            'status_reason' => (string) $request->input('status_reason', ''),
+            'must_change_password' => $request->input('must_change_password'),
+        ], current_user());
+
+        flash('success', 'Utilisateur cree pour ce restaurant.');
+        redirect('/owner/users');
+    }
+
+    public function updateUser(Request $request): void
+    {
+        authorize_access('tenant.access.manage');
+        $restaurantId = current_restaurant_id();
+
+        Container::getInstance()->get('userAdmin')->updateRestaurantUser(
+            (int) $request->route('id'),
+            $restaurantId,
+            [
+                'role_id' => (int) $request->input('role_id'),
+                'full_name' => (string) $request->input('full_name'),
+                'email' => (string) $request->input('email'),
+                'phone' => (string) $request->input('phone'),
+                'password' => (string) $request->input('password'),
+                'must_change_password' => $request->input('must_change_password'),
+            ],
+            current_user()
+        );
+
+        flash('success', 'Fiche agent mise a jour.');
+        redirect('/owner/users');
+    }
+
+    public function changeUserStatus(Request $request): void
+    {
+        authorize_access('tenant.access.manage');
+        $restaurantId = current_restaurant_id();
+        $userId = (int) $request->route('id');
+        $target = Container::getInstance()->get('userAdmin')->findUser($userId);
+        if ($target === null || (int) ($target['restaurant_id'] ?? 0) !== $restaurantId) {
+            throw new \RuntimeException('Utilisateur introuvable pour ce restaurant.');
+        }
+
+        Container::getInstance()->get('userAdmin')->changeStatusWithReason(
+            $userId,
+            (string) $request->input('status', 'active'),
+            (string) $request->input('status_reason', ''),
+            current_user()
+        );
+
+        flash('success', 'Statut agent mis a jour.');
+        redirect('/owner/users');
     }
 
     public function storeRole(Request $request): void
@@ -91,7 +167,7 @@ final class TenantAccessController
         );
 
         flash('success', 'Utilisateur affecte au role.');
-        redirect('/owner/access');
+        redirect('/owner/users');
     }
 
     public function showUserHistory(Request $request): void

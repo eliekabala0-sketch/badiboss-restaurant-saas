@@ -37,15 +37,27 @@ $restaurantCurrency = restaurant_currency($restaurant);
     <h2 style="margin-top:20px;">Dernieres traces</h2>
     <div class="table-wrap">
         <table>
-            <thead><tr><th>Module</th><th>Action</th><th>Date</th></tr></thead>
+            <thead><tr><th>Qui</th><th>Module</th><th>Action</th><th>Ancienne valeur</th><th>Nouvelle valeur</th><th>Date</th></tr></thead>
             <tbody>
             <?php foreach (($snapshot['audits'] ?? []) as $audit): ?>
+                <?php
+                    $oldValues = json_decode((string) ($audit['old_values_json'] ?? ''), true);
+                    $newValues = json_decode((string) ($audit['new_values_json'] ?? ''), true);
+                    $oldText = is_array($oldValues) ? json_encode($oldValues, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) : '';
+                    $newText = is_array($newValues) ? json_encode($newValues, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) : '';
+                ?>
                 <tr>
+                    <td><?= e(named_actor_label($audit['actor_name'] ?? null, $audit['actor_role_code'] ?? null)) ?></td>
                     <td><?= e(permission_module_label($audit['module_name'] ?? null)) ?></td>
                     <td><?= e((string) ($audit['action_name'] ?? '-')) ?></td>
+                    <td><span class="muted"><?= e($oldText !== '' ? $oldText : '-') ?></span></td>
+                    <td><span class="muted"><?= e($newText !== '' ? $newText : ($audit['justification'] ?? '-')) ?></span></td>
                     <td><?= e(format_date_fr($audit['created_at'] ?? null)) ?></td>
                 </tr>
             <?php endforeach; ?>
+            <?php if (($snapshot['audits'] ?? []) === []): ?>
+                <tr><td colspan="6"><div class="compact-empty">Aucune trace recente pour cet agent.</div></td></tr>
+            <?php endif; ?>
             </tbody>
         </table>
     </div>

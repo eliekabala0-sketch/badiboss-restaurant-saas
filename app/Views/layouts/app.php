@@ -1270,6 +1270,7 @@ foreach ($notificationSources as $candidate) {
                     <?php if (can_access('platform.audit.view')): ?><a href="/super-admin/audit">Journal d’audit</a><?php endif; ?>
                 <?php else: ?>
                     <?php if (can_access('tenant.dashboard.view')): ?><a href="/owner">Tableau de bord</a><?php endif; ?>
+                    <?php if (can_access('tenant.access.manage')): ?><a href="/owner/users">Personnel</a><?php endif; ?>
                     <?php if (can_access('staff.team_gauges.view')): ?><a href="/owner/discipline">Discipline</a><?php endif; ?>
                     <?php if (can_access('menu.view')): ?><a href="/owner/menu">Menu</a><?php endif; ?>
                     <?php if (can_access('payroll.prepare.view')): ?><a href="/owner/paie/preparer">Paie</a><?php endif; ?>

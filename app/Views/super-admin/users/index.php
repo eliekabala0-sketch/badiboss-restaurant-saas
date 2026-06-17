@@ -8,6 +8,58 @@
 <?php if (!empty($flash_success)): ?><div class="flash-ok"><?= e($flash_success) ?></div><?php endif; ?>
 <?php if (!empty($flash_error)): ?><div class="flash-bad"><?= e($flash_error) ?></div><?php endif; ?>
 
+<?php
+$userPage = $user_page ?? ['total' => count($users ?? []), 'page' => 1, 'total_pages' => 1, 'filters' => []];
+$filters = $userPage['filters'] ?? [];
+$pageUrl = static function (int $page) use ($filters, $selected_restaurant_id): string {
+    $query = array_filter([
+        'restaurant_id' => $selected_restaurant_id !== null ? (string) $selected_restaurant_id : '',
+        'q' => (string) ($filters['search'] ?? ''),
+        'status' => (string) ($filters['status'] ?? ''),
+        'role_id' => (string) ((int) ($filters['role_id'] ?? 0) ?: ''),
+        'page' => $page,
+    ], static fn ($value): bool => $value !== '' && $value !== null);
+
+    return '/super-admin/users' . ($query === [] ? '' : '?' . http_build_query($query));
+};
+?>
+
+<section class="card" style="padding:22px; margin-bottom:24px;">
+    <h2 style="margin-top:0;">Recherche et filtres</h2>
+    <form method="get" action="/super-admin/users" class="split">
+        <div>
+            <label>Restaurant</label>
+            <select name="restaurant_id">
+                <option value="">Tous / plateforme</option>
+                <?php foreach ($restaurants as $restaurant): ?>
+                    <option value="<?= e((string) $restaurant['id']) ?>" <?= (string) ($selected_restaurant_id ?? '') === (string) $restaurant['id'] ? 'selected' : '' ?>><?= e($restaurant['name']) ?></option>
+                <?php endforeach; ?>
+            </select>
+        </div>
+        <div><label>Rechercher</label><input name="q" value="<?= e((string) ($filters['search'] ?? '')) ?>" placeholder="Nom, email ou telephone"></div>
+        <div>
+            <label>Statut</label>
+            <select name="status">
+                <option value="">Tous</option>
+                <option value="active" <?= ($filters['status'] ?? '') === 'active' ? 'selected' : '' ?>>Actif</option>
+                <option value="disabled" <?= ($filters['status'] ?? '') === 'disabled' ? 'selected' : '' ?>>Suspendu / inactif</option>
+                <option value="banned" <?= ($filters['status'] ?? '') === 'banned' ? 'selected' : '' ?>>Connexion bloquee</option>
+                <option value="archived" <?= ($filters['status'] ?? '') === 'archived' ? 'selected' : '' ?>>Fin de contrat</option>
+            </select>
+        </div>
+        <div>
+            <label>Role</label>
+            <select name="role_id">
+                <option value="">Tous</option>
+                <?php foreach ($roles as $role): ?>
+                    <option value="<?= e((string) $role['id']) ?>" <?= (int) ($filters['role_id'] ?? 0) === (int) $role['id'] ? 'selected' : '' ?>><?= e($role['display_name'] ?? $role['name']) ?></option>
+                <?php endforeach; ?>
+            </select>
+        </div>
+        <div style="align-self:end;"><button type="submit">Filtrer</button></div>
+    </form>
+</section>
+
 <section class="card" style="padding:22px; margin-bottom:24px;">
     <h2 style="margin-top:0;">Creer un utilisateur</h2>
     <form method="post" action="/super-admin/users" class="split">
@@ -33,6 +85,7 @@
         <div><label>Telephone</label><input name="phone"></div>
         <div><label>Mot de passe</label><input name="password" value="password" required></div>
         <div><label>Statut</label><select name="status"><option value="active">Actif</option><option value="disabled">Desactive</option><option value="banned">Banni</option></select></div>
+        <div><label>Motif statut</label><input name="status_reason" placeholder="Optionnel si actif"></div>
         <div><label><input type="checkbox" name="must_change_password" value="1" checked style="width:auto;margin-right:8px;">Forcer le changement de mot de passe</label></div>
         <div style="grid-column:1 / -1;"><button type="submit">Creer l'utilisateur</button></div>
     </form>
@@ -113,11 +166,12 @@
                     <td>
                         <form method="post" action="/super-admin/users/<?= e((string) $user['id']) ?>/status" class="toolbar-actions">
                             <select name="status">
-                                <option value="active">Actif</option>
-                                <option value="disabled">Desactive</option>
-                                <option value="banned">Banni</option>
-                                <option value="archived">Archive</option>
+                                <option value="active">Reactiver / donner acces</option>
+                                <option value="disabled">Suspendre / retirer acces</option>
+                                <option value="banned">Bloquer connexion</option>
+                                <option value="archived">Fin de contrat</option>
                             </select>
+                            <input name="status_reason" placeholder="Motif">
                             <button type="submit" class="button-muted">Appliquer</button>
                         </form>
                     </td>
@@ -125,6 +179,11 @@
             <?php endforeach; ?>
             </tbody>
         </table>
+    </div>
+    <div class="toolbar-actions" style="padding:16px 22px 22px;">
+        <?php if ((int) ($userPage['page'] ?? 1) > 1): ?><a class="button-muted" href="<?= e($pageUrl((int) $userPage['page'] - 1)) ?>">Precedent</a><?php endif; ?>
+        <span class="pill badge-neutral"><?= e((string) ($userPage['total'] ?? 0)) ?> compte(s) · page <?= e((string) ($userPage['page'] ?? 1)) ?> / <?= e((string) ($userPage['total_pages'] ?? 1)) ?></span>
+        <?php if ((int) ($userPage['page'] ?? 1) < (int) ($userPage['total_pages'] ?? 1)): ?><a class="button-muted" href="<?= e($pageUrl((int) $userPage['page'] + 1)) ?>">Voir plus</a><?php endif; ?>
     </div>
 </section>
 
