@@ -219,12 +219,12 @@ final class UserAdminService
             'action_name' => $action,
             'entity_type' => 'users',
             'entity_id' => (string) $userId,
-            'old_values' => $current,
-            'new_values' => array_merge($payload, [
+            'old_values' => $this->redactSensitiveUserValues($current),
+            'new_values' => $this->redactSensitiveUserValues(array_merge($payload, [
                 'restaurant_id' => $restaurantId,
                 'role_id' => (int) $role['id'],
                 'role_code' => (string) ($role['code'] ?? ''),
-            ]),
+            ])),
             'justification' => 'Administrative user update',
         ]);
     }
@@ -380,6 +380,17 @@ final class UserAdminService
         }
 
         return in_array($status, ['active', 'disabled', 'banned', 'archived'], true) ? $status : 'active';
+    }
+
+    private function redactSensitiveUserValues(array $values): array
+    {
+        foreach (['password', 'password_hash'] as $key) {
+            if (array_key_exists($key, $values)) {
+                $values[$key] = '[redacted]';
+            }
+        }
+
+        return $values;
     }
 
     private function userOptionalSelects(): string

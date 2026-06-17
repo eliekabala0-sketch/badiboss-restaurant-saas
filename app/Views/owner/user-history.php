@@ -5,6 +5,23 @@ $user = $snapshot['user'] ?? [];
 $sales = $snapshot['sales'] ?? [];
 $losses = $snapshot['losses'] ?? [];
 $restaurantCurrency = restaurant_currency($restaurant);
+$redactSensitiveValues = static function (mixed $value) use (&$redactSensitiveValues): mixed {
+    if (!is_array($value)) {
+        return $value;
+    }
+
+    $redacted = [];
+    foreach ($value as $key => $item) {
+        if (in_array((string) $key, ['password', 'password_hash'], true)) {
+            $redacted[$key] = '[redacted]';
+            continue;
+        }
+
+        $redacted[$key] = $redactSensitiveValues($item);
+    }
+
+    return $redacted;
+};
 ?>
 <section class="topbar">
     <div class="brand">
@@ -43,8 +60,8 @@ $restaurantCurrency = restaurant_currency($restaurant);
                 <?php
                     $oldValues = json_decode((string) ($audit['old_values_json'] ?? ''), true);
                     $newValues = json_decode((string) ($audit['new_values_json'] ?? ''), true);
-                    $oldText = is_array($oldValues) ? json_encode($oldValues, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) : '';
-                    $newText = is_array($newValues) ? json_encode($newValues, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) : '';
+                    $oldText = is_array($oldValues) ? json_encode($redactSensitiveValues($oldValues), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) : '';
+                    $newText = is_array($newValues) ? json_encode($redactSensitiveValues($newValues), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) : '';
                 ?>
                 <tr>
                     <td><?= e(named_actor_label($audit['actor_name'] ?? null, $audit['actor_role_code'] ?? null)) ?></td>
