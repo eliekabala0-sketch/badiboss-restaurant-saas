@@ -1506,6 +1506,7 @@ final class StaffDisciplineService
                 'action' => $actionCode,
             ], JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR),
         ]);
+        $ledgerId = (int) $this->database->pdo()->lastInsertId();
         Container::getInstance()->get('audit')->log([
             'restaurant_id' => $restaurantId,
             'user_id' => $actor['id'] ?? null,
@@ -1518,6 +1519,48 @@ final class StaffDisciplineService
             'new_values' => ['action' => $actionCode, 'note' => $note],
             'justification' => 'Suivi alerte discipline',
         ]);
+
+        $this->notifyDisciplinaryFollowUp($restaurantId, $targetUserId, $actionCode, $note, $actor, $ledgerId);
+    }
+
+    private function notifyDisciplinaryFollowUp(
+        int $restaurantId,
+        int $targetUserId,
+        string $actionCode,
+        string $note,
+        array $actor,
+        int $ledgerId
+    ): void {
+        if ($targetUserId <= 0) {
+            return;
+        }
+
+        $actorLabel = named_actor_label($actor['full_name'] ?? null, $actor['role_code'] ?? null);
+        $message = match ($actionCode) {
+            'sanction' => 'Une sanction disciplinaire a ete enregistree par ' . $actorLabel . '. Motif : ' . $note . '. Cliquez sur OK pour continuer.',
+            'warn' => 'Un avertissement disciplinaire a ete enregistre par ' . $actorLabel . '. Motif : ' . $note . '. Cliquez sur OK pour continuer.',
+            'justify' => 'Une justification disciplinaire vous est demandee par ' . $actorLabel . '. Motif : ' . $note . '. Cliquez sur OK pour continuer.',
+            'clemency' => 'Une mesure de clemence disciplinaire a ete enregistree par ' . $actorLabel . '. Motif : ' . $note . '. Cliquez sur OK pour continuer.',
+            default => 'Vous avez ete place sous surveillance disciplinaire par ' . $actorLabel . '. Cliquez sur OK pour continuer.',
+        };
+
+        try {
+            Container::getInstance()->get('uiNotifications')->queueForUsers(
+                $restaurantId,
+                [$targetUserId],
+                $actor,
+                'personnel.discipline_followup',
+                $actionCode === 'sanction' ? 'danger' : 'warning',
+                $actionCode === 'sanction' ? 'Sanction disciplinaire' : 'Suivi disciplinaire',
+                $message,
+                '/ma-discipline',
+                'personnel:discipline:' . $targetUserId . ':' . ($ledgerId > 0 ? $ledgerId : time()),
+                null,
+                720
+            );
+        } catch (\Throwable $exception) {
+            error_log('[personnel_discipline_notification] ' . $exception->getMessage());
+        }
     }
 
     private function countTrailingUnjustifiedStreak(

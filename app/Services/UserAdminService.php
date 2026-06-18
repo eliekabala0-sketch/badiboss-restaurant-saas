@@ -227,6 +227,20 @@ final class UserAdminService
             ])),
             'justification' => 'Administrative user update',
         ]);
+
+        if ($action === 'user_role_changed') {
+            $this->notifyTargetUser(
+                $restaurantId,
+                $userId,
+                $actor,
+                'personnel.role_changed',
+                'warning',
+                'Fonction modifiee',
+                'Votre fonction a ete modifiee. Vous etes desormais ' . restaurant_role_label((string) ($role['code'] ?? '')) . '. Cliquez sur OK pour continuer.',
+                'personnel:role:' . $userId . ':' . (int) $role['id'] . ':' . time(),
+                null
+            );
+        }
     }
 
     public function changeStatus(int $userId, string $status, array $actor): void
@@ -258,14 +272,19 @@ final class UserAdminService
         }
         if ($this->userColumnExists('disabled_at')) {
             $assignments[] = $normalizedStatus === 'disabled'
-                ? 'disabled_at = NOW()'
-                : ($normalizedStatus === 'active' ? 'disabled_at = NULL' : 'disabled_at = disabled_at');
+                ? 'disabled_at = COALESCE(disabled_at, NOW())'
+                : 'disabled_at = NULL';
+        }
+        if ($this->userColumnExists('suspended_at')) {
+            $assignments[] = $normalizedStatus === 'disabled'
+                ? 'suspended_at = COALESCE(suspended_at, NOW())'
+                : 'suspended_at = NULL';
         }
         $assignments[] = $normalizedStatus === 'banned'
-            ? 'banned_at = NOW()'
-            : ($normalizedStatus === 'active' ? 'banned_at = NULL' : 'banned_at = banned_at');
+            ? 'banned_at = COALESCE(banned_at, NOW())'
+            : 'banned_at = NULL';
         $assignments[] = $normalizedStatus === 'archived'
-            ? 'archived_at = NOW()'
+            ? 'archived_at = COALESCE(archived_at, NOW())'
             : ($normalizedStatus === 'active' ? 'archived_at = NULL' : 'archived_at = archived_at');
         if ($this->userColumnExists('deleted_at')) {
             $assignments[] = $normalizedStatus === 'archived'
@@ -291,6 +310,8 @@ final class UserAdminService
             'new_values' => ['status' => $normalizedStatus, 'reason' => trim($reason)],
             'justification' => 'Administrative user status change',
         ]);
+
+        $this->notifyStatusChange($current, $normalizedStatus, trim($reason), $actor);
     }
 
     public function updateRestaurantUser(int $userId, int $restaurantId, array $payload, array $actor): void
@@ -396,11 +417,86 @@ final class UserAdminService
     private function userOptionalSelects(): string
     {
         $selects = [];
-        foreach (['disabled_at', 'deleted_at', 'status_reason'] as $column) {
+        foreach (['disabled_at', 'suspended_at', 'deleted_at', 'status_reason'] as $column) {
             $selects[] = $this->userColumnExists($column) ? 'u.' . $column : 'NULL AS ' . $column;
         }
 
         return ', ' . implode(', ', $selects);
+    }
+
+    private function notifyStatusChange(array $current, string $newStatus, string $reason, array $actor): void
+    {
+        $restaurantId = (int) ($current['restaurant_id'] ?? 0);
+        $userId = (int) ($current['id'] ?? 0);
+        if ($restaurantId <= 0 || $userId <= 0) {
+            return;
+        }
+
+        $actorLabel = named_actor_label($actor['full_name'] ?? null, $actor['role_code'] ?? null);
+        $reasonText = $reason !== '' ? ' Motif : ' . $reason . '.' : '';
+        $title = 'Statut du compte modifie';
+        $level = 'warning';
+        $message = 'Votre statut de compte a ete modifie par ' . $actorLabel . '.' . $reasonText;
+
+        if ($newStatus === 'banned') {
+            $title = 'Connexion bloquee';
+            $level = 'danger';
+            $message = 'Votre connexion a ete bloquee par ' . $actorLabel . '.' . $reasonText;
+        } elseif ($newStatus === 'disabled') {
+            $title = 'Compte suspendu';
+            $level = 'danger';
+            $message = 'Vous etes suspendu par ' . $actorLabel . '.' . $reasonText . ' Veuillez voir votre chef hierarchique.';
+        } elseif ($newStatus === 'active') {
+            $title = 'Compte reactive';
+            $level = 'success';
+            $message = 'Votre compte a ete reactive par ' . $actorLabel . '.';
+        } elseif ($newStatus === 'archived') {
+            $title = 'Compte archive';
+            $level = 'danger';
+            $message = 'Votre compte a ete archive par ' . $actorLabel . '.' . $reasonText;
+        }
+
+        $this->notifyTargetUser(
+            $restaurantId,
+            $userId,
+            $actor,
+            'personnel.status_changed',
+            $level,
+            $title,
+            $message,
+            'personnel:status:' . $userId . ':' . $newStatus . ':' . time(),
+            null
+        );
+    }
+
+    private function notifyTargetUser(
+        int $restaurantId,
+        int $userId,
+        array $actor,
+        string $eventCode,
+        string $level,
+        string $title,
+        string $message,
+        string $eventKey,
+        ?string $targetUrl
+    ): void {
+        try {
+            Container::getInstance()->get('uiNotifications')->queueForUsers(
+                $restaurantId,
+                [$userId],
+                $actor,
+                $eventCode,
+                $level,
+                $title,
+                $message,
+                $targetUrl,
+                $eventKey,
+                null,
+                720
+            );
+        } catch (\Throwable $exception) {
+            error_log('[personnel_notification] ' . $exception->getMessage());
+        }
     }
 
     private function userColumnExists(string $column): bool

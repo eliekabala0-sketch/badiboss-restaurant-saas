@@ -25,7 +25,7 @@ final class AuthController
         if ($user === null) {
             view('auth/login', [
                 'title' => 'Connexion',
-                'error' => 'Identifiants invalides ou compte inactif.',
+                'error' => $auth->lastLoginFailureMessage() ?: 'Identifiants invalides ou compte inactif.',
                 'success' => flash('success'),
             ]);
             return;

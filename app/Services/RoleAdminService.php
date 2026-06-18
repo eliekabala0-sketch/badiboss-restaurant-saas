@@ -55,21 +55,35 @@ final class RoleAdminService
     public function permissionIdsByRole(int $restaurantId): array
     {
         $statement = $this->database->pdo()->prepare(
-            'SELECT role_id, permission_id, restaurant_id
+            'SELECT role_id, permission_id, restaurant_id, effect
              FROM role_permissions
              WHERE restaurant_id IS NULL OR restaurant_id = :restaurant_id'
+            . ' ORDER BY restaurant_id IS NULL DESC, restaurant_id ASC'
         );
         $statement->execute(['restaurant_id' => $restaurantId]);
 
-        $map = [];
+        $allowed = [];
+        $denied = [];
         foreach ($statement->fetchAll(PDO::FETCH_ASSOC) as $row) {
             $roleId = (int) $row['role_id'];
-            $map[$roleId] ??= [];
-            $map[$roleId][] = (int) $row['permission_id'];
+            $permissionId = (int) $row['permission_id'];
+            $allowed[$roleId] ??= [];
+            $denied[$roleId] ??= [];
+            if (($row['effect'] ?? 'allow') === 'deny') {
+                $denied[$roleId][$permissionId] = true;
+                unset($allowed[$roleId][$permissionId]);
+                continue;
+            }
+
+            if (!isset($denied[$roleId][$permissionId])) {
+                $allowed[$roleId][$permissionId] = true;
+            }
         }
 
-        foreach ($map as $roleId => $permissionIds) {
-            $map[$roleId] = array_values(array_unique($permissionIds));
+        $map = [];
+        foreach ($allowed as $roleId => $permissionIds) {
+            $map[$roleId] = array_values(array_map('intval', array_keys($permissionIds)));
+            sort($map[$roleId]);
         }
 
         return $map;
@@ -244,6 +258,8 @@ final class RoleAdminService
     public function syncPermissions(int $roleId, int $restaurantId, array $permissionIds, array $actor): void
     {
         $role = $this->findAssignableRole($roleId, $restaurantId);
+        $oldEffectivePermissionIds = $this->permissionIdsByRole($restaurantId)[$roleId] ?? [];
+        $globalPermissionIds = $this->globalAllowPermissionIdsForRole($roleId);
         $pdo = $this->database->pdo();
         $pdo->beginTransaction();
 
@@ -259,18 +275,30 @@ final class RoleAdminService
 
             $insert = $pdo->prepare(
                 'INSERT INTO role_permissions (role_id, permission_id, restaurant_id, effect, created_at, updated_at)
-                 VALUES (:role_id, :permission_id, :restaurant_id, "allow", NOW(), NOW())'
+                 VALUES (:role_id, :permission_id, :restaurant_id, :effect, NOW(), NOW())'
             );
 
-            foreach (array_unique($permissionIds) as $permissionId) {
+            $selectedIds = array_values(array_unique(array_filter(array_map('intval', $permissionIds), static fn (int $id): bool => $id > 0)));
+            foreach ($selectedIds as $permissionId) {
                 $insert->execute([
                     'role_id' => $roleId,
                     'permission_id' => $permissionId,
                     'restaurant_id' => $restaurantId,
+                    'effect' => 'allow',
+                ]);
+            }
+
+            foreach (array_diff($globalPermissionIds, $selectedIds) as $permissionId) {
+                $insert->execute([
+                    'role_id' => $roleId,
+                    'permission_id' => (int) $permissionId,
+                    'restaurant_id' => $restaurantId,
+                    'effect' => 'deny',
                 ]);
             }
 
             $pdo->commit();
+            $newEffectivePermissionIds = $this->permissionIdsByRole($restaurantId)[$roleId] ?? [];
             Container::getInstance()->get('audit')->log([
                 'restaurant_id' => $restaurantId,
                 'user_id' => $actor['id'],
@@ -282,11 +310,13 @@ final class RoleAdminService
                     : 'tenant_role_permissions_synced',
                 'entity_type' => 'roles',
                 'entity_id' => (string) $roleId,
-                'new_values' => ['permission_ids' => array_values($permissionIds)],
+                'old_values' => ['permission_ids' => array_values($oldEffectivePermissionIds)],
+                'new_values' => ['permission_ids' => array_values($newEffectivePermissionIds)],
                 'justification' => ($role['scope'] ?? 'tenant') === 'system'
                     ? 'Mise a jour locale des permissions du role predefini pour ce restaurant'
                     : 'Mise a jour permissions role dynamique',
             ]);
+            $this->notifyUsersAboutPermissionDiff($restaurantId, $roleId, $oldEffectivePermissionIds, $newEffectivePermissionIds, $actor);
         } catch (\Throwable $throwable) {
             if ($pdo->inTransaction()) {
                 $pdo->rollBack();
@@ -321,7 +351,7 @@ final class RoleAdminService
             throw new \RuntimeException('Utilisateur introuvable pour ce restaurant.');
         }
 
-        $this->findAssignableRole($roleId, $restaurantId);
+        $role = $this->findAssignableRole($roleId, $restaurantId);
 
         $statement = $this->database->pdo()->prepare(
             'UPDATE users
@@ -343,9 +373,21 @@ final class RoleAdminService
             'action_name' => 'tenant_user_role_assigned',
             'entity_type' => 'users',
             'entity_id' => (string) $userId,
-            'new_values' => ['role_id' => $roleId],
+            'old_values' => ['role_id' => (int) ($user['role_id'] ?? 0)],
+            'new_values' => ['role_id' => $roleId, 'role_code' => (string) ($role['code'] ?? '')],
             'justification' => 'Affectation personne a un role dynamique',
         ]);
+
+        $this->notifyUsers(
+            $restaurantId,
+            [$userId],
+            $actor,
+            'personnel.role_changed',
+            'warning',
+            'Fonction modifiee',
+            'Votre fonction a ete modifiee. Vous etes desormais ' . restaurant_role_label((string) ($role['code'] ?? '')) . '. Cliquez sur OK pour continuer.',
+            'personnel:role:' . $userId . ':' . $roleId . ':' . time()
+        );
     }
 
     public function assertAssignableRoleForRestaurant(int $roleId, ?int $restaurantId): array
@@ -553,6 +595,110 @@ final class RoleAdminService
         $user = $statement->fetch(PDO::FETCH_ASSOC);
 
         return $user === false ? null : $user;
+    }
+
+    /** @return list<int> */
+    private function globalAllowPermissionIdsForRole(int $roleId): array
+    {
+        $statement = $this->database->pdo()->prepare(
+            'SELECT permission_id
+             FROM role_permissions
+             WHERE role_id = :role_id
+               AND restaurant_id IS NULL
+               AND effect = "allow"'
+        );
+        $statement->execute(['role_id' => $roleId]);
+
+        return array_values(array_unique(array_map('intval', $statement->fetchAll(PDO::FETCH_COLUMN))));
+    }
+
+    /** @return list<int> */
+    private function userIdsForRole(int $restaurantId, int $roleId): array
+    {
+        $statement = $this->database->pdo()->prepare(
+            'SELECT id
+             FROM users
+             WHERE restaurant_id = :restaurant_id
+               AND role_id = :role_id
+               AND status = "active"'
+        );
+        $statement->execute([
+            'restaurant_id' => $restaurantId,
+            'role_id' => $roleId,
+        ]);
+
+        return array_values(array_unique(array_map('intval', $statement->fetchAll(PDO::FETCH_COLUMN))));
+    }
+
+    private function notifyUsersAboutPermissionDiff(
+        int $restaurantId,
+        int $roleId,
+        array $oldPermissionIds,
+        array $newPermissionIds,
+        array $actor
+    ): void {
+        $added = array_values(array_diff(array_map('intval', $newPermissionIds), array_map('intval', $oldPermissionIds)));
+        $removed = array_values(array_diff(array_map('intval', $oldPermissionIds), array_map('intval', $newPermissionIds)));
+        if ($added === [] && $removed === []) {
+            return;
+        }
+
+        $userIds = $this->userIdsForRole($restaurantId, $roleId);
+        if ($userIds === []) {
+            return;
+        }
+
+        $actorLabel = named_actor_label($actor['full_name'] ?? null, $actor['role_code'] ?? null);
+        $parts = [];
+        if ($added !== []) {
+            $parts[] = 'Un nouvel acces vous a ete accorde : ' . implode(', ', $this->permissionLabelsForIds($added)) . '.';
+        }
+        if ($removed !== []) {
+            $parts[] = 'L acces au module ' . implode(', ', $this->permissionLabelsForIds($removed)) . ' vous a ete retire par ' . $actorLabel . '.';
+        }
+
+        $this->notifyUsers(
+            $restaurantId,
+            $userIds,
+            $actor,
+            'personnel.permissions_changed',
+            $removed !== [] ? 'warning' : 'success',
+            'Acces modifies',
+            implode(' ', $parts),
+            'personnel:permissions:' . $roleId . ':' . time()
+        );
+    }
+
+    /**
+     * @param list<int> $userIds
+     */
+    private function notifyUsers(
+        int $restaurantId,
+        array $userIds,
+        array $actor,
+        string $eventCode,
+        string $level,
+        string $title,
+        string $message,
+        string $eventKey
+    ): void {
+        try {
+            Container::getInstance()->get('uiNotifications')->queueForUsers(
+                $restaurantId,
+                $userIds,
+                $actor,
+                $eventCode,
+                $level,
+                $title,
+                $message,
+                null,
+                $eventKey,
+                null,
+                720
+            );
+        } catch (\Throwable $exception) {
+            error_log('[personnel_permission_notification] ' . $exception->getMessage());
+        }
     }
 
     private function normalizeTenantRoleCode(string $rawCode, string $fallbackName): string

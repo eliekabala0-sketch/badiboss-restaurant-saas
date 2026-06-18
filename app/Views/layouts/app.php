@@ -1203,7 +1203,7 @@ foreach ($notificationSources as $candidate) {
     <div class="container">
         <div id="app-live-banner" class="live-banner" data-level="info" hidden>
             <strong data-live-banner-text>Nouvelle alerte</strong>
-            <button type="button" class="button-muted" onclick="this.parentElement.hidden = true;">Masquer</button>
+            <button type="button" class="button-muted" onclick="this.parentElement.hidden = true;">OK</button>
         </div>
         <?php $suppressAppShellNav = !empty($suppress_app_shell_nav ?? false); ?>
         <?php if (current_user() !== null && !$suppressAppShellNav): ?>
