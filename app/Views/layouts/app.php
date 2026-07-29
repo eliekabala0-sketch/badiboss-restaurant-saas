@@ -1268,6 +1268,7 @@ foreach ($notificationSources as $candidate) {
                     <?php if (can_access('platform.restaurants.manage')): ?><a href="/super-admin/menu">Menu</a><?php endif; ?>
                     <?php if (can_access('platform.settings.manage')): ?><a href="/super-admin/settings">Paramètres</a><?php endif; ?>
                     <?php if (can_access('platform.audit.view')): ?><a href="/super-admin/audit">Journal d’audit</a><?php endif; ?>
+                    <?php if (can_access('audit.external.view')): ?><a href="/audit-externe">Audit externe</a><?php endif; ?>
                 <?php else: ?>
                     <?php if (can_access('tenant.dashboard.view')): ?><a href="/owner">Tableau de bord</a><?php endif; ?>
                     <?php if (can_access('tenant.access.manage')): ?><a href="/owner/users">Personnel</a><?php endif; ?>
@@ -1280,6 +1281,7 @@ foreach ($notificationSources as $candidate) {
                     <?php if (can_access('sales.view')): ?><a href="/ventes">Ventes</a><?php endif; ?>
                     <?php if (can_access('cash.view')): ?><a href="/caisse">Caisse</a><?php endif; ?>
                     <?php if (can_access('reports.view')): ?><a href="/rapport">Rapports</a><?php endif; ?>
+                    <?php if (can_access('audit.external.view')): ?><a href="/audit-externe">Audit externe</a><?php endif; ?>
                     <?php if (can_access('reports.view') || can_access('sales.view')): ?><a href="/preuves">Factures / preuves</a><?php endif; ?>
                 <?php endif; ?>
                 <a href="/logout">Déconnexion</a>

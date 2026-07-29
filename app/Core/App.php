@@ -33,6 +33,9 @@ use App\Services\TenantResolverService;
 use App\Services\UploadService;
 use App\Services\UiNotificationService;
 use App\Services\UserAdminService;
+use App\Services\ExternalAuditEngine;
+use App\Services\ExternalAuditService;
+use App\Services\ExternalAuditExportService;
 
 final class App
 {
@@ -132,6 +135,10 @@ final class App
         $container->set('stockResetService', new StockResetService($database));
         $container->set('superAdminOperationsService', new SuperAdminOperationsService($database));
         $container->set('uiNotifications', new UiNotificationService($database));
+        $externalAuditEngine = new ExternalAuditEngine();
+        $container->set('externalAuditEngine', $externalAuditEngine);
+        $container->set('externalAudit', new ExternalAuditService($database, $externalAuditEngine));
+        $container->set('externalAuditExport', new ExternalAuditExportService());
 
         try {
             $this->router->dispatch($request);

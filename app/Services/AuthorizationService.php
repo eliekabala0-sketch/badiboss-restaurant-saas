@@ -65,6 +65,22 @@ final class AuthorizationService
             'permissions' => ['staff.gauges.view'],
         ],
         'payroll.prepare.view' => ['roles' => ['owner', 'manager']],
+        'audit.external.view' => [
+            'roles' => ['owner', 'manager', 'stock_manager', 'kitchen', 'cashier_server'],
+            'permissions' => ['audit.external.view'],
+        ],
+        'audit.external.manage' => [
+            'roles' => ['owner', 'manager'],
+            'permissions' => ['audit.external.manage'],
+        ],
+        'audit.reset_report' => [
+            'roles' => ['owner', 'manager'],
+            'permissions' => ['audit.reset_report'],
+        ],
+        'audit.delete_test' => [
+            'roles' => [],
+            'permissions' => ['audit.delete_test'],
+        ],
     ];
 
     private const SUPER_ADMIN_AUDIT_ABILITIES = [
@@ -118,6 +134,8 @@ final class AuthorizationService
         'stock.control.perform',
         'staff.team_gauges.view',
         'payroll.prepare.view',
+        'audit.external.manage',
+        'audit.reset_report',
     ];
 
     private array $permissionCache = [];

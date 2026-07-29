@@ -1123,7 +1123,7 @@ function sql_sale_activity_left_join_server_request(string $saleAlias = 's', str
  */
 function sandbox_allowed_restaurant_codes(): array
 {
-    $raw = (string) env('SANDBOX_RESTAURANT_CODES', 'test-ventes-minuit');
+    $raw = (string) env('SANDBOX_RESTAURANT_CODES', 'test-ventes-minuit,test-audit-externe');
     $parts = preg_split('/[,\s;]+/', strtolower(trim($raw))) ?: [];
     $out = [];
     foreach ($parts as $code) {
@@ -1135,6 +1135,7 @@ function sandbox_allowed_restaurant_codes(): array
     }
     if ($out === []) {
         $out[] = 'test-ventes-minuit';
+        $out[] = 'test-audit-externe';
     }
 
     return array_values(array_unique($out));

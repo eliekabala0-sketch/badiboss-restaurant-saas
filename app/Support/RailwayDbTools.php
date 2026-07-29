@@ -15,6 +15,7 @@ final class RailwayDbTools
         'role_permissions', 'settings', 'menu_categories', 'menu_items', 'stock_items', 'stock_movements',
         'kitchen_production', 'sales', 'server_requests', 'server_request_items', 'kitchen_stock_requests',
         'losses', 'operation_cases', 'audit_logs', 'correction_requests',
+        'external_audit_reports', 'external_audit_report_items', 'external_audit_results',
     ];
 
     private const RUNTIME_COLUMN_DEFS = [
@@ -92,6 +93,32 @@ final class RailwayDbTools
                     continue;
                 }
                 $report['blocking_errors'][] = ($table ?? 'instruction_sql') . ' => ' . $error;
+            }
+        }
+
+        $externalAuditMigration = BASE_PATH . '/database/migrations/2026_07_29_external_audit_module.sql';
+        $externalAuditSql = @file_get_contents($externalAuditMigration);
+        if ($externalAuditSql === false) {
+            $report['blocking_errors'][] = 'migration Audit externe introuvable';
+        } else {
+            foreach (self::splitSchema($externalAuditSql) as $statement) {
+                $table = self::extractTable($statement);
+                try {
+                    $pdo->exec($statement);
+                    if ($table !== null) {
+                        $report['created_tables'][] = $table;
+                    }
+                } catch (Throwable $e) {
+                    $error = self::mask($e->getMessage());
+                    if (self::isTableExistsError($error)) {
+                        if ($table !== null) {
+                            $report['existing_tables'][] = $table;
+                        }
+                        $report['ignored_errors'][] = ($table ?? 'external_audit_migration') . ' => ' . $error;
+                        continue;
+                    }
+                    $report['blocking_errors'][] = ($table ?? 'external_audit_migration') . ' => ' . $error;
+                }
             }
         }
 
