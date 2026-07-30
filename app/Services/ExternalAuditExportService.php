@@ -30,6 +30,7 @@ final class ExternalAuditExportService
             'Versions' => $data['versions'] ?? [],
             'Journal des actions' => $data['logs'] ?? [],
             'Formules moteur' => $this->formulaRows(),
+            'Suivi depots retards' => $data['tracking']['rows'] ?? [],
         ];
 
         $xml = '<?xml version="1.0" encoding="UTF-8"?>'
@@ -105,6 +106,33 @@ final class ExternalAuditExportService
             'Conclusion: les ecarts sont des anomalies a justifier; aucune qualification automatique de vol.',
             'Validation numerique: ' . hash('sha256', json_encode($data['totals']) . ExternalAuditEngine::VERSION),
         ];
+        $lines[] = '';
+        $lines[] = 'SUIVI DES RAPPORTS ATTENDUS ET RETARDS';
+        $lines[] = sprintf(
+            'Attendus %d | recus %d | manquants %d | retards %d | serveurs actifs %d',
+            (int) ($data['tracking']['summary']['expected'] ?? 0),
+            (int) ($data['tracking']['summary']['received'] ?? 0),
+            (int) ($data['tracking']['summary']['missing'] ?? 0),
+            (int) ($data['tracking']['summary']['late'] ?? 0),
+            (int) ($data['tracking']['summary']['active_server_count'] ?? 0)
+        );
+        foreach ($data['tracking']['rows'] ?? [] as $trackingRow) {
+            $lines[] = sprintf(
+                '%s | %s | %s | recu %s | depot %s | retard %s | %s',
+                $trackingRow['activity_date'],
+                $trackingRow['name'],
+                $trackingRow['function'],
+                $trackingRow['received'] ? 'oui' : 'non',
+                $trackingRow['submission_time'] ?? '-',
+                $trackingRow['delay'],
+                $trackingRow['status']
+            );
+        }
+        $lines[] = '';
+        $lines[] = 'CLASSEMENT PONCTUALITE';
+        foreach (array_slice($data['tracking']['rankings']['most_punctual'] ?? [], 0, 10) as $ranked) {
+            $lines[] = sprintf('%s | %s | %.2f %% | remis %d/%d', $ranked['name'], $ranked['function'], (float) $ranked['punctuality_rate'], (int) $ranked['received'], (int) $ranked['expected']);
+        }
         $lines[] = '';
         $lines[] = 'RESULTATS JOURNALIERS';
         foreach ($data['days'] as $day) {

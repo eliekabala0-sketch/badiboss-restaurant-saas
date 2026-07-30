@@ -6,6 +6,31 @@
 <article class="card stat"><span><?= e($label) ?></span><strong><?= number_format((float) $period['totals'][$key],0,',',' ') ?></strong></article><?php endforeach; ?>
 </section>
 
+<section class="grid stats">
+<?php foreach ([
+    'Rapports attendus' => $period['tracking']['summary']['expected'],
+    'Rapports recus' => $period['tracking']['summary']['received'],
+    'Rapports manquants' => $period['tracking']['summary']['missing'],
+    'Rapports en retard' => $period['tracking']['summary']['late'],
+    'Serveurs actifs' => $period['tracking']['summary']['active_server_count'],
+    'Rapports serveurs recus' => $period['tracking']['summary']['server_reports_received'],
+    'Rapports serveurs manquants' => $period['tracking']['summary']['server_reports_missing'],
+] as $label => $value): ?><article class="card stat"><span><?= e($label) ?></span><strong><?= (int) $value ?></strong></article><?php endforeach; ?>
+</section>
+
+<section class="card" style="padding:22px;margin-bottom:22px"><h2>Suivi des depots et retards</h2>
+<div class="table-wrap"><table><thead><tr><th>Nom</th><th>Fonction</th><th>Rapport attendu</th><th>Rapport recu</th><th>Date activite</th><th>Heure limite</th><th>Heure depot</th><th>Retard</th><th>Statut</th></tr></thead><tbody>
+<?php foreach ($period['tracking']['rows'] as $trackingRow): ?><tr><td><?= e($trackingRow['name']) ?></td><td><?= e($trackingRow['function']) ?></td><td><?= e($trackingRow['expected_report']) ?></td><td><?= $trackingRow['received'] ? 'Oui' : 'Non' ?></td><td><?= e($trackingRow['activity_date']) ?></td><td><?= e($trackingRow['deadline_time']) ?></td><td><?= e($trackingRow['submission_time'] ?? '-') ?></td><td><?= e($trackingRow['delay']) ?></td><td><?= e($trackingRow['status']) ?></td></tr><?php endforeach; ?>
+</tbody></table></div></section>
+
+<section class="card" style="padding:22px;margin-bottom:22px"><h2>Indicateurs de ponctualite par utilisateur</h2>
+<div class="table-wrap"><table><thead><tr><th>Nom</th><th>Fonction</th><th>Attendus</th><th>Remis</th><th>Manquants</th><th>En retard</th><th>Taux ponctualite</th></tr></thead><tbody>
+<?php foreach ($period['tracking']['indicators'] as $indicator): ?><tr><td><?= e($indicator['name']) ?></td><td><?= e($indicator['function']) ?></td><td><?= (int) $indicator['expected'] ?></td><td><?= (int) $indicator['received'] ?></td><td><?= (int) $indicator['missing'] ?></td><td><?= (int) $indicator['late'] ?></td><td><?= e((string) $indicator['punctuality_rate']) ?> %</td></tr><?php endforeach; ?>
+</tbody></table></div>
+<div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(260px,1fr));margin-top:18px">
+<?php foreach (['most_punctual' => 'Utilisateurs les plus ponctuels','most_late' => 'Utilisateurs ayant le plus de retards','most_missing' => 'Utilisateurs ayant le plus de rapports manquants'] as $rankingKey => $rankingLabel): ?><article><h3><?= e($rankingLabel) ?></h3><ol><?php foreach (array_slice($period['tracking']['rankings'][$rankingKey],0,10) as $ranked): ?><li><?= e($ranked['name']) ?> · <?= $rankingKey === 'most_punctual' ? e((string) $ranked['punctuality_rate']) . ' %' : (int) $ranked[$rankingKey === 'most_late' ? 'late' : 'missing'] ?></li><?php endforeach; ?></ol></article><?php endforeach; ?>
+</div></section>
+
 <section class="card" style="padding:22px;margin-bottom:22px"><h2>Informations générales et résultats journaliers</h2>
 <div class="table-wrap"><table><thead><tr><th>Date</th><th>Rapports</th><th>Calculé</th><th>Déclaré</th><th>Manquant</th><th>Suspect</th><th>Injection</th><th>Écart caisse</th></tr></thead><tbody>
 <?php foreach ($period['days'] as $day): ?><tr><td><?= e($day['activity_date']) ?></td><td><?= (int) ($day['reports'] ?? 0) ?><?= !empty($day['missing']) ? ' · manquant' : '' ?></td><td><?= number_format((float) ($day['calculated_sales'] ?? 0),0,',',' ') ?></td><td><?= number_format((float) ($day['declared_sales'] ?? 0),0,',',' ') ?></td><td><?= number_format((float) ($day['missing_amount'] ?? 0),0,',',' ') ?></td><td><?= number_format((float) ($day['suspicious_amount'] ?? 0),0,',',' ') ?></td><td><?= number_format((float) ($day['injection_amount'] ?? 0),0,',',' ') ?></td><td><?= number_format((float) ($day['cash_gap'] ?? 0),0,',',' ') ?></td></tr><?php endforeach; ?>

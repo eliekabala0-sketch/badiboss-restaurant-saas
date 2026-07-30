@@ -48,6 +48,13 @@ if (count($users) < 4) {
     throw new RuntimeException('Le sandbox doit avoir au moins quatre comptes actifs.');
 }
 $manager = $users[0];
+$stockUser = array_values(array_filter($users, static fn (array $user): bool => $user['role_code'] === 'stock_manager'))[0] ?? null;
+$kitchenUser = array_values(array_filter($users, static fn (array $user): bool => $user['role_code'] === 'kitchen'))[0] ?? null;
+$serverUsers = array_values(array_filter($users, static fn (array $user): bool => $user['role_code'] === 'cashier_server'));
+if (!is_array($stockUser) || !is_array($kitchenUser) || count($serverUsers) < 2) {
+    throw new RuntimeException('Le sandbox doit avoir stock, cuisine et au moins deux serveurs actifs.');
+}
+$reportActors = [$stockUser, $kitchenUser, $serverUsers[0], $serverUsers[1]];
 $engine = new ExternalAuditEngine();
 $service = new ExternalAuditService($db, $engine);
 $export = new ExternalAuditExportService();
@@ -75,7 +82,7 @@ try {
 
     $types = ['boissons','cuisine','serveur','serveur'];
     foreach ($types as $index => $type) {
-        $actor = $users[$index];
+        $actor = $reportActors[$index];
         $declared = $type === 'serveur' ? ($index === 2 ? 80000 : 12000) : ($type === 'boissons' ? 76000 : 0);
         $reportId = $service->saveDraft($restaurantId, [
             'report_type' => $type, 'activity_date' => $date, 'operational_author_id' => $actor['id'],
@@ -98,6 +105,22 @@ try {
         $service->submit($restaurantId, $reportId, 'e2e-' . bin2hex(random_bytes(10)), $actor);
     }
     $assert(count($reportIds) === 4, 'brouillons et soumissions');
+    foreach (['cashier_server','stock_manager','kitchen'] as $expectedRole) {
+        $service->updateRoleExpectation($restaurantId, $expectedRole, '00:01', true, $manager);
+    }
+    $tracking = $service->reportTracking($restaurantId, $date, $date);
+    $assert((int) $tracking['summary']['active_server_count'] === count($serverUsers), 'serveurs actifs dynamiques');
+    $assert((int) $tracking['summary']['server_reports_received'] === count($serverUsers), 'tous rapports serveurs agreges');
+    $assert((int) $tracking['summary']['server_reports_missing'] === 0, 'aucun serveur actif manquant');
+    $assert((int) $tracking['summary']['late'] === 4, 'retards selon heure limite configuree');
+    $assert(count($tracking['indicators']) === 4, 'indicateurs par fonction attendue');
+    $serverToDisable = $serverUsers[1];
+    $pdo->prepare('UPDATE users SET status="disabled",updated_at=NOW() WHERE id=:id AND restaurant_id=:restaurant_id')
+        ->execute(['id' => $serverToDisable['id'], 'restaurant_id' => $restaurantId]);
+    $trackingDisabled = $service->reportTracking($restaurantId, $date, $date);
+    $assert((int) $trackingDisabled['summary']['active_server_count'] === count($serverUsers) - 1, 'serveur desactive exclu des attentes');
+    $pdo->prepare('UPDATE users SET status="active",updated_at=NOW() WHERE id=:id AND restaurant_id=:restaurant_id')
+        ->execute(['id' => $serverToDisable['id'], 'restaurant_id' => $restaurantId]);
     $firstResult = $service->result($restaurantId, $reportIds[0]);
     $assert((float) $firstResult['calculated_sales'] === 88000.0, 'formule vente');
     $assert((float) $firstResult['missing_amount'] === 12000.0, 'formule manquant');
@@ -140,7 +163,8 @@ try {
     $period = $service->periodData($restaurantId, $date, $date);
     $excel = $export->excel($period, $restaurant);
     $pdf = $export->pdf($period, $restaurant);
-    $assert(substr_count($excel, '<Worksheet ') === 21, 'excel 21 feuilles');
+    $assert(substr_count($excel, '<Worksheet ') === 22, 'excel 22 feuilles avec suivi depots');
+    $assert(str_contains($excel, 'Suivi depots retards') && str_contains($excel, 'RECU_EN_RETARD'), 'export suivi ponctualite');
     $assert(str_contains($excel, 'Correction E2E') && str_contains($excel, 'REPORT_RESET'), 'excel corrections versions journal');
     $assert(str_starts_with($pdf, '%PDF-1.4'), 'pdf valide');
     $assert(substr_count($pdf, '/Type /Page') >= 2, 'pdf multipage detaille');
@@ -152,6 +176,17 @@ try {
     $notificationEvents->execute(['restaurant_id' => $restaurantId]);
     $assert((int) $notificationEvents->fetchColumn() >= 3, 'notifications evenements sans repetition');
 } finally {
+    if (isset($serverToDisable) && is_array($serverToDisable)) {
+        $pdo->prepare('UPDATE users SET status="active",updated_at=NOW() WHERE id=:id AND restaurant_id=:restaurant_id')
+            ->execute(['id' => $serverToDisable['id'], 'restaurant_id' => $restaurantId]);
+    }
+    foreach (['cashier_server' => '23:00','stock_manager' => '22:30','kitchen' => '22:30'] as $expectedRole => $deadline) {
+        try {
+            $service->updateRoleExpectation($restaurantId, $expectedRole, $deadline, true, $manager);
+        } catch (Throwable $exception) {
+            fwrite(STDERR, '[cleanup expectation ' . $expectedRole . '] ' . $exception->getMessage() . PHP_EOL);
+        }
+    }
     foreach ($reportIds as $reportId) {
         try {
             $service->deleteTestReport($restaurantId, $reportId, 'Nettoyage E2E automatique', $manager, $restaurant);

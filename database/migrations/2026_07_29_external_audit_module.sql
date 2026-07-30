@@ -64,6 +64,21 @@ CREATE TABLE IF NOT EXISTS external_audit_reports (
     KEY idx_ea_report_author (restaurant_id, operational_author_id, activity_date)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+CREATE TABLE IF NOT EXISTS external_audit_role_expectations (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    restaurant_id BIGINT UNSIGNED NOT NULL,
+    role_code VARCHAR(80) NOT NULL,
+    role_label VARCHAR(120) NOT NULL,
+    report_type VARCHAR(40) NOT NULL,
+    deadline_time TIME NOT NULL DEFAULT '23:00:00',
+    is_required TINYINT(1) NOT NULL DEFAULT 1,
+    created_by BIGINT UNSIGNED NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uq_ea_expectation_role (restaurant_id, role_code),
+    KEY idx_ea_expectation_active (restaurant_id, is_required, role_code)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 CREATE TABLE IF NOT EXISTS external_audit_report_items (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     restaurant_id BIGINT UNSIGNED NOT NULL,

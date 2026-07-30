@@ -47,6 +47,47 @@
     <?php endforeach; ?>
 </section>
 
+<section class="grid stats">
+    <?php foreach ([
+        'Serveurs actifs' => $tracking['summary']['active_server_count'],
+        'Serveurs attendus' => $tracking['summary']['servers_expected'],
+        'Rapports serveurs recus' => $tracking['summary']['server_reports_received'],
+        'Rapports serveurs manquants' => $tracking['summary']['server_reports_missing'],
+        'Tous rapports attendus' => $tracking['summary']['expected'],
+        'Tous rapports recus' => $tracking['summary']['received'],
+        'Tous rapports en retard' => $tracking['summary']['late'],
+    ] as $label => $value): ?>
+        <article class="card stat"><span><?= e($label) ?></span><strong><?= (int) $value ?></strong></article>
+    <?php endforeach; ?>
+</section>
+
+<section class="card" style="padding:22px;margin-bottom:22px">
+    <h2>Suivi des rapports attendus · <?= e($date) ?></h2>
+    <p class="muted">La liste est construite dynamiquement depuis tous les utilisateurs actifs ayant une fonction attendue. Aucun compte serveur n'est code en dur.</p>
+    <div class="table-wrap"><table><thead><tr><th>Nom</th><th>Fonction</th><th>Rapport attendu</th><th>Recu</th><th>Date activite</th><th>Heure limite</th><th>Heure depot</th><th>Retard</th><th>Statut</th></tr></thead><tbody>
+    <?php foreach ($tracking['rows'] as $trackingRow): ?><tr>
+        <td><?= e($trackingRow['name']) ?></td><td><?= e($trackingRow['function']) ?></td><td><?= e($trackingRow['expected_report']) ?></td>
+        <td><?= $trackingRow['received'] ? 'Oui' : 'Non' ?></td><td><?= e($trackingRow['activity_date']) ?></td><td><?= e($trackingRow['deadline_time']) ?></td>
+        <td><?= e($trackingRow['submission_time'] ?? '-') ?></td><td><?= e($trackingRow['delay']) ?></td><td><span class="pill"><?= e($trackingRow['status']) ?></span></td>
+    </tr><?php endforeach; ?>
+    <?php if ($tracking['rows'] === []): ?><tr><td colspan="9">Aucune fonction active soumise a rapport pour cette date.</td></tr><?php endif; ?>
+    </tbody></table></div>
+</section>
+
+<?php if (can_access('audit.external.manage')): ?>
+<section class="card" style="padding:22px;margin-bottom:22px"><h2>Heures limites par fonction</h2>
+<div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(260px,1fr))">
+<?php foreach ($role_expectations as $expectation): ?><form method="post" action="/audit-externe/attentes/<?= e($expectation['role_code']) ?>" class="card" style="padding:16px">
+    <strong><?= e($expectation['role_label']) ?></strong>
+    <input type="hidden" name="date" value="<?= e($date) ?>">
+    <label>Rapport <input value="<?= e($expectation['report_type']) ?>" disabled></label>
+    <label>Heure limite <input type="time" name="deadline_time" value="<?= e(substr((string) $expectation['deadline_time'],0,5)) ?>" required></label>
+    <label><input type="checkbox" name="is_required" value="1" <?= (bool) $expectation['is_required'] ? 'checked' : '' ?> style="width:auto"> Rapport obligatoire</label>
+    <button type="submit">Enregistrer</button>
+</form><?php endforeach; ?>
+</div></section>
+<?php endif; ?>
+
 <section class="card" style="padding:22px;margin-bottom:22px">
     <h2>Nouveau brouillon</h2>
     <form method="post" enctype="multipart/form-data" action="/audit-externe/rapports">

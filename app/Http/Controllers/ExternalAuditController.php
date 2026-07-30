@@ -28,6 +28,8 @@ final class ExternalAuditController
             'categories' => $service->categories($restaurantId),
             'products' => $service->products($restaurantId),
             'users' => $service->activeUsers($restaurantId),
+            'tracking' => $service->reportTracking($restaurantId, $date, $date),
+            'role_expectations' => can_access('audit.external.manage') ? $service->roleExpectations($restaurantId) : [],
             'flash_success' => flash('success'),
             'flash_error' => flash('error'),
         ]);
@@ -52,6 +54,20 @@ final class ExternalAuditController
         Container::getInstance()->get('externalAudit')->createProduct(current_restaurant_id(), $request->request, current_user());
         flash('success', 'Produit Audit externe enregistre avec sa categorie explicite.');
         redirect('/audit-externe');
+    }
+
+    public function updateExpectation(Request $request): void
+    {
+        authorize_access('audit.external.manage');
+        Container::getInstance()->get('externalAudit')->updateRoleExpectation(
+            current_restaurant_id(),
+            (string) $request->route('role'),
+            (string) $request->input('deadline_time'),
+            (string) $request->input('is_required') === '1',
+            current_user()
+        );
+        flash('success', 'Heure limite et obligation de rapport mises a jour.');
+        redirect('/audit-externe?date=' . urlencode((string) $request->input('date', today_for_restaurant())));
     }
 
     public function saveDraft(Request $request): void

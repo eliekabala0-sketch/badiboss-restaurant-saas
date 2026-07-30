@@ -84,6 +84,164 @@ final class ExternalAuditService
         return $statement->fetchAll(PDO::FETCH_ASSOC);
     }
 
+    public function roleExpectations(int $restaurantId): array
+    {
+        $this->ensureRoleExpectations($restaurantId);
+        $statement = $this->database->pdo()->prepare(
+            'SELECT * FROM external_audit_role_expectations
+             WHERE restaurant_id=:restaurant_id ORDER BY role_label'
+        );
+        $statement->execute(['restaurant_id' => $restaurantId]);
+        return $statement->fetchAll(PDO::FETCH_ASSOC);
+    }
+
+    public function updateRoleExpectation(int $restaurantId, string $roleCode, string $deadline, bool $required, array $actor): void
+    {
+        $allowed = ['cashier_server','stock_manager','kitchen'];
+        if (!in_array($roleCode, $allowed, true) || !preg_match('/^(?:[01]\d|2[0-3]):[0-5]\d$/', $deadline)) {
+            throw new RuntimeException('Fonction ou heure limite Audit externe invalide.');
+        }
+        $this->ensureRoleExpectations($restaurantId);
+        $statement = $this->database->pdo()->prepare(
+            'UPDATE external_audit_role_expectations
+             SET deadline_time=:deadline_time,is_required=:is_required,updated_at=NOW()
+             WHERE restaurant_id=:restaurant_id AND role_code=:role_code'
+        );
+        $statement->execute([
+            'deadline_time' => $deadline . ':00',
+            'is_required' => $required ? 1 : 0,
+            'restaurant_id' => $restaurantId,
+            'role_code' => $roleCode,
+        ]);
+        $this->log($restaurantId, null, 'EXPECTATION_UPDATED', [
+            'role_code' => $roleCode,
+            'deadline_time' => $deadline,
+            'is_required' => $required,
+        ], (int) $actor['id']);
+    }
+
+    public function reportTracking(int $restaurantId, string $from, string $to): array
+    {
+        if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $from) || !preg_match('/^\d{4}-\d{2}-\d{2}$/', $to) || $from > $to) {
+            throw new RuntimeException('Periode de suivi Audit externe invalide.');
+        }
+        $this->ensureRoleExpectations($restaurantId);
+        $expectedUsers = $this->database->pdo()->prepare(
+            'SELECT u.id,u.full_name,r.code AS role_code,r.name AS role_name,
+                    e.role_label,e.report_type,e.deadline_time
+             FROM users u
+             INNER JOIN roles r ON r.id=u.role_id
+             INNER JOIN external_audit_role_expectations e
+               ON e.restaurant_id=u.restaurant_id AND e.role_code=r.code AND e.is_required=1
+             WHERE u.restaurant_id=:restaurant_id AND u.status="active"
+             ORDER BY e.role_label,u.full_name'
+        );
+        $expectedUsers->execute(['restaurant_id' => $restaurantId]);
+        $users = $expectedUsers->fetchAll(PDO::FETCH_ASSOC);
+
+        $reportsStatement = $this->database->pdo()->prepare(
+            'SELECT id,operational_author_id,activity_date,report_type,status,submitted_at,created_at
+             FROM external_audit_reports
+             WHERE restaurant_id=:restaurant_id AND activity_date BETWEEN :date_from AND :date_to'
+        );
+        $reportsStatement->execute(['restaurant_id' => $restaurantId, 'date_from' => $from, 'date_to' => $to]);
+        $reportMap = [];
+        foreach ($reportsStatement->fetchAll(PDO::FETCH_ASSOC) as $report) {
+            $reportMap[$report['activity_date'] . ':' . $report['operational_author_id'] . ':' . $report['report_type']] = $report;
+        }
+
+        $today = today_for_restaurant();
+        $now = new \DateTimeImmutable('now');
+        $rows = [];
+        $byUser = [];
+        $cursor = new \DateTimeImmutable($from);
+        $end = new \DateTimeImmutable(min($to, $today));
+        while ($cursor <= $end) {
+            $date = $cursor->format('Y-m-d');
+            foreach ($users as $user) {
+                $key = $date . ':' . $user['id'] . ':' . $user['report_type'];
+                $report = $reportMap[$key] ?? null;
+                $received = is_array($report) && in_array((string) $report['status'], ['SOUMIS','VERROUILLE','CORRIGE'], true) && !empty($report['submitted_at']);
+                $deadline = new \DateTimeImmutable($date . ' ' . substr((string) $user['deadline_time'], 0, 8));
+                $submitted = $received ? new \DateTimeImmutable((string) $report['submitted_at']) : null;
+                $lateMinutes = $submitted !== null && $submitted > $deadline
+                    ? (int) floor(($submitted->getTimestamp() - $deadline->getTimestamp()) / 60)
+                    : 0;
+                $isOverdue = !$received && $now > $deadline;
+                $status = $received ? ($lateMinutes > 0 ? 'RECU_EN_RETARD' : 'RECU_A_TEMPS') : ($isOverdue ? 'MANQUANT' : 'EN_ATTENTE');
+                $row = [
+                    'user_id' => (int) $user['id'],
+                    'name' => $user['full_name'],
+                    'role_code' => $user['role_code'],
+                    'function' => $user['role_label'],
+                    'expected_report' => $user['report_type'],
+                    'received' => $received,
+                    'activity_date' => $date,
+                    'deadline_time' => substr((string) $user['deadline_time'], 0, 5),
+                    'submitted_at' => $submitted?->format('Y-m-d H:i:s'),
+                    'submission_time' => $submitted?->format('H:i'),
+                    'late_minutes' => $lateMinutes,
+                    'delay' => $lateMinutes > 0 ? $lateMinutes . ' min' : ($isOverdue ? 'Non remis' : '0 min'),
+                    'status' => $status,
+                    'report_id' => (int) ($report['id'] ?? 0),
+                ];
+                $rows[] = $row;
+                $uid = (int) $user['id'];
+                $byUser[$uid] ??= [
+                    'user_id' => $uid,
+                    'name' => $user['full_name'],
+                    'function' => $user['role_label'],
+                    'expected' => 0,
+                    'received' => 0,
+                    'missing' => 0,
+                    'late' => 0,
+                    'on_time' => 0,
+                    'punctuality_rate' => 0.0,
+                ];
+                $byUser[$uid]['expected']++;
+                $byUser[$uid]['received'] += $received ? 1 : 0;
+                $byUser[$uid]['missing'] += $isOverdue ? 1 : 0;
+                $byUser[$uid]['late'] += $lateMinutes > 0 ? 1 : 0;
+                $byUser[$uid]['on_time'] += $received && $lateMinutes === 0 ? 1 : 0;
+            }
+            $cursor = $cursor->modify('+1 day');
+        }
+        foreach ($byUser as &$indicator) {
+            $indicator['punctuality_rate'] = $indicator['expected'] > 0
+                ? round(100 * $indicator['on_time'] / $indicator['expected'], 2)
+                : 0.0;
+        }
+        unset($indicator);
+        $indicators = array_values($byUser);
+        $mostPunctual = $indicators;
+        usort($mostPunctual, static fn (array $a, array $b): int => [$b['punctuality_rate'], $b['received']] <=> [$a['punctuality_rate'], $a['received']]);
+        $mostLate = $indicators;
+        usort($mostLate, static fn (array $a, array $b): int => [$b['late'], $b['received']] <=> [$a['late'], $a['received']]);
+        $mostMissing = $indicators;
+        usort($mostMissing, static fn (array $a, array $b): int => [$b['missing'], $b['expected']] <=> [$a['missing'], $a['expected']]);
+
+        $serverRows = array_values(array_filter($rows, static fn (array $row): bool => $row['role_code'] === 'cashier_server'));
+        return [
+            'rows' => $rows,
+            'indicators' => $indicators,
+            'rankings' => [
+                'most_punctual' => $mostPunctual,
+                'most_late' => $mostLate,
+                'most_missing' => $mostMissing,
+            ],
+            'summary' => [
+                'expected' => count($rows),
+                'received' => count(array_filter($rows, static fn (array $row): bool => $row['received'])),
+                'missing' => count(array_filter($rows, static fn (array $row): bool => $row['status'] === 'MANQUANT')),
+                'late' => count(array_filter($rows, static fn (array $row): bool => $row['late_minutes'] > 0)),
+                'servers_expected' => count($serverRows),
+                'server_reports_received' => count(array_filter($serverRows, static fn (array $row): bool => $row['received'])),
+                'server_reports_missing' => count(array_filter($serverRows, static fn (array $row): bool => $row['status'] === 'MANQUANT')),
+                'active_server_count' => count(array_filter($users, static fn (array $user): bool => $user['role_code'] === 'cashier_server')),
+            ],
+        ];
+    }
+
     public function productsForReport(int $restaurantId, string $activityDate): array
     {
         $products = $this->products($restaurantId);
@@ -513,6 +671,7 @@ final class ExternalAuditService
             'corrections' => $corrections,
             'versions' => $versions,
             'logs' => $logs,
+            'tracking' => $this->reportTracking($restaurantId, $from, $to),
             'days' => $days,
             'totals' => $this->engine->period(array_values($daily)),
             'internal_confrontation' => $this->internalConfrontation($restaurantId, $from, $to),
@@ -1086,6 +1245,19 @@ final class ExternalAuditService
         ]);
     }
 
+    private function ensureRoleExpectations(int $restaurantId): void
+    {
+        $statement = $this->database->pdo()->prepare(
+            'INSERT IGNORE INTO external_audit_role_expectations
+             (restaurant_id,role_code,role_label,report_type,deadline_time,is_required,created_by,created_at,updated_at)
+             VALUES
+             (:r1,"cashier_server","Serveur","serveur","23:00:00",1,NULL,NOW(),NOW()),
+             (:r2,"stock_manager","Responsable boissons / stock","boissons","22:30:00",1,NULL,NOW(),NOW()),
+             (:r3,"kitchen","Responsable cuisine","cuisine","22:30:00",1,NULL,NOW(),NOW())'
+        );
+        $statement->execute(['r1' => $restaurantId, 'r2' => $restaurantId, 'r3' => $restaurantId]);
+    }
+
     private function notifyManagers(int $restaurantId, array $actor, string $event, string $level, string $title, string $message, string $url, string $key): void
     {
         try {
@@ -1107,24 +1279,26 @@ final class ExternalAuditService
 
     private function notifyMissingReports(int $restaurantId, string $date): void
     {
-        if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $date) || $date >= today_for_restaurant()) {
+        if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $date) || $date > today_for_restaurant()) {
             return;
         }
         try {
-            $statement = $this->database->pdo()->prepare(
-                'SELECT u.id,u.full_name FROM users u
-                 INNER JOIN roles ro ON ro.id=u.role_id
-                 WHERE u.restaurant_id=:restaurant_id AND u.status="active"
-                   AND ro.code IN ("stock_manager","kitchen","cashier_server")
-                   AND NOT EXISTS (
-                     SELECT 1 FROM external_audit_reports r
-                     WHERE r.restaurant_id=u.restaurant_id AND r.operational_author_id=u.id AND r.activity_date=:activity_date
-                   )'
-            );
-            $statement->execute(['restaurant_id' => $restaurantId, 'activity_date' => $date]);
-            foreach ($statement->fetchAll(PDO::FETCH_ASSOC) as $missing) {
-                $actor = ['id' => (int) $missing['id'], 'restaurant_id' => $restaurantId];
-                $this->notifyManagers($restaurantId, $actor, 'external_audit.missing', 'warning', 'Rapport Audit externe manquant', $missing['full_name'] . ' n a pas de rapport Audit externe pour le ' . $date . '.', '/audit-externe?date=' . $date, 'ea:missing:' . $restaurantId . ':' . $date . ':' . $missing['id']);
+            $tracking = $this->reportTracking($restaurantId, $date, $date);
+            foreach ($tracking['rows'] as $missing) {
+                if ($missing['status'] !== 'MANQUANT') {
+                    continue;
+                }
+                $actor = ['id' => (int) $missing['user_id'], 'restaurant_id' => $restaurantId];
+                $this->notifyManagers(
+                    $restaurantId,
+                    $actor,
+                    'external_audit.missing',
+                    'warning',
+                    'Rapport Audit externe manquant',
+                    $missing['name'] . ' (' . $missing['function'] . ') n a pas remis le rapport ' . $missing['expected_report'] . ' du ' . $date . ' avant ' . $missing['deadline_time'] . '.',
+                    '/audit-externe?date=' . $date,
+                    'ea:missing:' . $restaurantId . ':' . $date . ':' . $missing['user_id'] . ':' . $missing['expected_report']
+                );
             }
         } catch (Throwable $exception) {
             error_log('[EXTERNAL_AUDIT_MISSING_NOTIFICATION] ' . $exception->getMessage());

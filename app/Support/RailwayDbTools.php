@@ -15,7 +15,7 @@ final class RailwayDbTools
         'role_permissions', 'settings', 'menu_categories', 'menu_items', 'stock_items', 'stock_movements',
         'kitchen_production', 'sales', 'server_requests', 'server_request_items', 'kitchen_stock_requests',
         'losses', 'operation_cases', 'audit_logs', 'correction_requests',
-        'external_audit_reports', 'external_audit_report_items', 'external_audit_results',
+        'external_audit_reports', 'external_audit_role_expectations', 'external_audit_report_items', 'external_audit_results',
     ];
 
     private const RUNTIME_COLUMN_DEFS = [

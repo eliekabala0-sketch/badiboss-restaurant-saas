@@ -140,6 +140,7 @@ $router->get('/rapport', [OperationsController::class, 'report'], [AuthMiddlewar
 $router->get('/audit-externe', [ExternalAuditController::class, 'index'], [AuthMiddleware::class]);
 $router->post('/audit-externe/categories', [ExternalAuditController::class, 'createCategory'], [AuthMiddleware::class]);
 $router->post('/audit-externe/produits', [ExternalAuditController::class, 'createProduct'], [AuthMiddleware::class]);
+$router->post('/audit-externe/attentes/{role}', [ExternalAuditController::class, 'updateExpectation'], [AuthMiddleware::class]);
 $router->post('/audit-externe/rapports', [ExternalAuditController::class, 'saveDraft'], [AuthMiddleware::class]);
 $router->get('/audit-externe/rapports/{id}', [ExternalAuditController::class, 'show'], [AuthMiddleware::class]);
 $router->post('/audit-externe/rapports/{id}/brouillon', [ExternalAuditController::class, 'saveDraft'], [AuthMiddleware::class]);
