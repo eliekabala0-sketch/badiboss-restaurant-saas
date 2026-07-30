@@ -126,18 +126,25 @@ final class ExternalAuditService
             throw new RuntimeException('Periode de suivi Audit externe invalide.');
         }
         $this->ensureRoleExpectations($restaurantId);
-        $expectedUsers = $this->database->pdo()->prepare(
-            'SELECT u.id,u.full_name,r.code AS role_code,r.name AS role_name,
-                    e.role_label,e.report_type,e.deadline_time
-             FROM users u
-             INNER JOIN roles r ON r.id=u.role_id
-             INNER JOIN external_audit_role_expectations e
-               ON e.restaurant_id=u.restaurant_id AND e.role_code=r.code AND e.is_required=1
-             WHERE u.restaurant_id=:restaurant_id AND u.status="active"
-             ORDER BY e.role_label,u.full_name'
-        );
-        $expectedUsers->execute(['restaurant_id' => $restaurantId]);
-        $users = $expectedUsers->fetchAll(PDO::FETCH_ASSOC);
+        $expectationsByRole = [];
+        foreach ($this->roleExpectations($restaurantId) as $expectation) {
+            if ((bool) $expectation['is_required']) {
+                $expectationsByRole[(string) $expectation['role_code']] = $expectation;
+            }
+        }
+        $users = [];
+        foreach ($this->activeUsers($restaurantId) as $user) {
+            $expectation = $expectationsByRole[(string) $user['role_code']] ?? null;
+            if (!is_array($expectation)) {
+                continue;
+            }
+            $users[] = array_merge($user, [
+                'role_label' => $expectation['role_label'],
+                'report_type' => $expectation['report_type'],
+                'deadline_time' => $expectation['deadline_time'],
+            ]);
+        }
+        usort($users, static fn (array $a, array $b): int => [$a['role_label'], $a['full_name']] <=> [$b['role_label'], $b['full_name']]);
 
         $reportsStatement = $this->database->pdo()->prepare(
             'SELECT id,operational_author_id,activity_date,report_type,status,submitted_at,created_at
