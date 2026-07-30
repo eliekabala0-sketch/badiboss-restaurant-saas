@@ -11,6 +11,37 @@
 <?php foreach ($period['days'] as $day): ?><tr><td><?= e($day['activity_date']) ?></td><td><?= (int) ($day['reports'] ?? 0) ?><?= !empty($day['missing']) ? ' · manquant' : '' ?></td><td><?= number_format((float) ($day['calculated_sales'] ?? 0),0,',',' ') ?></td><td><?= number_format((float) ($day['declared_sales'] ?? 0),0,',',' ') ?></td><td><?= number_format((float) ($day['missing_amount'] ?? 0),0,',',' ') ?></td><td><?= number_format((float) ($day['suspicious_amount'] ?? 0),0,',',' ') ?></td><td><?= number_format((float) ($day['injection_amount'] ?? 0),0,',',' ') ?></td><td><?= number_format((float) ($day['cash_gap'] ?? 0),0,',',' ') ?></td></tr><?php endforeach; ?>
 </tbody></table></div></section>
 
+<?php
+$reportsByType = [];
+foreach ($period['reports'] as $periodReport) {
+    $reportsByType[(string) $periodReport['report_type']][] = $periodReport;
+}
+$metricLabels = [
+    'purchases' => 'Achats', 'expenses' => 'Depenses', 'credits' => 'Credits',
+    'injection_amount' => 'Injections', 'suspicious_amount' => 'Montants suspects',
+    'missing_amount' => 'Manquants',
+];
+?>
+<section class="grid" style="grid-template-columns:repeat(auto-fit,minmax(300px,1fr));margin-bottom:22px">
+<?php foreach (['boissons' => 'Situation boissons', 'cuisine' => 'Situation cuisine', 'annexes' => 'Situation des autres categories', 'serveur' => 'Situation des serveurs'] as $type => $heading): ?>
+<article class="card" style="padding:22px"><h2><?= e($heading) ?></h2>
+<?php foreach ($reportsByType[$type] ?? [] as $typeReport): ?><p><a href="/audit-externe/rapports/<?= (int) $typeReport['id'] ?>">LIRE LE RAPPORT #<?= (int) $typeReport['id'] ?></a> · <?= e($typeReport['activity_date']) ?> · <?= e($typeReport['author_name']) ?> · <?= number_format((float) ($typeReport['calculated_sales'] ?? 0),0,',',' ') ?></p><?php endforeach; ?>
+<?php if (($reportsByType[$type] ?? []) === []): ?><p class="muted">Aucun rapport sur la periode.</p><?php endif; ?>
+</article>
+<?php endforeach; ?>
+</section>
+
+<section class="card" style="padding:22px;margin-bottom:22px"><h2>Achats, depenses, credits, injections, suspects et manquants</h2>
+<div class="table-wrap"><table><thead><tr><th>Date</th><th>Rapport</th><th>Auteur</th><?php foreach ($metricLabels as $label): ?><th><?= e($label) ?></th><?php endforeach; ?></tr></thead><tbody>
+<?php foreach ($period['reports'] as $metricReport): ?><tr><td><?= e($metricReport['activity_date']) ?></td><td>#<?= (int) $metricReport['id'] ?></td><td><?= e($metricReport['author_name']) ?></td><?php foreach ($metricLabels as $key => $label): ?><td><?= number_format((float) ($metricReport[$key] ?? 0),0,',',' ') ?></td><?php endforeach; ?></tr><?php endforeach; ?>
+</tbody></table></div></section>
+
+<section class="card" style="padding:22px;margin-bottom:22px"><h2>Incidents et personnes liees</h2>
+<div class="table-wrap"><table><thead><tr><th>Date</th><th>Produit</th><th>Categorie</th><th>Auteur</th><th>Incident / credit / retour</th></tr></thead><tbody>
+<?php foreach ($period['incidents'] as $incident): ?><tr><td><?= e($incident['activity_date']) ?></td><td><?= e($incident['product_name_snapshot']) ?></td><td><?= e($incident['category_name_snapshot']) ?></td><td><?= e($incident['author_name']) ?></td><td><?= e($incident['incident_note']) ?></td></tr><?php endforeach; ?>
+<?php if ($period['incidents'] === []): ?><tr><td colspan="5">Aucun incident renseigne.</td></tr><?php endif; ?>
+</tbody></table></div></section>
+
 <section class="card" style="padding:22px;margin-bottom:22px"><h2>Confrontation responsables / serveurs</h2>
 <p>Responsables <?= number_format((float)$period['internal_confrontation']['responsible_total'],0,',',' ') ?> · Serveurs <?= number_format((float)$period['internal_confrontation']['server_total'],0,',',' ') ?> · Écart global <?= number_format((float)$period['internal_confrontation']['global_gap'],0,',',' ') ?></p>
 <div class="table-wrap"><table><thead><tr><th>Produit</th><th>Catégorie</th><th>Qté responsables</th><th>Qté serveurs</th><th>Écart quantité</th><th>Écart montant</th><th>Personnes</th><th>Statut</th></tr></thead><tbody>

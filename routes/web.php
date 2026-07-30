@@ -153,6 +153,7 @@ $router->post('/audit-externe/corrections/{id}/decision', [ExternalAuditControll
 $router->post('/audit-externe/rapports/{id}/verrouiller', [ExternalAuditController::class, 'lock'], [AuthMiddleware::class]);
 $router->post('/audit-externe/rapports/{id}/annuler', [ExternalAuditController::class, 'cancel'], [AuthMiddleware::class]);
 $router->post('/audit-externe/rapports/{id}/pertes', [ExternalAuditController::class, 'createLoss'], [AuthMiddleware::class]);
+$router->post('/audit-externe/pertes/{id}/decision', [ExternalAuditController::class, 'decideLoss'], [AuthMiddleware::class]);
 $router->post('/audit-externe/rapports/{id}/supprimer-test', [ExternalAuditController::class, 'deleteTest'], [AuthMiddleware::class]);
 $router->post('/audit-externe/versions/{id}/restaurer', [ExternalAuditController::class, 'restoreRevision'], [AuthMiddleware::class]);
 $router->get('/ma-discipline', [OperationsController::class, 'myDiscipline'], [AuthMiddleware::class]);

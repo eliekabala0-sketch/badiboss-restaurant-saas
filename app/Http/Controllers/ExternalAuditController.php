@@ -62,6 +62,25 @@ final class ExternalAuditController
             $request->request,
             current_user()
         );
+        if (isset($_FILES['evidence']) && (int) ($_FILES['evidence']['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_NO_FILE) {
+            $restaurant = Container::getInstance()->get('restaurantAdmin')->findRestaurant(current_restaurant_id());
+            $path = Container::getInstance()->get('uploadService')->storeRestaurantImage(
+                $_FILES['evidence'],
+                (string) ($restaurant['restaurant_code'] ?? 'audit'),
+                'audit-report'
+            );
+            if ($path !== null) {
+                Container::getInstance()->get('externalAudit')->attachReportEvidence(
+                    current_restaurant_id(),
+                    $reportId,
+                    (string) ($_FILES['evidence']['name'] ?? 'preuve'),
+                    $path,
+                    (string) ($_FILES['evidence']['type'] ?? 'application/octet-stream'),
+                    (int) ($_FILES['evidence']['size'] ?? 0),
+                    current_user()
+                );
+            }
+        }
         flash('success', 'Brouillon enregistre.');
         redirect('/audit-externe/rapports/' . $reportId);
     }
@@ -85,6 +104,7 @@ final class ExternalAuditController
             'result' => $service->result($restaurantId, $reportId),
             'revisions' => $service->revisions($restaurantId, $reportId),
             'correction_requests' => $service->correctionRequests($restaurantId, $reportId),
+            'attachments' => $service->attachments($restaurantId, $reportId),
             'losses' => can_access('audit.external.manage') ? $service->lossAnalysis($restaurantId, $report['activity_date'], $report['activity_date'])['rows'] : [],
             'products' => $service->productsForReport($restaurantId, $report['activity_date']),
             'flash_success' => flash('success'),
@@ -221,6 +241,21 @@ final class ExternalAuditController
         }
         Container::getInstance()->get('externalAudit')->createLoss(current_restaurant_id(), $payload, current_user());
         flash('success', 'Dossier de perte enregistre sans qualification automatique.');
+        redirect('/audit-externe/rapports/' . $reportId);
+    }
+
+    public function decideLoss(Request $request): void
+    {
+        authorize_access('audit.external.manage');
+        $reportId = (int) $request->input('report_id');
+        Container::getInstance()->get('externalAudit')->decideLoss(
+            current_restaurant_id(),
+            (int) $request->route('id'),
+            (string) $request->input('status'),
+            (string) $request->input('decision'),
+            current_user()
+        );
+        flash('success', 'Decision du dossier de perte enregistree et historisee.');
         redirect('/audit-externe/rapports/' . $reportId);
     }
 

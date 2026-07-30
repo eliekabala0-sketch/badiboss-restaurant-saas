@@ -49,7 +49,7 @@
 
 <section class="card" style="padding:22px;margin-bottom:22px">
     <h2>Nouveau brouillon</h2>
-    <form method="post" action="/audit-externe/rapports">
+    <form method="post" enctype="multipart/form-data" action="/audit-externe/rapports">
         <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(210px,1fr))">
             <label>Type
                 <select name="report_type"><option value="boissons">Boissons / stock</option><option value="cuisine">Cuisine</option><option value="serveur">Serveur</option><option value="annexes">Annexes</option></select>
@@ -69,6 +69,7 @@
             <label>Motif de delegation <input name="delegation_reason" placeholder="Agent empeche"></label>
             <?php endif; ?>
             <label><input type="checkbox" name="is_test" value="1"> Rapport de test (sandbox uniquement)</label>
+            <label>Piece jointe facultative <input type="file" name="evidence" accept="image/jpeg,image/png,image/webp"></label>
         </div>
         <label>Observations <textarea name="observations" rows="3"></textarea></label>
         <button type="submit">Commencer le brouillon</button>

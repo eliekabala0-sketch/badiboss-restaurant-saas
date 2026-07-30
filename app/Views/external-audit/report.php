@@ -3,7 +3,36 @@
 
 <?php if ($report['status'] === 'BROUILLON'): ?>
 <section class="card" style="padding:22px;margin-bottom:22px">
-<form method="post" action="/audit-externe/rapports/<?= (int) $report['id'] ?>/brouillon">
+<?php
+$entryMode = (string) $report['report_type'];
+$modeHelp = [
+    'boissons' => 'Stock precedent repris automatiquement, achats et conditionnements, mouvements expliques, restant reel et encaissement.',
+    'cuisine' => 'Matieres premieres, production, consommation, plats vendus ou reportes, retours, credits, depenses et incidents.',
+    'serveur' => 'Saisie rapide des quantites et credits. Le serveur ne saisit jamais le prix catalogue.',
+    'annexes' => 'Controle autonome des autres categories.',
+][$entryMode] ?? 'Saisie autonome du rapport.';
+$fieldLabels = [
+    'previous_stock' => $entryMode === 'cuisine' ? 'Stock initial / matieres' : 'Stock precedent',
+    'cases' => 'Casiers', 'half_cases' => 'Demi-casiers', 'units' => 'Unites',
+    'purchased_quantity' => 'Quantite achetee', 'purchase_unit_price' => 'Prix achat unitaire',
+    'purchase_total' => 'Prix achat global',
+    'explained_entries' => $entryMode === 'cuisine' ? 'Quantite produite / recettes' : 'Entrees expliquees',
+    'explained_outputs' => $entryMode === 'cuisine' ? 'Matieres consommees / retours' : 'Sorties expliquees',
+    'remaining_stock' => $entryMode === 'cuisine' ? 'Stock reel / plats reportes' : 'Stock restant reel',
+    'sold_quantity_declared' => $entryMode === 'cuisine' ? 'Plats vendus' : 'Quantite vendue',
+    'credit_amount' => 'Credits', 'expense_amount' => 'Depenses', 'transport_amount' => 'Transport',
+];
+$fields = $entryMode === 'serveur'
+    ? ['sold_quantity_declared','credit_amount']
+    : ($entryMode === 'cuisine'
+        ? ['previous_stock','purchased_quantity','purchase_unit_price','purchase_total','explained_entries','explained_outputs','remaining_stock','sold_quantity_declared','credit_amount','expense_amount','transport_amount']
+        : ['previous_stock','cases','half_cases','units','purchased_quantity','purchase_unit_price','purchase_total','explained_entries','explained_outputs','remaining_stock','sold_quantity_declared','credit_amount','expense_amount','transport_amount']);
+?>
+<p class="muted"><?= e($modeHelp) ?></p>
+<style>
+.audit-fields thead{display:none}.audit-fields tr{display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:10px;padding:14px;border-bottom:1px solid var(--line)}.audit-fields td{display:block;padding:4px;border:0}.audit-fields input{width:100%!important}.audit-fields small.field-label{display:block;color:var(--muted);margin-bottom:5px}.audit-recap{position:sticky;bottom:8px;padding:12px;background:var(--panel);border:1px solid var(--brand);border-radius:14px;z-index:2}
+</style>
+<form method="post" enctype="multipart/form-data" action="/audit-externe/rapports/<?= (int) $report['id'] ?>/brouillon" data-audit-form>
     <input type="hidden" name="report_id" value="<?= (int) $report['id'] ?>">
     <input type="hidden" name="activity_date" value="<?= e($report['activity_date']) ?>">
     <input type="hidden" name="report_type" value="<?= e($report['report_type']) ?>">
@@ -12,17 +41,22 @@
         <label>Argent presente <input type="number" min="0" step="0.01" name="presented_cash" value="<?= e($report['presented_cash']) ?>"></label>
     </div>
     <label>Observations <textarea name="observations"><?= e($report['observations']) ?></textarea></label>
+    <label>Piece jointe facultative (JPG, PNG, WebP) <input type="file" name="evidence" accept="image/jpeg,image/png,image/webp"></label>
     <h2>Lignes produits</h2>
-    <div class="table-wrap"><table><thead><tr><th>Produit</th><th>Stock précédent</th><th>Casiers</th><th>Demi-casiers</th><th>Unités</th><th>Achats qté</th><th>Prix achat unitaire</th><th>Achat total</th><th>Entrées expliquées</th><th>Sorties expliquées</th><th>Stock réel / reporté</th><th>Vendu déclaré</th><th>Crédits</th><th>Dépenses</th><th>Transport</th><th>Incident / crédit / préparation / retour</th></tr></thead><tbody>
+    <div class="table-wrap audit-fields"><table><thead><tr><th>Produit</th><th>Champs du parcours</th></tr></thead><tbody>
     <?php foreach ($products as $product): $saved = null; foreach ($items as $candidate) { if ((int) $candidate['product_id'] === (int) $product['id']) { $saved = $candidate; break; } } ?>
-        <tr><td><?= e($product['name']) ?><br><small><?= e($product['category_name']) ?> · <?= number_format((float) $product['sale_price'], 0, ',', ' ') ?></small></td>
-        <?php foreach (['previous_stock','cases','half_cases','units','purchased_quantity','purchase_unit_price','purchase_total','explained_entries','explained_outputs','remaining_stock','sold_quantity_declared','credit_amount','expense_amount','transport_amount'] as $field): ?>
-            <td><input title="<?= e(str_replace('_',' ',$field)) ?>" style="width:105px" type="number" min="0" step="0.001" name="items[<?= (int) $product['id'] ?>][<?= e($field) ?>]" value="<?= e((string) ($saved[$field] ?? ($field === 'previous_stock' && $product['previous_stock_default'] !== null ? $product['previous_stock_default'] : '0'))) ?>"></td>
+        <tr data-price="<?= e((string) $product['sale_price']) ?>"><td><strong><?= e($product['name']) ?></strong><br><small><?= e($product['category_name']) ?> · prix fige <?= number_format((float) $product['sale_price'], 0, ',', ' ') ?></small></td>
+        <?php foreach ($fields as $field): ?>
+            <td><small class="field-label"><?= e($fieldLabels[$field]) ?></small><input data-field="<?= e($field) ?>" title="<?= e($fieldLabels[$field]) ?>" style="width:105px" type="number" min="0" step="0.001" name="items[<?= (int) $product['id'] ?>][<?= e($field) ?>]" value="<?= e((string) ($saved[$field === 'purchase_unit_price' ? 'purchase_price_snapshot' : $field] ?? ($field === 'previous_stock' && $product['previous_stock_default'] !== null ? $product['previous_stock_default'] : '0'))) ?>"></td>
         <?php endforeach; ?>
-        <td><input style="width:180px" name="items[<?= (int) $product['id'] ?>][incident_note]" value="<?= e((string) ($saved['incident_note'] ?? '')) ?>" placeholder="Personne, motif, recette, retour…"></td></tr>
+        <td><small class="field-label"><?= $entryMode === 'serveur' ? 'Personne du credit, motif et observation' : 'Incident, justification, preparation ou retour' ?></small><input style="width:180px" name="items[<?= (int) $product['id'] ?>][incident_note]" value="<?= e((string) ($saved['incident_note'] ?? '')) ?>" placeholder="Personne, motif, recette, retour…"></td></tr>
     <?php endforeach; ?></tbody></table></div>
+    <div class="audit-recap">Recapitulatif avant soumission : <strong data-recap>0 unite · 0</strong></div>
     <button type="submit">Enregistrer le brouillon</button>
 </form>
+<script>
+(()=>{const f=document.querySelector('[data-audit-form]');if(!f)return;const update=()=>{let q=0,a=0;f.querySelectorAll('tr[data-price]').forEach(r=>{const s=Number(r.querySelector('[data-field="sold_quantity_declared"]')?.value||0);q+=s;a+=s*Number(r.dataset.price||0);const t=r.querySelector('[data-field="purchase_total"]'),u=r.querySelector('[data-field="purchase_unit_price"]'),n=Number(r.querySelector('[data-field="purchased_quantity"]')?.value||0);if(t&&u&&document.activeElement===t&&n>0)u.value=(Number(t.value||0)/n).toFixed(2)});f.querySelector('[data-recap]').textContent=q.toLocaleString('fr-FR')+' unite · '+a.toLocaleString('fr-FR')});f.addEventListener('input',update);update()})();
+</script>
 </section>
 <section class="card" style="padding:22px;margin-bottom:22px">
     <h2>Soumettre</h2><p>Apres soumission, l'auteur ne peut plus modifier. Le catalogue et les calculs sont figes.</p>
@@ -87,7 +121,7 @@
 <label>Photo facultative <input type="file" name="evidence" accept="image/jpeg,image/png,image/webp"></label>
 <label>Statut <select name="status"><option value="A_VERIFIER">A verifier</option><option value="EN_JUSTIFICATION">En justification</option><option value="EXPLIQUE">Explique</option><option value="CONFIRME">Confirme</option><option value="CONTESTE">Conteste</option><option value="RESOLU">Resolu</option><option value="ANNULE">Annule</option></select></label>
 </div><button type="submit">Creer le dossier</button></form>
-<div class="table-wrap"><table><thead><tr><th>Date</th><th>Produit</th><th>Valeur</th><th>Cause</th><th>Statut</th></tr></thead><tbody><?php foreach ($losses as $loss): ?><tr><td><?= e($loss['activity_date']) ?></td><td><?= e($loss['product_name'] ?? '-') ?></td><td><?= number_format((float) $loss['value_amount'],0,',',' ') ?></td><td><?= e($loss['cause']) ?></td><td><?= e($loss['status']) ?></td></tr><?php endforeach; ?></tbody></table></div>
+<div class="table-wrap"><table><thead><tr><th>Date</th><th>Produit</th><th>Valeur</th><th>Personnes</th><th>Cause / preuve</th><th>Statut / decision</th><th>Action</th></tr></thead><tbody><?php foreach ($losses as $loss): ?><tr><td><?= e($loss['activity_date']) ?></td><td><?= e($loss['product_name'] ?? '-') ?></td><td><?= number_format((float) $loss['value_amount'],0,',',' ') ?></td><td><?= e(implode(', ', json_decode((string) ($loss['involved_people_json'] ?? '[]'), true) ?: [])) ?></td><td><?= e($loss['cause']) ?><br><small><?= e($loss['evidence_path'] ?? '-') ?></small></td><td><?= e($loss['status']) ?><br><small><?= e($loss['manager_decision'] ?? '') ?></small></td><td><form method="post" action="/audit-externe/pertes/<?= (int) $loss['id'] ?>/decision"><input type="hidden" name="report_id" value="<?= (int) $report['id'] ?>"><select name="status"><?php foreach (['A_VERIFIER','EN_JUSTIFICATION','EXPLIQUE','CONFIRME','CONTESTE','RESOLU','ANNULE'] as $lossStatus): ?><option value="<?= e($lossStatus) ?>" <?= $lossStatus === $loss['status'] ? 'selected' : '' ?>><?= e($lossStatus) ?></option><?php endforeach; ?></select><input name="decision" placeholder="Decision motivee" required><button type="submit">Enregistrer</button></form></td></tr><?php endforeach; ?></tbody></table></div>
 </section>
 
 <section class="card" style="padding:22px;margin-top:22px"><h2>Annuler</h2><form method="post" action="/audit-externe/rapports/<?= (int) $report['id'] ?>/annuler"><label>Motif <input name="reason" required></label><button type="submit">Annuler avec trace</button></form></section>
@@ -102,6 +136,14 @@
 <p>Cette action va archiver la version actuelle, vider le contenu du rapport et rouvrir un nouveau brouillon. Les anciennes donnees resteront consultables.</p>
 <form method="post" action="/audit-externe/rapports/<?= (int) $report['id'] ?>/reinitialiser" onsubmit="return confirm('Confirmer la reinitialisation et archivage ?')">
 <label>Motif obligatoire <input name="reason" required></label><button type="submit">Reinitialiser le rapport</button></form></section>
+<?php endif; ?>
+
+<?php if ($attachments !== []): ?>
+<section class="card" style="padding:22px;margin-top:22px"><h2>Pieces jointes</h2>
+<?php foreach ($attachments as $attachment): ?>
+<p><a href="<?= e($attachment['storage_path']) ?>" target="_blank" rel="noopener"><?= e($attachment['original_name']) ?></a> · <?= number_format((int) $attachment['size_bytes'] / 1024, 1, ',', ' ') ?> Ko</p>
+<?php endforeach; ?>
+</section>
 <?php endif; ?>
 
 <?php if (can_access('audit.delete_test') && (bool) $report['is_test']): ?>

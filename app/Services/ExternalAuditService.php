@@ -20,6 +20,7 @@ final class ExternalAuditService
     public function dashboard(int $restaurantId, string $date, ?int $onlyAuthorId = null): array
     {
         $this->ensureDefaultCategories($restaurantId);
+        $this->notifyMissingReports($restaurantId, $date);
         $statement = $this->database->pdo()->prepare(
             'SELECT r.*, u.full_name AS author_name, res.calculated_sales, res.missing_amount,
                     res.suspicious_amount, res.injection_amount, res.cash_gap
@@ -166,6 +167,7 @@ final class ExternalAuditService
     {
         $pdo = $this->database->pdo();
         $reportId = (int) ($data['report_id'] ?? 0);
+        $isNewReport = $reportId === 0;
         $authorId = (int) ($data['operational_author_id'] ?? $actor['id']);
         $type = (string) ($data['report_type'] ?? 'boissons');
         $date = (string) ($data['activity_date'] ?? '');
@@ -232,10 +234,30 @@ final class ExternalAuditService
             }
 
             foreach (($data['items'] ?? []) as $productId => $item) {
+                if ($type === 'serveur') {
+                    $item['previous_stock'] = max(0, (float) ($item['sold_quantity_declared'] ?? 0));
+                    $item['purchased_quantity'] = 0;
+                    $item['explained_entries'] = 0;
+                    $item['explained_outputs'] = 0;
+                    $item['remaining_stock'] = 0;
+                    $item['omitted_remaining_confirmed'] = 1;
+                }
                 $this->upsertItem($restaurantId, $reportId, (int) $productId, (array) $item, $actor);
             }
             $this->log($restaurantId, $reportId, 'DRAFT_SAVED', ['report_type' => $type], (int) $actor['id']);
             $pdo->commit();
+            if ($isNewReport) {
+                $this->notifyManagers(
+                    $restaurantId,
+                    $actor,
+                    'external_audit.started',
+                    'info',
+                    'Rapport Audit externe commence',
+                    'Le rapport #' . $reportId . ' a ete commence pour le ' . $date . '.',
+                    '/audit-externe/rapports/' . $reportId,
+                    'ea:started:' . $reportId
+                );
+            }
             return $reportId;
         } catch (Throwable $exception) {
             $pdo->rollBack();
@@ -289,6 +311,10 @@ final class ExternalAuditService
             $this->log($restaurantId, $reportId, 'REPORT_SUBMITTED', ['engine_version' => ExternalAuditEngine::VERSION], (int) $actor['id']);
             $pdo->commit();
             $this->notifyManagers($restaurantId, $actor, 'external_audit.submitted', 'success', 'Rapport Audit externe soumis', 'Le rapport #' . $reportId . ' est soumis et fige.', '/audit-externe/rapports/' . $reportId, 'ea:submitted:' . $reportId . ':' . (string) $report['version_no']);
+            if ((float) $result['missing_amount'] >= 50000.0) {
+                $this->notifyManagers($restaurantId, $actor, 'external_audit.important_missing', 'danger', 'Manquant important Audit externe', 'Le rapport #' . $reportId . ' presente un manquant de ' . number_format((float) $result['missing_amount'], 0, ',', ' ') . '.', '/audit-externe/rapports/' . $reportId, 'ea:important-missing:' . $reportId . ':' . (string) $report['version_no']);
+            }
+            $this->notifyManagers($restaurantId, $actor, 'external_audit.ready', 'success', 'Rapport Audit externe pret', 'Le rapport independant #' . $reportId . ' est calcule et consultable.', '/audit-externe/rapports/' . $reportId, 'ea:ready:' . $reportId . ':' . (string) $report['version_no']);
             return $result;
         } catch (Throwable $exception) {
             $pdo->rollBack();
@@ -318,6 +344,36 @@ final class ExternalAuditService
         );
         $statement->execute(['restaurant_id' => $restaurantId, 'report_id' => $reportId]);
         return $statement->fetchAll(PDO::FETCH_ASSOC);
+    }
+
+    public function attachments(int $restaurantId, int $reportId): array
+    {
+        $statement = $this->database->pdo()->prepare(
+            'SELECT * FROM external_audit_attachments
+             WHERE restaurant_id=:restaurant_id AND report_id=:report_id ORDER BY created_at DESC'
+        );
+        $statement->execute(['restaurant_id' => $restaurantId, 'report_id' => $reportId]);
+        return $statement->fetchAll(PDO::FETCH_ASSOC);
+    }
+
+    public function attachReportEvidence(int $restaurantId, int $reportId, string $originalName, string $path, string $mimeType, int $size, array $actor): void
+    {
+        $this->findReport($restaurantId, $reportId);
+        $statement = $this->database->pdo()->prepare(
+            'INSERT INTO external_audit_attachments
+             (restaurant_id,report_id,loss_id,original_name,storage_path,mime_type,size_bytes,created_by,created_at,updated_at)
+             VALUES (:restaurant_id,:report_id,NULL,:original_name,:storage_path,:mime_type,:size_bytes,:created_by,NOW(),NOW())'
+        );
+        $statement->execute([
+            'restaurant_id' => $restaurantId,
+            'report_id' => $reportId,
+            'original_name' => trim($originalName) ?: 'preuve',
+            'storage_path' => $path,
+            'mime_type' => $mimeType,
+            'size_bytes' => max(0, $size),
+            'created_by' => (int) $actor['id'],
+        ]);
+        $this->log($restaurantId, $reportId, 'ATTACHMENT_ADDED', ['path' => $path], (int) $actor['id']);
     }
 
     public function reset(int $restaurantId, int $reportId, string $reason, array $actor): void
@@ -374,8 +430,8 @@ final class ExternalAuditService
             throw new RuntimeException('Periode Audit externe invalide.');
         }
         $statement = $this->database->pdo()->prepare(
-            'SELECT r.id,r.report_type,r.activity_date,r.status,r.version_no,r.operational_author_id,
-                    u.full_name AS author_name,res.*
+            'SELECT res.*,r.id AS id,r.report_type,r.activity_date,r.status,r.version_no,r.operational_author_id,
+                    u.full_name AS author_name
              FROM external_audit_reports r
              INNER JOIN users u ON u.id=r.operational_author_id
              LEFT JOIN external_audit_results res ON res.restaurant_id=r.restaurant_id AND res.report_id=r.id
@@ -384,6 +440,52 @@ final class ExternalAuditService
         );
         $statement->execute(['restaurant_id' => $restaurantId, 'date_from' => $from, 'date_to' => $to]);
         $reports = $statement->fetchAll(PDO::FETCH_ASSOC);
+        $items = $this->periodRows(
+            'SELECT i.*,r.activity_date,r.report_type,r.version_no,u.full_name AS author_name
+             FROM external_audit_report_items i
+             INNER JOIN external_audit_reports r ON r.id=i.report_id AND r.restaurant_id=i.restaurant_id
+             INNER JOIN users u ON u.id=r.operational_author_id
+             WHERE i.restaurant_id=:restaurant_id AND r.activity_date BETWEEN :date_from AND :date_to
+             ORDER BY r.activity_date,r.id,i.id',
+            $restaurantId,
+            $from,
+            $to
+        );
+        $corrections = $this->periodRows(
+            'SELECT c.*,r.activity_date,u.full_name AS requester_name,d.full_name AS decision_author
+             FROM external_audit_correction_requests c
+             INNER JOIN external_audit_reports r ON r.id=c.report_id AND r.restaurant_id=c.restaurant_id
+             INNER JOIN users u ON u.id=c.requested_by
+             LEFT JOIN users d ON d.id=c.decided_by
+             WHERE c.restaurant_id=:restaurant_id AND r.activity_date BETWEEN :date_from AND :date_to
+             ORDER BY c.created_at',
+            $restaurantId,
+            $from,
+            $to
+        );
+        $versions = $this->periodRows(
+            'SELECT v.id,v.report_id,v.version_no,v.reason,v.created_at,r.activity_date,u.full_name AS actor_name
+             FROM external_audit_report_revisions v
+             INNER JOIN external_audit_reports r ON r.id=v.report_id AND r.restaurant_id=v.restaurant_id
+             LEFT JOIN users u ON u.id=v.created_by
+             WHERE v.restaurant_id=:restaurant_id AND r.activity_date BETWEEN :date_from AND :date_to
+             ORDER BY v.created_at',
+            $restaurantId,
+            $from,
+            $to
+        );
+        $logs = $this->periodRows(
+            'SELECT l.id,l.report_id,l.action_code,l.details_json,l.created_at,u.full_name AS actor_name
+             FROM external_audit_logs l
+             LEFT JOIN external_audit_reports r ON r.id=l.report_id AND r.restaurant_id=l.restaurant_id
+             LEFT JOIN users u ON u.id=l.created_by
+             WHERE l.restaurant_id=:restaurant_id
+               AND ((r.activity_date BETWEEN :date_from AND :date_to) OR (l.report_id IS NULL AND DATE(l.created_at) BETWEEN :date_from AND :date_to))
+             ORDER BY l.created_at',
+            $restaurantId,
+            $from,
+            $to
+        );
         $daily = [];
         foreach ($reports as $report) {
             if (!isset($daily[$report['activity_date']])) {
@@ -406,6 +508,11 @@ final class ExternalAuditService
             'from' => $from,
             'to' => $to,
             'reports' => $reports,
+            'items' => $items,
+            'incidents' => array_values(array_filter($items, static fn (array $item): bool => trim((string) ($item['incident_note'] ?? '')) !== '')),
+            'corrections' => $corrections,
+            'versions' => $versions,
+            'logs' => $logs,
             'days' => $days,
             'totals' => $this->engine->period(array_values($daily)),
             'internal_confrontation' => $this->internalConfrontation($restaurantId, $from, $to),
@@ -477,6 +584,89 @@ final class ExternalAuditService
             ];
         };
         $append($rows, 'Ventes globales', (float) ($auditTotals['sales'] ?? 0), (float) $application->fetchColumn());
+        $append($rows, 'Credits (aucune table operationnelle dediee)', (float) ($auditTotals['credits'] ?? 0), 0.0);
+
+        $auditServers = $pdo->prepare(
+            'SELECT u.full_name AS label,COALESCE(SUM(i.sold_quantity_declared*i.sale_price_snapshot),0) AS amount
+             FROM external_audit_report_items i
+             INNER JOIN external_audit_reports r ON r.id=i.report_id AND r.restaurant_id=i.restaurant_id
+             INNER JOIN users u ON u.id=r.operational_author_id
+             WHERE i.restaurant_id=:restaurant_id AND r.report_type="serveur"
+               AND r.activity_date BETWEEN :date_from AND :date_to
+               AND r.status IN ("SOUMIS","VERROUILLE","CORRIGE")
+             GROUP BY u.id,u.full_name'
+        );
+        $auditServers->execute(['restaurant_id' => $restaurantId, 'date_from' => $from, 'date_to' => $to]);
+        $appServers = $pdo->prepare(
+            'SELECT COALESCE(u.full_name,"Sans serveur") AS label,COALESCE(SUM(s.total_amount),0) AS amount
+             FROM sales s LEFT JOIN users u ON u.id=s.server_id
+             WHERE s.restaurant_id=:restaurant_id AND s.status="VALIDE"
+               AND DATE(COALESCE(s.validated_at,s.created_at)) BETWEEN :date_from AND :date_to
+             GROUP BY s.server_id,u.full_name'
+        );
+        $appServers->execute(['restaurant_id' => $restaurantId, 'date_from' => $from, 'date_to' => $to]);
+        $this->appendGroupedComparisons($rows, 'Vente par serveur', $auditServers->fetchAll(PDO::FETCH_ASSOC), $appServers->fetchAll(PDO::FETCH_ASSOC));
+
+        $auditProducts = $pdo->prepare(
+            'SELECT i.product_name_snapshot AS label,COALESCE(SUM(i.calculated_sale_amount),0) AS amount
+             FROM external_audit_report_items i
+             INNER JOIN external_audit_reports r ON r.id=i.report_id AND r.restaurant_id=i.restaurant_id
+             WHERE i.restaurant_id=:restaurant_id AND r.activity_date BETWEEN :date_from AND :date_to
+               AND r.report_type<>"serveur" AND r.status IN ("SOUMIS","VERROUILLE","CORRIGE")
+             GROUP BY i.product_name_snapshot'
+        );
+        $auditProducts->execute(['restaurant_id' => $restaurantId, 'date_from' => $from, 'date_to' => $to]);
+        $appProducts = $pdo->prepare(
+            'SELECT mi.name AS label,COALESCE(SUM(si.quantity*si.unit_price),0) AS amount
+             FROM sale_items si INNER JOIN sales s ON s.id=si.sale_id
+             INNER JOIN menu_items mi ON mi.id=si.menu_item_id
+             WHERE s.restaurant_id=:restaurant_id AND s.status="VALIDE" AND si.status="SERVI"
+               AND DATE(COALESCE(s.validated_at,s.created_at)) BETWEEN :date_from AND :date_to
+             GROUP BY mi.id,mi.name'
+        );
+        $appProducts->execute(['restaurant_id' => $restaurantId, 'date_from' => $from, 'date_to' => $to]);
+        $this->appendGroupedComparisons($rows, 'Vente par article', $auditProducts->fetchAll(PDO::FETCH_ASSOC), $appProducts->fetchAll(PDO::FETCH_ASSOC));
+
+        $auditCategories = $pdo->prepare(
+            'SELECT i.category_name_snapshot AS label,COALESCE(SUM(i.calculated_sale_amount),0) AS amount
+             FROM external_audit_report_items i
+             INNER JOIN external_audit_reports r ON r.id=i.report_id AND r.restaurant_id=i.restaurant_id
+             WHERE i.restaurant_id=:restaurant_id AND r.activity_date BETWEEN :date_from AND :date_to
+               AND r.report_type<>"serveur" AND r.status IN ("SOUMIS","VERROUILLE","CORRIGE")
+             GROUP BY i.category_name_snapshot'
+        );
+        $auditCategories->execute(['restaurant_id' => $restaurantId, 'date_from' => $from, 'date_to' => $to]);
+        $appCategories = $pdo->prepare(
+            'SELECT mc.name AS label,COALESCE(SUM(si.quantity*si.unit_price),0) AS amount
+             FROM sale_items si INNER JOIN sales s ON s.id=si.sale_id
+             INNER JOIN menu_items mi ON mi.id=si.menu_item_id
+             INNER JOIN menu_categories mc ON mc.id=mi.category_id
+             WHERE s.restaurant_id=:restaurant_id AND s.status="VALIDE" AND si.status="SERVI"
+               AND DATE(COALESCE(s.validated_at,s.created_at)) BETWEEN :date_from AND :date_to
+             GROUP BY mc.id,mc.name'
+        );
+        $appCategories->execute(['restaurant_id' => $restaurantId, 'date_from' => $from, 'date_to' => $to]);
+        $this->appendGroupedComparisons($rows, 'Vente par categorie', $auditCategories->fetchAll(PDO::FETCH_ASSOC), $appCategories->fetchAll(PDO::FETCH_ASSOC));
+
+        $served = $pdo->prepare(
+            'SELECT COALESCE(SUM(CASE WHEN si.status="SERVI" THEN si.quantity ELSE 0 END),0) AS served,
+                    COALESCE(SUM(CASE WHEN si.status="RETOUR" THEN si.quantity ELSE 0 END),0) AS returned
+             FROM sale_items si INNER JOIN sales s ON s.id=si.sale_id
+             WHERE s.restaurant_id=:restaurant_id AND s.status="VALIDE"
+               AND DATE(COALESCE(s.validated_at,s.created_at)) BETWEEN :date_from AND :date_to'
+        );
+        $served->execute(['restaurant_id' => $restaurantId, 'date_from' => $from, 'date_to' => $to]);
+        $servedTotals = $served->fetch(PDO::FETCH_ASSOC) ?: [];
+        $auditQuantity = array_sum(array_map(static fn (array $item): float => (float) ($item['calculated_sold_quantity'] ?? 0), $this->periodRows(
+            'SELECT i.calculated_sold_quantity FROM external_audit_report_items i
+             INNER JOIN external_audit_reports r ON r.id=i.report_id AND r.restaurant_id=i.restaurant_id
+             WHERE i.restaurant_id=:restaurant_id AND r.activity_date BETWEEN :date_from AND :date_to AND r.report_type<>"serveur"',
+            $restaurantId,
+            $from,
+            $to
+        )));
+        $append($rows, 'Produits servis (quantite)', $auditQuantity, (float) ($servedTotals['served'] ?? 0));
+        $append($rows, 'Retours (quantite)', 0.0, (float) ($servedTotals['returned'] ?? 0));
 
         $stock = $pdo->prepare(
             'SELECT COALESCE(SUM(total_cost_snapshot),0) FROM stock_movements
@@ -588,6 +778,7 @@ final class ExternalAuditService
         }
         $this->log($restaurantId, $reportId, 'REPORT_LOCKED', [], (int) $actor['id']);
         $this->notifyManagers($restaurantId, $actor, 'external_audit.locked', 'success', 'Rapport Audit externe verrouille', 'Le rapport #' . $reportId . ' est verrouille.', '/audit-externe/rapports/' . $reportId, 'ea:locked:' . $reportId);
+        $this->notifyManagers($restaurantId, $actor, 'external_audit.closed', 'success', 'Cloture Audit externe', 'La cloture du rapport #' . $reportId . ' est terminee.', '/audit-externe/rapports/' . $reportId, 'ea:closed:' . $reportId);
     }
 
     public function cancel(int $restaurantId, int $reportId, string $reason, array $actor): void
@@ -682,7 +873,7 @@ final class ExternalAuditService
         return $statement->fetchAll(PDO::FETCH_ASSOC);
     }
 
-    public function createLoss(int $restaurantId, array $data, array $actor): void
+    public function createLoss(int $restaurantId, array $data, array $actor): int
     {
         $reportId = (int) ($data['report_id'] ?? 0);
         $this->findReport($restaurantId, $reportId);
@@ -703,7 +894,12 @@ final class ExternalAuditService
             'cause' => trim((string) ($data['cause'] ?? '')), 'evidence_path' => trim((string) ($data['evidence_path'] ?? '')) ?: null,
             'status' => (string) ($data['status'] ?? 'A_VERIFIER'), 'created_by' => (int) $actor['id'],
         ]);
+        $lossId = (int) $this->database->pdo()->lastInsertId();
         $this->log($restaurantId, $reportId, 'LOSS_CREATED', ['value' => (float) ($data['value_amount'] ?? 0)], (int) $actor['id']);
+        if ((float) ($data['value_amount'] ?? 0) >= 50000.0) {
+            $this->notifyManagers($restaurantId, $actor, 'external_audit.important_loss', 'danger', 'Perte importante Audit externe', 'Une perte de ' . number_format((float) $data['value_amount'], 0, ',', ' ') . ' est a analyser pour le rapport #' . $reportId . '.', '/audit-externe/rapports/' . $reportId, 'ea:important-loss:' . $reportId . ':' . $lossId);
+        }
+        return $lossId;
     }
 
     public function lossAnalysis(int $restaurantId, string $from, string $to): array
@@ -731,6 +927,39 @@ final class ExternalAuditService
             }
         }
         return ['rows' => $rows, 'summary' => $summary];
+    }
+
+    public function decideLoss(int $restaurantId, int $lossId, string $status, string $decision, array $actor): void
+    {
+        $allowed = ['A_VERIFIER','EN_JUSTIFICATION','EXPLIQUE','CONFIRME','CONTESTE','RESOLU','ANNULE'];
+        if (!in_array($status, $allowed, true) || trim($decision) === '') {
+            throw new RuntimeException('Statut et decision du dossier de perte obligatoires.');
+        }
+        $query = $this->database->pdo()->prepare(
+            'SELECT * FROM external_audit_losses WHERE id=:id AND restaurant_id=:restaurant_id'
+        );
+        $query->execute(['id' => $lossId, 'restaurant_id' => $restaurantId]);
+        $loss = $query->fetch(PDO::FETCH_ASSOC);
+        if (!$loss) {
+            throw new RuntimeException('Dossier de perte introuvable.');
+        }
+        $statement = $this->database->pdo()->prepare(
+            'UPDATE external_audit_losses SET status=:status,manager_decision=:decision,decision_by=:decision_by,updated_at=NOW()
+             WHERE id=:id AND restaurant_id=:restaurant_id'
+        );
+        $statement->execute([
+            'status' => $status,
+            'decision' => trim($decision),
+            'decision_by' => (int) $actor['id'],
+            'id' => $lossId,
+            'restaurant_id' => $restaurantId,
+        ]);
+        $this->log($restaurantId, (int) $loss['report_id'], 'LOSS_DECIDED', [
+            'loss_id' => $lossId,
+            'previous_status' => $loss['status'],
+            'status' => $status,
+            'decision' => trim($decision),
+        ], (int) $actor['id']);
     }
 
     public function deleteTestReport(int $restaurantId, int $reportId, string $reason, array $actor, array $restaurant): void
@@ -873,6 +1102,64 @@ final class ExternalAuditService
             );
         } catch (Throwable $exception) {
             error_log('[EXTERNAL_AUDIT_NOTIFICATION] ' . $exception->getMessage());
+        }
+    }
+
+    private function notifyMissingReports(int $restaurantId, string $date): void
+    {
+        if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $date) || $date >= today_for_restaurant()) {
+            return;
+        }
+        try {
+            $statement = $this->database->pdo()->prepare(
+                'SELECT u.id,u.full_name FROM users u
+                 INNER JOIN roles ro ON ro.id=u.role_id
+                 WHERE u.restaurant_id=:restaurant_id AND u.status="active"
+                   AND ro.code IN ("stock_manager","kitchen","cashier_server")
+                   AND NOT EXISTS (
+                     SELECT 1 FROM external_audit_reports r
+                     WHERE r.restaurant_id=u.restaurant_id AND r.operational_author_id=u.id AND r.activity_date=:activity_date
+                   )'
+            );
+            $statement->execute(['restaurant_id' => $restaurantId, 'activity_date' => $date]);
+            foreach ($statement->fetchAll(PDO::FETCH_ASSOC) as $missing) {
+                $actor = ['id' => (int) $missing['id'], 'restaurant_id' => $restaurantId];
+                $this->notifyManagers($restaurantId, $actor, 'external_audit.missing', 'warning', 'Rapport Audit externe manquant', $missing['full_name'] . ' n a pas de rapport Audit externe pour le ' . $date . '.', '/audit-externe?date=' . $date, 'ea:missing:' . $restaurantId . ':' . $date . ':' . $missing['id']);
+            }
+        } catch (Throwable $exception) {
+            error_log('[EXTERNAL_AUDIT_MISSING_NOTIFICATION] ' . $exception->getMessage());
+        }
+    }
+
+    private function periodRows(string $sql, int $restaurantId, string $from, string $to): array
+    {
+        $statement = $this->database->pdo()->prepare($sql);
+        $statement->execute(['restaurant_id' => $restaurantId, 'date_from' => $from, 'date_to' => $to]);
+        return $statement->fetchAll(PDO::FETCH_ASSOC);
+    }
+
+    private function appendGroupedComparisons(array &$rows, string $prefix, array $auditRows, array $applicationRows): void
+    {
+        $audit = [];
+        $application = [];
+        foreach ($auditRows as $row) {
+            $audit[mb_strtolower(trim((string) $row['label']))] = ['label' => (string) $row['label'], 'amount' => (float) $row['amount']];
+        }
+        foreach ($applicationRows as $row) {
+            $application[mb_strtolower(trim((string) $row['label']))] = ['label' => (string) $row['label'], 'amount' => (float) $row['amount']];
+        }
+        foreach (array_unique(array_merge(array_keys($audit), array_keys($application))) as $key) {
+            $auditAmount = (float) ($audit[$key]['amount'] ?? 0);
+            $applicationAmount = (float) ($application[$key]['amount'] ?? 0);
+            $gap = $auditAmount - $applicationAmount;
+            $rows[] = [
+                'element' => $prefix . ': ' . ($audit[$key]['label'] ?? $application[$key]['label'] ?? $key),
+                'audit_amount' => $auditAmount,
+                'application_amount' => $applicationAmount,
+                'gap' => $gap,
+                'observation' => abs($gap) < 0.001 ? 'Coherent' : 'Ecart a expliquer',
+                'status' => abs($gap) < 0.001 ? 'COHERENT' : 'JUSTIFICATION_EN_ATTENTE',
+            ];
         }
     }
 

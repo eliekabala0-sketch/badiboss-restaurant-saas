@@ -13,11 +13,11 @@ final class ExternalAuditExportService
             'Resultats journaliers' => $data['days'],
             'Rapports responsables' => array_values(array_filter($data['reports'], static fn (array $r): bool => $r['report_type'] !== 'serveur')),
             'Rapports serveurs' => array_values(array_filter($data['reports'], static fn (array $r): bool => $r['report_type'] === 'serveur')),
-            'Stocks ventes calculees' => $this->reportRows($data),
+            'Stocks ventes calculees' => $data['items'] ?? $this->reportRows($data),
             'Achats' => $this->metricRows($data, 'purchases'),
             'Depenses' => $this->metricRows($data, 'expenses'),
             'Credits' => $this->metricRows($data, 'credits'),
-            'Incidents' => [],
+            'Incidents' => $data['incidents'] ?? [],
             'Pertes expliquees' => array_values(array_filter($data['losses']['rows'], static fn (array $r): bool => in_array($r['status'], ['EXPLIQUE','RESOLU','ANNULE'], true))),
             'Pertes non expliquees' => array_values(array_filter($data['losses']['rows'], static fn (array $r): bool => !in_array($r['status'], ['EXPLIQUE','RESOLU','ANNULE'], true))),
             'Injections' => $this->metricRows($data, 'injection_amount'),
@@ -26,9 +26,9 @@ final class ExternalAuditExportService
             'Confrontation resp-serveurs' => $data['internal_confrontation']['rows'],
             'Confrontation Audit-App' => $data['application_confrontation']['rows'],
             'Analyse des pertes' => $this->lossSummaryRows($data),
-            'Corrections' => [],
-            'Versions' => [],
-            'Journal des actions' => [],
+            'Corrections' => $data['corrections'] ?? [],
+            'Versions' => $data['versions'] ?? [],
+            'Journal des actions' => $data['logs'] ?? [],
             'Formules moteur' => $this->formulaRows(),
         ];
 
@@ -105,27 +105,74 @@ final class ExternalAuditExportService
             'Conclusion: les ecarts sont des anomalies a justifier; aucune qualification automatique de vol.',
             'Validation numerique: ' . hash('sha256', json_encode($data['totals']) . ExternalAuditEngine::VERSION),
         ];
+        $lines[] = '';
+        $lines[] = 'RESULTATS JOURNALIERS';
+        foreach ($data['days'] as $day) {
+            $lines[] = sprintf(
+                '%s | rapports %d | calc %.2f | declare %.2f | manquant %.2f | suspect %.2f | injection %.2f',
+                $day['activity_date'],
+                (int) ($day['reports'] ?? 0),
+                (float) ($day['calculated_sales'] ?? 0),
+                (float) ($day['declared_sales'] ?? 0),
+                (float) ($day['missing_amount'] ?? 0),
+                (float) ($day['suspicious_amount'] ?? 0),
+                (float) ($day['injection_amount'] ?? 0)
+            );
+        }
+        $lines[] = '';
+        $lines[] = 'DETAIL CONFRONTATION RESPONSABLES / SERVEURS';
+        foreach ($data['internal_confrontation']['rows'] as $row) {
+            $lines[] = sprintf(
+                '%s / %s | resp %.3f | serv %.3f | ecart %.3f | %s',
+                $row['category'],
+                $row['product'],
+                (float) $row['responsible_quantity'],
+                (float) $row['server_quantity'],
+                (float) $row['quantity_gap'],
+                $row['status']
+            );
+        }
+        $lines[] = '';
+        $lines[] = 'CONFRONTATION AUDIT / APPLICATION (LECTURE SEULE)';
+        foreach ($data['application_confrontation']['rows'] as $row) {
+            $lines[] = sprintf('%s | audit %.2f | application %.2f | ecart %.2f | %s', $row['element'], (float) $row['audit_amount'], (float) $row['application_amount'], (float) $row['gap'], $row['status']);
+        }
+        $lines[] = '';
+        $lines[] = 'DETAIL DES PERTES';
+        foreach ($data['losses']['rows'] as $row) {
+            $lines[] = sprintf('%s | %s | %.2f | %s | %s | %s', $row['activity_date'], $row['product_name'] ?? 'Non precise', (float) $row['value_amount'], $row['responsible_name'] ?? 'A determiner', $row['cause'] ?? '', $row['status']);
+        }
         return $this->simplePdf($lines);
     }
 
     private function simplePdf(array $lines): string
     {
-        $content = "BT\n/F1 10 Tf\n50 790 Td\n";
-        foreach ($lines as $index => $line) {
-            if ($index > 0) {
-                $content .= "0 -16 Td\n";
-            }
-            $safe = str_replace(['\\', '(', ')'], ['\\\\', '\\(', '\\)'], iconv('UTF-8', 'Windows-1252//TRANSLIT', (string) $line) ?: (string) $line);
-            $content .= '(' . $safe . ") Tj\n";
+        $pages = array_chunk($lines, 44);
+        $objects = [];
+        $pageObjectIds = [];
+        $pageCount = count($pages);
+        $fontObjectId = 3 + ($pageCount * 2);
+        for ($index = 0; $index < $pageCount; $index++) {
+            $pageObjectIds[] = 3 + ($index * 2);
         }
-        $content .= "ET";
-        $objects = [
-            '<< /Type /Catalog /Pages 2 0 R >>',
-            '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
-            '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>',
-            '<< /Length ' . strlen($content) . " >>\nstream\n" . $content . "\nendstream",
-            '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
-        ];
+        $objects[] = '<< /Type /Catalog /Pages 2 0 R >>';
+        $objects[] = '<< /Type /Pages /Kids [' . implode(' ', array_map(static fn (int $id): string => $id . ' 0 R', $pageObjectIds)) . '] /Count ' . $pageCount . ' >>';
+        foreach ($pages as $pageIndex => $pageLines) {
+            $pageObjectId = 3 + ($pageIndex * 2);
+            $contentObjectId = $pageObjectId + 1;
+            $objects[] = '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 ' . $fontObjectId . ' 0 R >> >> /Contents ' . $contentObjectId . ' 0 R >>';
+            $content = "BT\n/F1 9 Tf\n38 805 Td\n";
+            foreach ($pageLines as $lineIndex => $line) {
+                if ($lineIndex > 0) {
+                    $content .= "0 -17 Td\n";
+                }
+                $safe = str_replace(['\\', '(', ')'], ['\\\\', '\\(', '\\)'], iconv('UTF-8', 'Windows-1252//TRANSLIT', (string) $line) ?: (string) $line);
+                $content .= '(' . substr($safe, 0, 125) . ") Tj\n";
+            }
+            $content .= "ET";
+            $objects[] = '<< /Length ' . strlen($content) . " >>\nstream\n" . $content . "\nendstream";
+        }
+        $objects[] = '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>';
         $pdf = "%PDF-1.4\n";
         $offsets = [0];
         foreach ($objects as $index => $object) {

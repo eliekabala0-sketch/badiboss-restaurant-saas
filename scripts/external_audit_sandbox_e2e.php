@@ -107,14 +107,19 @@ try {
     $application = $service->applicationConfrontation($restaurantId, $date, $date);
     $assert($application['read_only'] === true, 'confrontation application lecture seule');
 
-    $service->createLoss($restaurantId, [
+    $lossId = $service->createLoss($restaurantId, [
         'report_id' => $reportIds[0], 'product_id' => $product['id'], 'category_id' => $category['id'],
         'activity_date' => $date, 'quantity' => 1, 'value_amount' => 4000,
         'involved_people' => $users[0]['full_name'] . ',' . $users[2]['full_name'],
         'cause' => 'Casse expliquee E2E', 'status' => 'EXPLIQUE',
     ], $manager);
+    $service->decideLoss($restaurantId, $lossId, 'RESOLU', 'Decision E2E motivee', $manager);
     $losses = $service->lossAnalysis($restaurantId, $date, $date);
     $assert((float) $losses['summary']['total'] === 4000.0, 'analyse pertes');
+    $assert(($losses['rows'][0]['status'] ?? null) === 'RESOLU' && ($losses['rows'][0]['manager_decision'] ?? null) === 'Decision E2E motivee', 'decision perte historisee');
+
+    $service->attachReportEvidence($restaurantId, $reportIds[0], 'preuve-e2e.png', '/uploads/test/preuve-e2e.png', 'image/png', 128, $manager);
+    $assert(count($service->attachments($restaurantId, $reportIds[0])) === 1, 'piece jointe rapport');
 
     $service->requestCorrection($restaurantId, $reportIds[0], 'Correction E2E rejetee', $users[0]);
     $requests = $service->correctionRequests($restaurantId, $reportIds[0]);
@@ -136,8 +141,16 @@ try {
     $excel = $export->excel($period, $restaurant);
     $pdf = $export->pdf($period, $restaurant);
     $assert(substr_count($excel, '<Worksheet ') === 21, 'excel 21 feuilles');
+    $assert(str_contains($excel, 'Correction E2E') && str_contains($excel, 'REPORT_RESET'), 'excel corrections versions journal');
     $assert(str_starts_with($pdf, '%PDF-1.4'), 'pdf valide');
+    $assert(substr_count($pdf, '/Type /Page') >= 2, 'pdf multipage detaille');
     $assert(str_contains($excel, (string) $period['totals']['missing_amount']), 'totaux export');
+    $notificationEvents = $pdo->prepare(
+        'SELECT COUNT(DISTINCT event_code) FROM ui_notifications
+         WHERE restaurant_id=:restaurant_id AND event_key LIKE "ea:%"'
+    );
+    $notificationEvents->execute(['restaurant_id' => $restaurantId]);
+    $assert((int) $notificationEvents->fetchColumn() >= 3, 'notifications evenements sans repetition');
 } finally {
     foreach ($reportIds as $reportId) {
         try {
