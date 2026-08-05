@@ -11,6 +11,19 @@ use Throwable;
 
 final class ExternalAuditService
 {
+    /** @return array{report_type:?string,label:string,is_manager:bool} */
+    public static function auditAssignment(array $user): array
+    {
+        $role = (string) ($user['role_code'] ?? '');
+        return match ($role) {
+            'cashier_server' => ['report_type' => 'serveur', 'label' => 'Mon rapport serveur', 'is_manager' => false],
+            'stock_manager' => ['report_type' => 'boissons', 'label' => 'Mon rapport boissons', 'is_manager' => false],
+            'kitchen' => ['report_type' => 'cuisine', 'label' => 'Mon rapport cuisine', 'is_manager' => false],
+            'owner', 'manager' => ['report_type' => null, 'label' => 'Tableau de controle', 'is_manager' => true],
+            default => ['report_type' => null, 'label' => 'Audit externe', 'is_manager' => false],
+        };
+    }
+
     public function __construct(
         private readonly Database $database,
         private readonly ExternalAuditEngine $engine
@@ -336,6 +349,15 @@ final class ExternalAuditService
         $authorId = (int) ($data['operational_author_id'] ?? $actor['id']);
         $type = (string) ($data['report_type'] ?? 'boissons');
         $date = (string) ($data['activity_date'] ?? '');
+        if (!in_array($type, ['serveur', 'boissons', 'cuisine', 'annexes'], true)) {
+            throw new RuntimeException('Type de rapport Audit externe invalide.');
+        }
+        $assignment = self::auditAssignment($actor);
+        if (!$assignment['is_manager'] && ($actor['scope'] ?? null) !== 'super_admin') {
+            if ($assignment['report_type'] === null || $type !== $assignment['report_type'] || $authorId !== (int) $actor['id']) {
+                throw new RuntimeException('Ce rapport ne correspond pas a votre fonction.');
+            }
+        }
         if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $date)) {
             throw new RuntimeException('La date d activite est obligatoire.');
         }

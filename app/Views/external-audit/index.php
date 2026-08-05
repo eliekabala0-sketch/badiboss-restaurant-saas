@@ -1,6 +1,6 @@
 <section class="topbar">
     <div class="brand">
-        <h1>Audit externe</h1>
+        <h1><?= e($assignment['label'] ?? 'Audit externe') ?></h1>
         <p>Application metier autonome. Aucune saisie de cette page n'ecrit dans les ventes, le stock ou la caisse operationnels.</p>
     </div>
 </section>
@@ -9,7 +9,7 @@
     <label>Date d'activite <input type="date" name="date" value="<?= e($date) ?>"></label>
     <button type="submit">Afficher</button>
 </form>
-<?php if (can_access('audit.external.manage')): ?>
+<?php if ($is_manager_dashboard): ?>
 <form method="get" action="/audit-externe/periode" class="card" style="padding:18px;margin-bottom:20px">
     <strong>Rapports et confrontations par periode</strong>
     <label>Du <input type="date" name="from" value="<?= e($date) ?>"></label>
@@ -33,6 +33,7 @@
 </form>
 <?php endif; ?>
 
+<?php if ($is_manager_dashboard): ?>
 <section class="grid stats">
     <?php foreach ([
         'Rapports' => $dashboard['summary']['reports'],
@@ -46,7 +47,9 @@
         <article class="card stat"><span><?= e($label) ?></span><strong><?= e((string) $value) ?></strong></article>
     <?php endforeach; ?>
 </section>
+<?php endif; ?>
 
+<?php if ($is_manager_dashboard): ?>
 <section class="grid stats">
     <?php foreach ([
         'Serveurs actifs' => $tracking['summary']['active_server_count'],
@@ -73,8 +76,9 @@
     <?php if ($tracking['rows'] === []): ?><tr><td colspan="9">Aucune fonction active soumise a rapport pour cette date.</td></tr><?php endif; ?>
     </tbody></table></div>
 </section>
+<?php endif; ?>
 
-<?php if (can_access('audit.external.manage')): ?>
+<?php if ($is_manager_dashboard): ?>
 <section class="card" style="padding:22px;margin-bottom:22px"><h2>Heures limites par fonction</h2>
 <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(260px,1fr))">
 <?php foreach ($role_expectations as $expectation): ?><form method="post" action="/audit-externe/attentes/<?= e($expectation['role_code']) ?>" class="card" style="padding:16px">
@@ -89,16 +93,21 @@
 <?php endif; ?>
 
 <section class="card" style="padding:22px;margin-bottom:22px">
-    <h2>Nouveau brouillon</h2>
+    <h2><?= $is_manager_dashboard ? 'Nouveau brouillon' : e($assignment['label']) ?></h2>
+    <?php if (!$is_manager_dashboard): ?><p class="pill" style="display:inline-block">BROUILLON NON ENCORE SOUMIS</p><p class="muted">Votre fonction a ete detectee automatiquement. Enregistrez pour commencer et continuer plus tard.</p><?php endif; ?>
     <form method="post" enctype="multipart/form-data" action="/audit-externe/rapports">
         <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(210px,1fr))">
+            <?php if ($is_manager_dashboard): ?>
             <label>Type
                 <select name="report_type"><option value="boissons">Boissons / stock</option><option value="cuisine">Cuisine</option><option value="serveur">Serveur</option><option value="annexes">Annexes</option></select>
             </label>
+            <?php else: ?>
+                <input type="hidden" name="report_type" value="<?= e((string) $assignment['report_type']) ?>">
+            <?php endif; ?>
             <label>Date d'activite <input type="date" name="activity_date" value="<?= e($date) ?>" required></label>
             <label>Vente declaree <input type="number" min="0" step="0.01" name="declared_sales" value="0"></label>
             <label>Argent presente <input type="number" min="0" step="0.01" name="presented_cash" value="0"></label>
-            <?php if (can_access('audit.external.manage')): ?>
+            <?php if ($is_manager_dashboard): ?>
             <label>Agent concerne
                 <select name="operational_author_id">
                     <option value="<?= (int) current_user()['id'] ?>">Moi-meme</option>
@@ -113,7 +122,7 @@
             <label>Piece jointe facultative <input type="file" name="evidence" accept="image/jpeg,image/png,image/webp"></label>
         </div>
         <label>Observations <textarea name="observations" rows="3"></textarea></label>
-        <button type="submit">Commencer le brouillon</button>
+        <button type="submit"><?= $is_manager_dashboard ? 'Commencer le brouillon' : 'OUVRIR MON BROUILLON' ?></button>
     </form>
 </section>
 
@@ -130,7 +139,7 @@
     </tbody></table></div>
 </section>
 
-<?php if (can_access('audit.external.manage')): ?>
+<?php if ($is_manager_dashboard): ?>
 <section class="grid" style="grid-template-columns:repeat(auto-fit,minmax(300px,1fr))">
     <article class="card" style="padding:22px"><h2>Ajouter une categorie</h2>
         <form method="post" action="/audit-externe/categories">

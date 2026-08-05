@@ -15,21 +15,34 @@ final class ExternalAuditController
         $restaurantId = current_restaurant_id();
         $date = (string) ($request->query['date'] ?? today_for_restaurant());
         $service = Container::getInstance()->get('externalAudit');
+        $assignment = \App\Services\ExternalAuditService::auditAssignment(current_user() ?? []);
+        $isManager = can_access('audit.external.manage') || $assignment['is_manager'];
         $dashboard = $service->dashboard(
             $restaurantId,
             $date,
-            can_access('audit.external.manage') ? null : (int) current_user()['id']
+            $isManager ? null : (int) current_user()['id']
         );
+
+        // An operational user lands directly in the report matching their real role.
+        if (!$isManager && $assignment['report_type'] !== null) {
+            foreach ($dashboard['reports'] as $report) {
+                if ((string) $report['report_type'] === $assignment['report_type']) {
+                    redirect('/audit-externe/rapports/' . (int) $report['id']);
+                }
+            }
+        }
 
         view('external-audit/index', [
             'title' => 'Audit externe',
             'date' => $date,
             'dashboard' => $dashboard,
-            'categories' => $service->categories($restaurantId),
-            'products' => $service->products($restaurantId),
-            'users' => $service->activeUsers($restaurantId),
-            'tracking' => $service->reportTracking($restaurantId, $date, $date),
-            'role_expectations' => can_access('audit.external.manage') ? $service->roleExpectations($restaurantId) : [],
+            'assignment' => $assignment,
+            'is_manager_dashboard' => $isManager,
+            // Heavy manager-only datasets are deliberately loaded on demand here, never at login.
+            'categories' => $isManager ? $service->categories($restaurantId) : [],
+            'users' => $isManager ? $service->activeUsers($restaurantId) : [],
+            'tracking' => $isManager ? $service->reportTracking($restaurantId, $date, $date) : null,
+            'role_expectations' => $isManager ? $service->roleExpectations($restaurantId) : [],
             'flash_success' => flash('success'),
             'flash_error' => flash('error'),
         ]);
