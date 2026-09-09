@@ -159,6 +159,7 @@ $router->post('/audit-externe/rapports/{id}/supprimer-test', [ExternalAuditContr
 $router->post('/audit-externe/versions/{id}/restaurer', [ExternalAuditController::class, 'restoreRevision'], [AuthMiddleware::class]);
 $router->get('/ma-discipline', [OperationsController::class, 'myDiscipline'], [AuthMiddleware::class]);
 $router->get('/caisse', [OperationsController::class, 'cash'], [AuthMiddleware::class]);
+$router->post('/caisse/vente-directe', [OperationsController::class, 'createCashierCheckout'], [AuthMiddleware::class]);
 $router->post('/caisse/remises-serveur', [OperationsController::class, 'remitServerCash'], [AuthMiddleware::class]);
 $router->post('/caisse/transferts/{id}/reception-caisse', [OperationsController::class, 'receiveCashAtCashier'], [AuthMiddleware::class]);
 $router->post('/caisse/transferts/{id}/rejet-remise', [OperationsController::class, 'rejectSaleRemittanceAtCashier'], [AuthMiddleware::class]);

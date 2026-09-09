@@ -262,6 +262,143 @@ final class CashService
         return $transferId;
     }
 
+    /**
+     * Encaissement comptoir : crée une vente validée et sa réception caisse en une seule transaction.
+     * Ce flux ne crée aucune demande ni production cuisine.
+     *
+     * @return array{sale_id:int, transfer_id:int, total_amount:float}
+     */
+    public function createCashierCheckout(int $restaurantId, array $payload, array $actor): array
+    {
+        $this->ensureSchema();
+        if ((string) ($actor['role_code'] ?? '') !== 'cashier_accountant' && !can_access('cash.checkout.create', $actor)) {
+            throw new \RuntimeException('Encaissement direct réservé au caissier.');
+        }
+
+        $channel = strtoupper(trim((string) ($payload['channel'] ?? 'BOUTIQUE')));
+        if (!in_array($channel, ['BOUTIQUE', 'RESTAURANT'], true)) {
+            throw new \RuntimeException('Option de vente invalide.');
+        }
+        $orderSource = strtoupper(trim((string) ($payload['order_source'] ?? 'CLIENT')));
+        if ($channel === 'BOUTIQUE') {
+            $orderSource = 'CLIENT';
+        }
+        if (!in_array($orderSource, ['CLIENT', 'SERVEUR'], true)) {
+            throw new \RuntimeException('Origine de commande invalide.');
+        }
+
+        $rawItems = is_array($payload['items'] ?? null) ? $payload['items'] : [];
+        $items = [];
+        $total = 0.0;
+        $menuStatement = $this->database->pdo()->prepare(
+            'SELECT id, name, price FROM menu_items WHERE id = :id AND restaurant_id = :restaurant_id AND status = "active" AND is_available = 1 LIMIT 1'
+        );
+        foreach ($rawItems as $rawItem) {
+            if (!is_array($rawItem)) {
+                continue;
+            }
+            $menuItemId = (int) ($rawItem['menu_item_id'] ?? 0);
+            $quantity = round((float) ($rawItem['quantity'] ?? 0), 2);
+            if ($menuItemId <= 0 || $quantity <= 0) {
+                continue;
+            }
+            $menuStatement->execute(['id' => $menuItemId, 'restaurant_id' => $restaurantId]);
+            $menuItem = $menuStatement->fetch(PDO::FETCH_ASSOC);
+            if ($menuItem === false) {
+                throw new \RuntimeException('Un article sélectionné est indisponible ou hors restaurant.');
+            }
+            $unitPrice = round((float) ($menuItem['price'] ?? 0), 2);
+            $items[] = [
+                'menu_item_id' => $menuItemId,
+                'kitchen_production_id' => '',
+                'quantity' => $quantity,
+                'unit_price' => $unitPrice,
+            ];
+            $total += $quantity * $unitPrice;
+        }
+        if ($items === []) {
+            throw new \RuntimeException('Ajoutez au moins un article avec une quantité valide.');
+        }
+
+        $serverId = null;
+        $sourceLabel = 'client';
+        if ($channel === 'RESTAURANT' && $orderSource === 'SERVEUR') {
+            $serverId = (int) ($payload['server_id'] ?? 0);
+            $serverStatement = $this->database->pdo()->prepare(
+                'SELECT u.id FROM users u INNER JOIN roles r ON r.id = u.role_id WHERE u.id = :id AND u.restaurant_id = :restaurant_id AND r.code = "cashier_server" AND u.status = "active" LIMIT 1'
+            );
+            $serverStatement->execute(['id' => $serverId, 'restaurant_id' => $restaurantId]);
+            if ($serverId <= 0 || $serverStatement->fetchColumn() === false) {
+                throw new \RuntimeException('Sélectionnez le serveur qui a transmis la commande.');
+            }
+            $sourceLabel = 'serveur';
+        }
+
+        $paymentMethod = strtoupper(trim((string) ($payload['payment_method'] ?? 'ESPECES')));
+        if (!in_array($paymentMethod, ['ESPECES', 'CARTE', 'MOBILE_MONEY', 'VIREMENT'], true)) {
+            throw new \RuntimeException('Mode de paiement invalide.');
+        }
+        $reference = trim((string) ($payload['reference'] ?? ''));
+        $note = sprintf('Encaissement %s · commande %s · paiement %s', strtolower($channel), $sourceLabel, $paymentMethod);
+        if ($reference !== '') {
+            $note .= ' · référence ' . substr($reference, 0, 120);
+        }
+
+        $pdo = $this->database->pdo();
+        $pdo->beginTransaction();
+        try {
+            $saleId = Container::getInstance()->get('salesService')->createSale($restaurantId, [
+                'server_id' => $serverId,
+                'sale_type' => 'SUR_PLACE',
+                'status' => 'VALIDE',
+                'origin_type' => 'cashier_checkout',
+                'origin_id' => null,
+                'note' => $note,
+                'items' => $items,
+            ], $actor);
+
+            $day = (new DateTimeImmutable('now', $this->reportTimezone($restaurantId)))->format('Y-m-d');
+            $transfer = $pdo->prepare(
+                'INSERT INTO cash_transfers
+                (restaurant_id, from_user_id, to_user_id, amount, amount_received, currency, source_type, source_id, sale_day_ymd, remittance_day_ymd, late_remittance_basis, status, note, discrepancy_amount, discrepancy_note, requested_at, received_at, validated_at, created_by, received_by, validated_by, created_at, updated_at)
+                 VALUES
+                (:restaurant_id, :from_user_id, :to_user_id, :amount, :amount_received, :currency, "sale", :source_id, :sale_day, :remittance_day, NULL, "RECU_CAISSE", :note, 0, NULL, NOW(), NOW(), NOW(), :created_by, :received_by, :validated_by, NOW(), NOW())'
+            );
+            $transfer->execute([
+                'restaurant_id' => $restaurantId,
+                'from_user_id' => $serverId,
+                'to_user_id' => $actor['id'] ?? null,
+                'amount' => round($total, 2),
+                'amount_received' => round($total, 2),
+                'currency' => restaurant_currency($restaurantId),
+                'source_id' => $saleId,
+                'sale_day' => $day,
+                'remittance_day' => $day,
+                'note' => $note,
+                'created_by' => $actor['id'] ?? null,
+                'received_by' => $actor['id'] ?? null,
+                'validated_by' => $actor['id'] ?? null,
+            ]);
+            $transferId = (int) $pdo->lastInsertId();
+            $this->audit($restaurantId, $actor, 'cashier_checkout_received', 'cash_transfers', $transferId, [
+                'sale_id' => $saleId,
+                'channel' => $channel,
+                'order_source' => $orderSource,
+                'payment_method' => $paymentMethod,
+                'amount_received' => round($total, 2),
+                'kitchen_bypassed' => true,
+            ], 'Vente directe encaissée, facturée et validée par le caissier');
+            $pdo->commit();
+
+            return ['sale_id' => $saleId, 'transfer_id' => $transferId, 'total_amount' => round($total, 2)];
+        } catch (\Throwable $throwable) {
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+            throw $throwable;
+        }
+    }
+
     public function listServerRemittanceCandidates(int $restaurantId, ?int $serverId = null, ?int $limit = null): array
     {
         return array_values(array_filter(

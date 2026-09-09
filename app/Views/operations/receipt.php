@@ -9,6 +9,7 @@ $restaurantName = (string) ($restaurant['public_name'] ?? $restaurant['name'] ??
 $restaurantLogo = restaurant_media_url_or_default($restaurant['logo_url'] ?? null, 'logo');
 $invoiceNumber = 'FC-' . (string) ($restaurant['id'] ?? '0') . '-' . str_pad((string) ($sale['id'] ?? '0'), 6, '0', STR_PAD_LEFT);
 $activityAt = $sale['sale_activity_at'] ?? $sale['validated_at'] ?? $sale['created_at'] ?? null;
+$isCashierCheckout = ($sale['origin_type'] ?? '') === 'cashier_checkout';
 ?>
 <style>
 @media print { .no-print { display:none !important; } body { background:#fff !important; color:#111 !important; } .proof-sheet { box-shadow:none !important; border-color:#111 !important; } }
@@ -56,7 +57,7 @@ $activityAt = $sale['sale_activity_at'] ?? $sale['validated_at'] ?? $sale['creat
             <p><strong>Heure :</strong> <?= e($activityAt ? substr((string) $activityAt, 11, 5) : '-') ?></p>
         </div>
         <div class="proof-box">
-            <p><strong>Nom du serveur :</strong> <?= e(named_actor_label($sale['server_name'] ?? null, 'cashier_server')) ?></p>
+            <p><strong><?= $isCashierCheckout ? 'Commande reçue par / transmise par :' : 'Nom du serveur :' ?></strong> <?= e(named_actor_label($sale['server_name'] ?? null, $isCashierCheckout ? null : 'cashier_server')) ?></p>
             <p><strong>No table :</strong> <?= e((string) ($sale['table_number'] ?? '-')) ?></p>
             <p><strong>Nombre de couverts :</strong> <?= e((string) ($sale['guest_count'] ?? '-')) ?></p>
         </div>
@@ -82,11 +83,11 @@ $activityAt = $sale['sale_activity_at'] ?? $sale['validated_at'] ?? $sale['creat
 
     <div class="proof-total"><strong>Total general : <?= e(format_money($sale['total_amount'] ?? 0, $restaurantCurrency)) ?></strong></div>
     <p style="border:1px solid #111; border-radius:6px; padding:12px; margin-top:16px;">
-        <strong>Mode de paiement :</strong>
-        <?= e((string) ($sale['payment_method'] ?? ($transfer !== null ? cash_transfer_status_label($transfer['status'] ?? null) : 'Non precise'))) ?>
+        <strong>Paiement :</strong>
+        <?= e($transfer !== null && ($transfer['status'] ?? '') === 'RECU_CAISSE' ? 'Reçu et validé en caisse' : (string) ($sale['payment_method'] ?? ($transfer !== null ? cash_transfer_status_label($transfer['status'] ?? null) : 'Non précisé'))) ?>
     </p>
     <div class="proof-sign">
-        <div><strong>Signature serveur :</strong><br><br><?= e(named_actor_label($sale['server_name'] ?? null, 'cashier_server')) ?></div>
+        <div><strong><?= $isCashierCheckout ? 'Origine de commande :' : 'Signature serveur :' ?></strong><br><br><?= e($isCashierCheckout ? (string) ($sale['note'] ?? 'Vente directe') : named_actor_label($sale['server_name'] ?? null, 'cashier_server')) ?></div>
         <div><strong>Signature caissier :</strong><br><br><?= e($transfer !== null ? named_actor_label($transfer['cashier_name'] ?? $transfer['received_by_name'] ?? null, 'cashier_accountant') : '-') ?></div>
     </div>
     <p style="text-align:center; margin:24px 0 0; font-size:1.2rem;">Merci pour votre confiance</p>

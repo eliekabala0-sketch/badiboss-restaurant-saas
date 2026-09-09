@@ -19,6 +19,7 @@ $dayHoldCash = $day_start_hold ?? ['blocked' => false, 'reasons' => []];
 $cashPulse = $module_today_pulse ?? [];
 $cashRegBack = $regularization_backlog ?? [];
 $canReclassifyCash = in_array((string) (current_user()['role_code'] ?? ''), ['owner', 'manager'], true);
+$checkoutServers = array_values(array_filter($users ?? [], static fn (array $user): bool => ($user['role_code'] ?? '') === 'cashier_server' && ($user['status'] ?? 'active') === 'active'));
 ?>
 
 <section class="topbar">
@@ -49,6 +50,115 @@ $module_nav_items = [
 ];
 require base_path('app/Views/partials/module_quick_nav.php');
 ?>
+
+<?php if (can_access('cash.checkout.create')): ?>
+<section class="card no-print" id="cashier-checkout" style="padding:22px; margin-bottom:20px; border-left:4px solid #2563eb;">
+    <h2 style="margin:0 0 8px;">Nouvelle vente et encaissement</h2>
+    <p class="muted" style="margin:0 0 18px;">Vente immédiate en caisse : aucun passage en cuisine. Le paiement valide la vente et ouvre directement la facture.</p>
+    <form method="post" action="/caisse/vente-directe" data-cashier-checkout>
+        <div class="split">
+            <div>
+                <label>Option</label>
+                <select name="channel" data-checkout-channel required>
+                    <option value="BOUTIQUE">Boutique — vente directe</option>
+                    <option value="RESTAURANT">Restaurant — commande reçue</option>
+                </select>
+            </div>
+            <div data-order-source-wrap hidden>
+                <label>Commande venant de</label>
+                <select name="order_source" data-order-source>
+                    <option value="CLIENT">Client</option>
+                    <option value="SERVEUR">Serveur</option>
+                </select>
+            </div>
+            <div data-server-wrap hidden>
+                <label>Serveur demandeur</label>
+                <select name="server_id" data-server-select>
+                    <option value="">Sélectionner</option>
+                    <?php foreach ($checkoutServers as $server): ?>
+                        <option value="<?= e((string) $server['id']) ?>"><?= e(named_actor_label($server['full_name'] ?? null, 'cashier_server')) ?></option>
+                    <?php endforeach; ?>
+                </select>
+            </div>
+            <div>
+                <label>Mode de paiement</label>
+                <select name="payment_method" required>
+                    <option value="ESPECES">Espèces</option>
+                    <option value="MOBILE_MONEY">Mobile Money</option>
+                    <option value="CARTE">Carte</option>
+                    <option value="VIREMENT">Virement</option>
+                </select>
+            </div>
+            <div>
+                <label>Référence / client (facultatif)</label>
+                <input name="reference" maxlength="120" placeholder="Nom, table ou référence">
+            </div>
+        </div>
+
+        <div class="table-wrap" style="margin-top:18px;">
+            <table>
+                <thead><tr><th>Article du menu</th><th>Quantité</th><th>Prix</th><th>Sous-total</th></tr></thead>
+                <tbody>
+                <?php for ($row = 0; $row < 6; $row++): ?>
+                    <tr>
+                        <td>
+                            <select name="items[<?= e((string) $row) ?>][menu_item_id]" data-checkout-item>
+                                <option value="" data-price="0">—</option>
+                                <?php foreach (($menu_items ?? []) as $menuItem): ?>
+                                    <option value="<?= e((string) $menuItem['id']) ?>" data-price="<?= e((string) ((float) ($menuItem['price'] ?? 0))) ?>"><?= e((string) ($menuItem['name'] ?? 'Article')) ?> — <?= e(format_money($menuItem['price'] ?? 0, $restaurantCurrency)) ?></option>
+                                <?php endforeach; ?>
+                            </select>
+                        </td>
+                        <td><input type="number" name="items[<?= e((string) $row) ?>][quantity]" min="0" step="0.01" value="<?= $row === 0 ? '1' : '0' ?>" data-checkout-qty></td>
+                        <td data-checkout-price>—</td>
+                        <td data-checkout-line>—</td>
+                    </tr>
+                <?php endfor; ?>
+                </tbody>
+            </table>
+        </div>
+        <div style="display:flex; justify-content:flex-end; align-items:center; gap:18px; margin-top:16px; flex-wrap:wrap;">
+            <strong>Total à percevoir : <span data-checkout-total>0,00</span> <?= e($restaurantCurrency) ?></strong>
+            <button type="submit">Percevoir, valider et générer la facture</button>
+        </div>
+    </form>
+</section>
+<script>
+(function () {
+    var form = document.querySelector('[data-cashier-checkout]');
+    if (!form) { return; }
+    var channel = form.querySelector('[data-checkout-channel]');
+    var source = form.querySelector('[data-order-source]');
+    var sourceWrap = form.querySelector('[data-order-source-wrap]');
+    var serverWrap = form.querySelector('[data-server-wrap]');
+    var serverSelect = form.querySelector('[data-server-select]');
+    function syncOrigin() {
+        var restaurant = channel.value === 'RESTAURANT';
+        sourceWrap.hidden = !restaurant;
+        serverWrap.hidden = !(restaurant && source.value === 'SERVEUR');
+        serverSelect.required = restaurant && source.value === 'SERVEUR';
+    }
+    function money(value) { return Number(value || 0).toLocaleString('fr-FR', {minimumFractionDigits:2, maximumFractionDigits:2}); }
+    function recalculate() {
+        var total = 0;
+        form.querySelectorAll('tbody tr').forEach(function (row) {
+            var select = row.querySelector('[data-checkout-item]');
+            var qty = Number(row.querySelector('[data-checkout-qty]').value || 0);
+            var price = Number(select.options[select.selectedIndex].dataset.price || 0);
+            var line = price * qty;
+            total += line;
+            row.querySelector('[data-checkout-price]').textContent = select.value ? money(price) : '—';
+            row.querySelector('[data-checkout-line]').textContent = select.value ? money(line) : '—';
+        });
+        form.querySelector('[data-checkout-total]').textContent = money(total);
+    }
+    channel.addEventListener('change', syncOrigin);
+    source.addEventListener('change', syncOrigin);
+    form.addEventListener('input', recalculate);
+    syncOrigin(); recalculate();
+}());
+</script>
+<?php endif; ?>
 
 <section class="card no-print" style="padding:16px 18px; margin-bottom:20px;">
     <strong>Changer la periode</strong>

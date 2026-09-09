@@ -1192,7 +1192,7 @@ final class SalesService
         ]);
     }
 
-    public function createSale(int $restaurantId, array $payload, array $actor): void
+    public function createSale(int $restaurantId, array $payload, array $actor): int
     {
         $pdo = $this->database->pdo();
         $ownsTransaction = !$pdo->inTransaction();
@@ -1222,7 +1222,7 @@ final class SalesService
             );
             $saleStatement->execute([
                 'restaurant_id' => $restaurantId,
-                'server_id' => $payload['server_id'] ?? $actor['id'] ?? null,
+                'server_id' => array_key_exists('server_id', $payload) ? $payload['server_id'] : ($actor['id'] ?? null),
                 'sale_type' => $payload['sale_type'],
                 'total_amount' => $total,
                 'status' => $payload['status'],
@@ -1282,8 +1282,12 @@ final class SalesService
                 'entity_type' => 'sales',
                 'entity_id' => (string) $saleId,
                 'new_values' => $payload,
-                'justification' => 'Vente enregistrée par serveur',
+                'justification' => ($payload['origin_type'] ?? '') === 'cashier_checkout'
+                    ? 'Vente encaissée directement par la caisse'
+                    : 'Vente enregistrée par serveur',
             ]);
+
+            return $saleId;
         } catch (\Throwable $throwable) {
             if ($ownsTransaction && $pdo->inTransaction()) {
                 $pdo->rollBack();

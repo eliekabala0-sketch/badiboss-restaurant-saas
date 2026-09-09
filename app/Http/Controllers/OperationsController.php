@@ -872,6 +872,7 @@ final class OperationsController
             'restaurant' => Container::getInstance()->get('restaurantAdmin')->findRestaurant($restaurantId),
             'cash' => Container::getInstance()->get('cashService')->dashboard($restaurantId, $filters),
             'sales' => Container::getInstance()->get('salesService')->listSales($restaurantId),
+            'menu_items' => Container::getInstance()->get('menuAdmin')->listPublicItems($restaurantId),
             'users' => Container::getInstance()->get('roleAdmin')->listUsersForRestaurant($restaurantId),
             'filters' => $filters,
             'cash_preset' => $cashPreset,
@@ -926,10 +927,35 @@ final class OperationsController
         redirect($this->moduleUrl('/ventes', $restaurantId));
     }
 
+    public function createCashierCheckout(Request $request): void
+    {
+        $restaurantId = $this->resolveRestaurantId($request);
+        authorize_access('cash.checkout.create');
+
+        try {
+            $this->assertDayStartAllowsNewOperations($restaurantId);
+            $result = Container::getInstance()->get('cashService')->createCashierCheckout($restaurantId, [
+                'channel' => $request->input('channel', 'BOUTIQUE'),
+                'order_source' => $request->input('order_source', 'CLIENT'),
+                'server_id' => $request->input('server_id'),
+                'payment_method' => $request->input('payment_method', 'ESPECES'),
+                'reference' => $request->input('reference', ''),
+                'items' => $request->input('items', []),
+            ], current_user() ?? []);
+            flash('success', 'Paiement reçu. Vente validée et facture générée.');
+            redirect($this->moduleUrl('/preuves/commandes/' . (int) $result['sale_id'], $restaurantId));
+        } catch (\Throwable $exception) {
+            flash('error', ui_safe_message($exception->getMessage()));
+            redirect($this->moduleUrl('/caisse', $restaurantId));
+        }
+    }
+
     public function printSaleReceipt(Request $request): void
     {
         $restaurantId = $this->resolveRestaurantId($request);
-        authorize_access('sales.view');
+        if (!can_access('sales.view') && !can_access('cash.view')) {
+            authorize_access('sales.view');
+        }
         $receipt = Container::getInstance()->get('proofService')->saleProof($restaurantId, (int) $request->route('id'));
         $actor = current_user() ?? [];
         if (
