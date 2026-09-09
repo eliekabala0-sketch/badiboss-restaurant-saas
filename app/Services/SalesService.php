@@ -390,9 +390,6 @@ final class SalesService
             $normalizedItems = [];
             foreach ($items as $item) {
                 $menuItem = $this->findMenuItemWithCategoryInRestaurant((int) $item['menu_item_id'], $restaurantId);
-                if ((string) ($menuItem['product_type'] ?? 'PLAT') !== 'PLAT') {
-                    throw new \RuntimeException('Une commande restaurant accepte uniquement les produits classés Plat.');
-                }
                 $quantity = (float) $item['requested_quantity'];
                 if ($quantity <= 0) {
                     throw new \RuntimeException('Quantite demandee invalide.');

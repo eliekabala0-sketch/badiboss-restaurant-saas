@@ -780,7 +780,7 @@ final class OperationsController
             'server_cashiers' => Container::getInstance()->get('cashService')->dashboard($restaurantId)['cashiers'] ?? [],
             'sale_remittance_tracking' => Container::getInstance()->get('cashService')->listSaleRemittanceTracking($restaurantId, $this->salesActorIdFilter(), $trackingLimit),
             'pending_cash_remittances' => Container::getInstance()->get('cashService')->listServerRemittanceCandidates($restaurantId, $this->salesActorIdFilter(), $trackingLimit),
-            'menu_items' => Container::getInstance()->get('menuAdmin')->listPublicItems($restaurantId, 'PLAT'),
+            'menu_items' => Container::getInstance()->get('menuAdmin')->listPublicItems($restaurantId),
             'productions' => Container::getInstance()->get('kitchenService')->listProductions($restaurantId, 80),
             'sales_overview' => Container::getInstance()->get('salesService')->serverSalesOverview($restaurantId, $this->salesActorIdFilter()),
             'served_requests_without_sale_period' => $servedWithoutSalePeriod,

@@ -35,5 +35,6 @@ $assert(str_contains($menuService, 'product_type'), 'classification produit pers
 $assert(str_contains($menuView, 'Article — vente directe en boutique, sans cuisine'), 'choix article sans cuisine');
 $assert(str_contains($menuView, 'Plat — restaurant et cuisine'), 'choix plat cuisine');
 $assert(str_contains($cashService, '$requiredProductType'), 'séparation boutique et restaurant côté serveur');
+$assert(!str_contains($salesService, 'Une commande restaurant accepte uniquement les produits classés Plat.'), 'serveur libre de commander tout le menu');
 
-echo "OK CashierCheckout: 16 controles\n";
+echo "OK CashierCheckout: 17 controles\n";
