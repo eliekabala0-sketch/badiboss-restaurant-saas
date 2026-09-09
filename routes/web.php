@@ -24,6 +24,7 @@ use App\Middleware\ReportsAccessMiddleware;
 use App\Middleware\SalesAccessMiddleware;
 use App\Middleware\StockAccessMiddleware;
 use App\Middleware\SuperAdminMiddleware;
+use App\Http\Controllers\BadibossPaymentController;
 
 $router->get('/', [RestaurantOnboardingController::class, 'home']);
 $router->get('/health', [DashboardController::class, 'health']);
@@ -74,6 +75,7 @@ $router->post('/super-admin/menu/items/{id}/status', [MenuAdminController::class
 $router->get('/owner', [DashboardController::class, 'owner'], [AuthMiddleware::class, OwnerAreaMiddleware::class]);
 $router->get('/owner/paie/preparer', [DashboardController::class, 'preparePayroll'], [AuthMiddleware::class, OwnerAreaMiddleware::class]);
 $router->post('/owner/subscription/pay', [RestaurantAdminController::class, 'declarePayment'], [AuthMiddleware::class, OwnerAreaMiddleware::class]);
+$router->post('/webhooks/badiboss-pay', [BadibossPaymentController::class, 'webhook']);
 $router->post('/owner/settings/currency', [RestaurantAdminController::class, 'updateOwnerCurrency'], [AuthMiddleware::class, OwnerOrManagerMiddleware::class]);
 $router->post('/owner/settings/discipline-schedule', [RestaurantAdminController::class, 'updateDisciplineSchedule'], [AuthMiddleware::class, OwnerOrManagerMiddleware::class]);
 $router->post('/owner/discipline/alert-action', [DashboardController::class, 'postDisciplinaryAlertAction'], [AuthMiddleware::class, OwnerOrManagerMiddleware::class]);

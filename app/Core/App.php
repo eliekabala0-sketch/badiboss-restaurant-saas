@@ -33,6 +33,7 @@ use App\Services\TenantResolverService;
 use App\Services\UploadService;
 use App\Services\UiNotificationService;
 use App\Services\UserAdminService;
+use App\Services\BadibossPaymentService;
 use App\Services\ExternalAuditEngine;
 use App\Services\ExternalAuditService;
 use App\Services\ExternalAuditExportService;
@@ -110,6 +111,7 @@ final class App
         $container->set('audit', new AuditService($database));
         $container->set('tenantProvisioning', new TenantProvisioningService($database));
         $container->set('subscriptionService', new SubscriptionService($database));
+        $container->set('badibossPayment', new BadibossPaymentService($database));
         $container->set('uploadService', new UploadService());
         $container->set('restaurantAdmin', new RestaurantAdminService($database));
         $container->set('roleAdmin', new RoleAdminService($database));

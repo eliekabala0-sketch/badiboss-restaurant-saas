@@ -239,8 +239,11 @@ final class RestaurantAdminController
     public function declarePayment(Request $request): void
     {
         $restaurantId = current_restaurant_id();
-        Container::getInstance()->get('restaurantAdmin')->declareSubscriptionPayment($restaurantId, $_SESSION['user']);
-        flash('success', 'Paiement de l abonnement declare. Validation plateforme en attente.');
+        try {
+            $payment = Container::getInstance()->get('badibossPayment')->createSubscriptionPayment($restaurantId, $_SESSION['user']);
+            $_SESSION['subscription_payment'] = $payment;
+            flash('success', 'Paiement initié. Suivez les instructions de votre opérateur mobile.');
+        } catch (\Throwable $e) { flash('error', ui_safe_message($e->getMessage())); }
         redirect('/owner');
     }
 

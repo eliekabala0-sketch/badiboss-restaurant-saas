@@ -395,6 +395,7 @@ final class DashboardController
             'user' => $actor,
             'restaurant' => $restaurant,
             'subscription' => $subscription,
+            'subscription_payment' => $_SESSION['subscription_payment'] ?? null,
             'pending_manager_sale_remittances' => $loadOwnerDetails ? $cashSvc->listPendingManagerSaleRemittances($restaurantId) : [],
             'pending_late_remittance_attributions' => $loadOwnerDetails ? $cashSvc->listPendingLateRemittanceAttributions($restaurantId) : [],
             'sale_remittance_history' => $loadOwnerDetails ? $cashSvc->listSaleRemittanceHistory($restaurantId, 24) : [],

@@ -541,8 +541,15 @@ $restaurantRegisterUrl = restaurant_generated_registration_url($restaurant);
         <p><strong>Jours expirés :</strong> <?= e((string) ($subscription['days_expired'] ?? '-')) ?></p>
         <p><strong>Message :</strong> <?= e($subscription['message'] ?? 'Aucun message') ?></p>
         <?php if (($subscription['status'] ?? null) !== 'ACTIVE' && ($subscription['status'] ?? null) !== 'GRACE_PERIOD'): ?>
+            <?php if (!empty($subscription_payment)): ?>
+                <div class="notice notice-success" style="margin:12px 0;">
+                    Paiement initié — référence <?= e((string) ($subscription_payment['reference'] ?? '')) ?>.
+                    <?php if (!empty($subscription_payment['transaction_id'])): ?> Transaction <?= e((string) $subscription_payment['transaction_id']) ?>.<?php endif; ?>
+                    Suivez la demande sur votre téléphone. L’abonnement sera activé automatiquement après confirmation.
+                </div>
+            <?php endif; ?>
             <form method="post" action="/owner/subscription/pay">
-                <button type="submit">Payer l’abonnement</button>
+                <button type="submit">Payer l’abonnement par mobile money</button>
             </form>
         <?php endif; ?>
     </article>
