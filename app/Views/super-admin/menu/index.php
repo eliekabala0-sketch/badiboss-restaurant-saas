@@ -44,6 +44,7 @@
                 <label>Description</label><textarea name="description"></textarea>
                 <label>Image URL</label><input name="image_url">
                 <label>Prix (USD)</label><input name="price" value="0.00">
+                <label>Type de vente</label><select name="product_type" required><option value="PLAT">Plat — restaurant et cuisine</option><option value="ARTICLE">Article — boutique sans cuisine</option></select>
                 <label>Ordre</label><input name="display_order" value="0">
                 <label>Statut</label><select name="status"><option value="active">Actif</option><option value="out_of_stock">Épuisé</option><option value="hidden">Masqué</option></select>
                 <label><input type="checkbox" name="is_available" value="1" checked style="width:auto;margin-right:8px;">Disponible</label>
@@ -73,11 +74,12 @@
     <section class="card" style="margin-top:24px;">
         <div class="table-wrap">
             <table>
-                <thead><tr><th>Article</th><th>Catégorie</th><th>Prix</th><th>Canaux</th><th>Statut</th><th>Édition</th><th>Action rapide</th></tr></thead>
+                <thead><tr><th>Produit</th><th>Type / circuit</th><th>Catégorie</th><th>Prix</th><th>Canaux</th><th>Statut</th><th>Édition</th><th>Action rapide</th></tr></thead>
                 <tbody>
                 <?php foreach ($items as $item): ?>
                     <tr>
                         <td><strong><?= e($item['name']) ?></strong><br><span class="muted"><?= e($item['slug']) ?></span></td>
+                        <td><?= ($item['product_type'] ?? 'PLAT') === 'ARTICLE' ? 'Article · Boutique' : 'Plat · Restaurant/cuisine' ?></td>
                         <td><?= e($item['category_name']) ?></td>
                         <td><?= e(format_money($item['price'], $restaurant['currency_code'] ?? 'USD')) ?></td>
                         <td><?= $item['available_dine_in'] ? 'Sur place ' : '' ?><?= $item['available_takeaway'] ? 'À emporter ' : '' ?><?= $item['available_delivery'] ? 'Livraison' : '' ?></td>
@@ -91,6 +93,7 @@
                                 <label>Description</label><input name="description" value="<?= e($item['description']) ?>">
                                 <label>Image URL</label><input name="image_url" value="<?= e($item['image_url']) ?>">
                                 <label>Prix (USD)</label><input name="price" value="<?= e((string) $item['price']) ?>">
+                                <label>Type de vente</label><select name="product_type" required><option value="PLAT" <?= ($item['product_type'] ?? 'PLAT') === 'PLAT' ? 'selected' : '' ?>>Plat — restaurant et cuisine</option><option value="ARTICLE" <?= ($item['product_type'] ?? 'PLAT') === 'ARTICLE' ? 'selected' : '' ?>>Article — boutique sans cuisine</option></select>
                                 <label>Ordre</label><input name="display_order" value="<?= e((string) $item['display_order']) ?>">
                                 <label>Statut</label><select name="status"><option value="active" <?= $item['status'] === 'active' ? 'selected' : '' ?>>Actif</option><option value="out_of_stock" <?= $item['status'] === 'out_of_stock' ? 'selected' : '' ?>>Épuisé</option><option value="hidden" <?= $item['status'] === 'hidden' ? 'selected' : '' ?>>Masqué</option><option value="archived" <?= $item['status'] === 'archived' ? 'selected' : '' ?>>Archivé</option></select>
                                 <label><input type="checkbox" name="is_available" value="1" <?= (int) $item['is_available'] === 1 ? 'checked' : '' ?> style="width:auto;margin-right:8px;">Disponible</label>

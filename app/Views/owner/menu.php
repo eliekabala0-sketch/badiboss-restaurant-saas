@@ -63,7 +63,7 @@ $restaurantCover = restaurant_media_url_or_default($restaurant['cover_image_url'
     </article>
 
     <article class="card" style="padding:22px;">
-        <h2 style="margin-top:0;">Nouveau plat</h2>
+        <h2 style="margin-top:0;">Nouveau produit</h2>
         <?php if ($categories === []): ?>
             <p class="muted">Creez d abord une categorie pour rattacher le nouveau plat au vrai menu du restaurant.</p>
         <?php else: ?>
@@ -74,8 +74,13 @@ $restaurantCover = restaurant_media_url_or_default($restaurant['cover_image_url'
                         <option value="<?= e((string) $category['id']) ?>"><?= e($category['name']) ?></option>
                     <?php endforeach; ?>
                 </select>
-                <label>Nom du plat</label>
+                <label>Nom du produit</label>
                 <input name="name" required placeholder="Poulet braise premium">
+                <label>Type de vente</label>
+                <select name="product_type" required>
+                    <option value="PLAT">Plat — restaurant et cuisine</option>
+                    <option value="ARTICLE">Article — vente directe en boutique, sans cuisine</option>
+                </select>
                 <label>Slug</label>
                 <input name="slug" placeholder="Optionnel, genere depuis le nom si vide">
                 <label>Description</label>
@@ -116,7 +121,7 @@ $restaurantCover = restaurant_media_url_or_default($restaurant['cover_image_url'
     </div>
     <div class="table-wrap">
         <table>
-            <thead><tr><th>Article</th><th>Categorie</th><th>Prix</th><th>Disponibilite</th><th>Statut</th><th>Action menu</th></tr></thead>
+            <thead><tr><th>Produit</th><th>Type / circuit</th><th>Categorie</th><th>Prix</th><th>Disponibilite</th><th>Statut</th><th>Action menu</th></tr></thead>
             <tbody>
             <?php foreach ($items as $item): ?>
                 <tr>
@@ -129,6 +134,7 @@ $restaurantCover = restaurant_media_url_or_default($restaurant['cover_image_url'
                             </div>
                         </div>
                     </td>
+                    <td><strong><?= ($item['product_type'] ?? 'PLAT') === 'ARTICLE' ? 'Article' : 'Plat' ?></strong><br><span class="muted"><?= ($item['product_type'] ?? 'PLAT') === 'ARTICLE' ? 'Boutique · sans cuisine' : 'Restaurant · cuisine' ?></span></td>
                     <td><?= e($item['category_name']) ?></td>
                     <td><?= e(format_money($item['price'], $restaurantCurrency)) ?></td>
                     <td><?= (int) $item['is_available'] === 1 ? 'Disponible' : 'Indisponible' ?></td>
@@ -147,6 +153,13 @@ $restaurantCover = restaurant_media_url_or_default($restaurant['cover_image_url'
                                         <?php foreach ($categories as $category): ?>
                                             <option value="<?= e((string) $category['id']) ?>" <?= (int) $category['id'] === (int) $item['category_id'] ? 'selected' : '' ?>><?= e($category['name']) ?></option>
                                         <?php endforeach; ?>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label>Type de vente</label>
+                                    <select name="product_type" required>
+                                        <option value="PLAT" <?= ($item['product_type'] ?? 'PLAT') === 'PLAT' ? 'selected' : '' ?>>Plat — restaurant et cuisine</option>
+                                        <option value="ARTICLE" <?= ($item['product_type'] ?? 'PLAT') === 'ARTICLE' ? 'selected' : '' ?>>Article — boutique sans cuisine</option>
                                     </select>
                                 </div>
                                 <div>

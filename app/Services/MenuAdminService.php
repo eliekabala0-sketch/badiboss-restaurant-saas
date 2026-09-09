@@ -10,6 +10,8 @@ use PDO;
 
 final class MenuAdminService
 {
+    private bool $productTypeSchemaReady = false;
+
     public function __construct(private readonly Database $database)
     {
     }
@@ -28,6 +30,7 @@ final class MenuAdminService
 
     public function listItems(int $restaurantId): array
     {
+        $this->ensureProductTypeColumn();
         $statement = $this->database->pdo()->prepare(
             'SELECT mi.*, mc.name AS category_name
              FROM menu_items mi
@@ -39,8 +42,16 @@ final class MenuAdminService
         return $statement->fetchAll(PDO::FETCH_ASSOC);
     }
 
-    public function listPublicItems(int $restaurantId): array
+    public function listPublicItems(int $restaurantId, ?string $productType = null): array
     {
+        $this->ensureProductTypeColumn();
+        $typeFilter = '';
+        $params = ['restaurant_id' => $restaurantId];
+        if ($productType !== null) {
+            $productType = $this->normalizeProductType($productType);
+            $typeFilter = ' AND mi.product_type = :product_type';
+            $params['product_type'] = $productType;
+        }
         $statement = $this->database->pdo()->prepare(
             'SELECT mi.*, mc.name AS category_name
              FROM menu_items mi
@@ -48,10 +59,10 @@ final class MenuAdminService
              WHERE mi.restaurant_id = :restaurant_id
                AND mc.status = "active"
                AND mi.status = "active"
-               AND mi.is_available = 1
+               AND mi.is_available = 1' . $typeFilter . '
              ORDER BY mi.display_order ASC, mi.id ASC'
         );
-        $statement->execute(['restaurant_id' => $restaurantId]);
+        $statement->execute($params);
 
         return $statement->fetchAll(PDO::FETCH_ASSOC);
     }
@@ -134,12 +145,13 @@ final class MenuAdminService
 
     public function createItem(int $restaurantId, array $payload, array $actor): void
     {
+        $this->ensureProductTypeColumn();
         $statement = $this->database->pdo()->prepare(
             'INSERT INTO menu_items
-            (restaurant_id, category_id, name, slug, description, image_url, price, status, is_available,
+            (restaurant_id, category_id, name, slug, description, image_url, price, product_type, status, is_available,
              display_order, available_dine_in, available_takeaway, available_delivery, created_at, updated_at)
              VALUES
-            (:restaurant_id, :category_id, :name, :slug, :description, :image_url, :price, :status, :is_available,
+            (:restaurant_id, :category_id, :name, :slug, :description, :image_url, :price, :product_type, :status, :is_available,
              :display_order, :available_dine_in, :available_takeaway, :available_delivery, NOW(), NOW())'
         );
         $statement->execute([
@@ -150,6 +162,7 @@ final class MenuAdminService
             'description' => trim((string) ($payload['description'] ?? '')) ?: null,
             'image_url' => trim((string) ($payload['image_url'] ?? '')) ?: null,
             'price' => (float) $payload['price'],
+            'product_type' => $this->normalizeProductType((string) ($payload['product_type'] ?? 'PLAT')),
             'status' => $payload['status'] ?? 'active',
             'is_available' => isset($payload['is_available']) ? 1 : 0,
             'display_order' => (int) ($payload['display_order'] ?? 0),
@@ -175,6 +188,7 @@ final class MenuAdminService
 
     public function updateItem(int $itemId, array $payload, array $actor): void
     {
+        $this->ensureProductTypeColumn();
         $current = $this->findItem($itemId);
         if ($current === null) {
             return;
@@ -192,6 +206,7 @@ final class MenuAdminService
                  description = :description,
                  image_url = :image_url,
                  price = :price,
+                 product_type = :product_type,
                  status = :status,
                  is_available = :is_available,
                  display_order = :display_order,
@@ -209,6 +224,7 @@ final class MenuAdminService
             'description' => trim((string) ($payload['description'] ?? '')) ?: null,
             'image_url' => trim((string) ($payload['image_url'] ?? '')) ?: null,
             'price' => (float) $payload['price'],
+            'product_type' => $this->normalizeProductType((string) ($payload['product_type'] ?? 'PLAT')),
             'status' => $payload['status'] ?? 'active',
             'is_available' => isset($payload['is_available']) ? 1 : 0,
             'display_order' => (int) ($payload['display_order'] ?? 0),
@@ -280,6 +296,7 @@ final class MenuAdminService
 
     public function findItem(int $itemId): ?array
     {
+        $this->ensureProductTypeColumn();
         $statement = $this->database->pdo()->prepare('SELECT * FROM menu_items WHERE id = :id LIMIT 1');
         $statement->execute(['id' => $itemId]);
         $item = $statement->fetch(PDO::FETCH_ASSOC);
@@ -319,5 +336,33 @@ final class MenuAdminService
         $decoded = json_decode($value, true);
 
         return is_array($decoded) ? $decoded : [];
+    }
+
+    private function normalizeProductType(string $productType): string
+    {
+        $productType = strtoupper(trim($productType));
+        if (!in_array($productType, ['ARTICLE', 'PLAT'], true)) {
+            throw new \RuntimeException('Type de produit invalide : choisissez Article ou Plat.');
+        }
+
+        return $productType;
+    }
+
+    private function ensureProductTypeColumn(): void
+    {
+        if ($this->productTypeSchemaReady) {
+            return;
+        }
+        $pdo = $this->database->pdo();
+        $databaseName = $pdo->query('SELECT DATABASE()')->fetchColumn();
+        $check = $pdo->prepare(
+            'SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+             WHERE TABLE_SCHEMA = :schema_name AND TABLE_NAME = "menu_items" AND COLUMN_NAME = "product_type"'
+        );
+        $check->execute(['schema_name' => $databaseName]);
+        if ((int) $check->fetchColumn() === 0) {
+            $pdo->exec('ALTER TABLE menu_items ADD COLUMN product_type ENUM("ARTICLE", "PLAT") NOT NULL DEFAULT "PLAT" AFTER price');
+        }
+        $this->productTypeSchemaReady = true;
     }
 }

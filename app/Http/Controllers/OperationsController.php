@@ -480,7 +480,7 @@ final class OperationsController
             'kitchen_inventory' => Container::getInstance()->get('stockService')->listKitchenInventoryDashboard($restaurantId, false),
             'kitchen_evolution' => Container::getInstance()->get('stockService')->listKitchenEvolution($restaurantId),
             'menu_categories' => Container::getInstance()->get('menuAdmin')->listCategories($restaurantId),
-            'menu_items' => Container::getInstance()->get('menuAdmin')->listItems($restaurantId),
+            'menu_items' => Container::getInstance()->get('menuAdmin')->listPublicItems($restaurantId, 'PLAT'),
             'sale_items' => Container::getInstance()->get('salesService')->listSaleItemsForKitchen($restaurantId),
             'cases' => array_values(array_filter(
                 $allCases,
@@ -780,7 +780,7 @@ final class OperationsController
             'server_cashiers' => Container::getInstance()->get('cashService')->dashboard($restaurantId)['cashiers'] ?? [],
             'sale_remittance_tracking' => Container::getInstance()->get('cashService')->listSaleRemittanceTracking($restaurantId, $this->salesActorIdFilter(), $trackingLimit),
             'pending_cash_remittances' => Container::getInstance()->get('cashService')->listServerRemittanceCandidates($restaurantId, $this->salesActorIdFilter(), $trackingLimit),
-            'menu_items' => Container::getInstance()->get('menuAdmin')->listPublicItems($restaurantId),
+            'menu_items' => Container::getInstance()->get('menuAdmin')->listPublicItems($restaurantId, 'PLAT'),
             'productions' => Container::getInstance()->get('kitchenService')->listProductions($restaurantId, 80),
             'sales_overview' => Container::getInstance()->get('salesService')->serverSalesOverview($restaurantId, $this->salesActorIdFilter()),
             'served_requests_without_sale_period' => $servedWithoutSalePeriod,

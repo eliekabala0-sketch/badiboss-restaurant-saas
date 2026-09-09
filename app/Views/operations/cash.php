@@ -105,7 +105,7 @@ require base_path('app/Views/partials/module_quick_nav.php');
                             <select name="items[<?= e((string) $row) ?>][menu_item_id]" data-checkout-item>
                                 <option value="" data-price="0">—</option>
                                 <?php foreach (($menu_items ?? []) as $menuItem): ?>
-                                    <option value="<?= e((string) $menuItem['id']) ?>" data-price="<?= e((string) ((float) ($menuItem['price'] ?? 0))) ?>"><?= e((string) ($menuItem['name'] ?? 'Article')) ?> — <?= e(format_money($menuItem['price'] ?? 0, $restaurantCurrency)) ?></option>
+                                    <option value="<?= e((string) $menuItem['id']) ?>" data-price="<?= e((string) ((float) ($menuItem['price'] ?? 0))) ?>" data-product-type="<?= e((string) ($menuItem['product_type'] ?? 'PLAT')) ?>"><?= e((string) ($menuItem['name'] ?? 'Article')) ?> — <?= e(format_money($menuItem['price'] ?? 0, $restaurantCurrency)) ?></option>
                                 <?php endforeach; ?>
                             </select>
                         </td>
@@ -137,6 +137,16 @@ require base_path('app/Views/partials/module_quick_nav.php');
         sourceWrap.hidden = !restaurant;
         serverWrap.hidden = !(restaurant && source.value === 'SERVEUR');
         serverSelect.required = restaurant && source.value === 'SERVEUR';
+        var requiredType = restaurant ? 'PLAT' : 'ARTICLE';
+        form.querySelectorAll('[data-checkout-item]').forEach(function (select) {
+            Array.prototype.forEach.call(select.options, function (option) {
+                if (!option.value) { return; }
+                option.hidden = option.dataset.productType !== requiredType;
+                option.disabled = option.dataset.productType !== requiredType;
+            });
+            if (select.value && select.options[select.selectedIndex].disabled) { select.value = ''; }
+        });
+        recalculate();
     }
     function money(value) { return Number(value || 0).toLocaleString('fr-FR', {minimumFractionDigits:2, maximumFractionDigits:2}); }
     function recalculate() {

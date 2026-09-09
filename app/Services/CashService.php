@@ -271,6 +271,8 @@ final class CashService
     public function createCashierCheckout(int $restaurantId, array $payload, array $actor): array
     {
         $this->ensureSchema();
+        // Garantit la classification même pour un POST direct après déploiement.
+        Container::getInstance()->get('menuAdmin')->listPublicItems($restaurantId);
         if ((string) ($actor['role_code'] ?? '') !== 'cashier_accountant' && !can_access('cash.checkout.create', $actor)) {
             throw new \RuntimeException('Encaissement direct réservé au caissier.');
         }
@@ -288,10 +290,11 @@ final class CashService
         }
 
         $rawItems = is_array($payload['items'] ?? null) ? $payload['items'] : [];
+        $requiredProductType = $channel === 'BOUTIQUE' ? 'ARTICLE' : 'PLAT';
         $items = [];
         $total = 0.0;
         $menuStatement = $this->database->pdo()->prepare(
-            'SELECT id, name, price FROM menu_items WHERE id = :id AND restaurant_id = :restaurant_id AND status = "active" AND is_available = 1 LIMIT 1'
+            'SELECT id, name, price, product_type FROM menu_items WHERE id = :id AND restaurant_id = :restaurant_id AND status = "active" AND is_available = 1 LIMIT 1'
         );
         foreach ($rawItems as $rawItem) {
             if (!is_array($rawItem)) {
@@ -306,6 +309,11 @@ final class CashService
             $menuItem = $menuStatement->fetch(PDO::FETCH_ASSOC);
             if ($menuItem === false) {
                 throw new \RuntimeException('Un article sélectionné est indisponible ou hors restaurant.');
+            }
+            if ((string) ($menuItem['product_type'] ?? 'PLAT') !== $requiredProductType) {
+                throw new \RuntimeException($channel === 'BOUTIQUE'
+                    ? 'La Boutique accepte uniquement les produits classés Article.'
+                    : 'Le Restaurant accepte uniquement les produits classés Plat.');
             }
             $unitPrice = round((float) ($menuItem['price'] ?? 0), 2);
             $items[] = [

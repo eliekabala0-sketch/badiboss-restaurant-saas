@@ -201,6 +201,7 @@ CREATE TABLE menu_items (
     description TEXT NULL,
     image_url VARCHAR(255) NULL,
     price DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+    product_type ENUM('ARTICLE', 'PLAT') NOT NULL DEFAULT 'PLAT',
     display_order INT UNSIGNED NOT NULL DEFAULT 0,
     available_dine_in TINYINT(1) NOT NULL DEFAULT 1,
     available_takeaway TINYINT(1) NOT NULL DEFAULT 1,

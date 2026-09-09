@@ -72,7 +72,7 @@ final class MenuAdminController
         $restaurant = Container::getInstance()->get('restaurantAdmin')->findRestaurant($restaurantId);
         Container::getInstance()->get('menuAdmin')->createItem($restaurantId, $this->itemPayload($request, $restaurant), $_SESSION['user']);
 
-        flash('success', 'Le plat du menu a ete cree.');
+        flash('success', 'Le produit du menu a été créé avec son circuit de vente.');
         redirect('/super-admin/menu?restaurant_id=' . $restaurantId);
     }
 
@@ -84,7 +84,7 @@ final class MenuAdminController
 
         Container::getInstance()->get('menuAdmin')->createItem($restaurantId, $this->itemPayload($request, $restaurant), $_SESSION['user']);
 
-        flash('success', 'Le plat du menu a ete cree.');
+        flash('success', 'Le produit du menu a été créé avec son circuit de vente.');
         redirect('/owner/menu');
     }
 
@@ -182,6 +182,7 @@ final class MenuAdminController
             'description' => (string) $request->input('description'),
             'image_url' => $imageUrl,
             'price' => (string) $request->input('price'),
+            'product_type' => (string) $request->input('product_type', 'PLAT'),
             'status' => (string) $request->input('status', 'active'),
             'is_available' => $request->input('is_available'),
             'display_order' => (string) $request->input('display_order', '0'),
