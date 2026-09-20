@@ -46,6 +46,10 @@ if (can_access('payroll.prepare.view')) {
 if (!restaurant_status_blocks_operations($restaurant['status'] ?? null) && $can_access_reports) {
     $dashboardPrimaryNav[] = ['label' => 'Rapports', 'href' => '/rapport'];
 }
+if (can_access('tenant.access.manage')) {
+    $dashboardPrimaryNav[] = ['label' => 'Personnel et fonctions', 'href' => '/owner/users'];
+}
+$dashboardPrimaryNav[] = ['label' => 'Devise USD / CDF', 'href' => '#restaurant-currency'];
 $dashboardPrimaryNav[] = ['label' => 'Deconnexion', 'href' => '/logout', 'muted' => true];
 $decisionBadgeClass = static function (?string $status): string {
     return match ((string) $status) {
@@ -565,13 +569,8 @@ $restaurantRegisterUrl = restaurant_generated_registration_url($restaurant);
     </article>
 </section>
 
-<?php if (false): ?>
-<?php if (false): ?>
-<?php if (false): ?>
-<?php if (false): ?>
-<?php if (false): ?>
 <section class="card" style="padding:24px; margin-top:24px;">
-    <h2 style="margin-top:0;">Parametres du restaurant</h2>
+    <h2 id="restaurant-currency" style="margin-top:0;">Parametres du restaurant</h2>
     <p class="muted">La devise change uniquement l affichage du restaurant courant. Aucun montant historique n est converti.</p>
     <form method="post" action="/owner/settings/currency" class="split no-print">
         <div>
@@ -587,11 +586,6 @@ $restaurantRegisterUrl = restaurant_generated_registration_url($restaurant);
     </form>
     <p><strong>Devise active :</strong> <?= e($restaurantCurrency) ?></p>
 </section>
-<?php endif; ?>
-<?php endif; ?>
-<?php endif; ?>
-<?php endif; ?>
-<?php endif; ?>
 
 <section class="card" style="padding:24px; margin-top:24px;">
     <h2 style="margin-top:0;">Demandes de correction</h2>

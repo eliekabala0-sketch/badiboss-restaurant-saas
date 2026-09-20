@@ -85,6 +85,12 @@ final class RestaurantAdminService
         }
 
         $payload = $this->normalizePayload($payload);
+        if (array_key_exists('currency_code', $payload)) {
+            $payload['currency_code'] = strtoupper(trim((string) $payload['currency_code']));
+            if (!in_array($payload['currency_code'], ['USD', 'CDF'], true)) {
+                throw new \RuntimeException('La devise choisie est invalide.');
+            }
+        }
 
         $statement = $this->database->pdo()->prepare(
             'UPDATE restaurants
@@ -99,6 +105,7 @@ final class RestaurantAdminService
                  address_line = :address_line,
                  timezone = :timezone,
                  currency_code = :currency_code,
+                 ' . ($this->columnExists('restaurants', 'currency') ? 'currency = :currency_code,' : '') . '
                  access_url = :access_url,
                  download_url = :download_url,
                  subscription_plan_id = :subscription_plan_id,

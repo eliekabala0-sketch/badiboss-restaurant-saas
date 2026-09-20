@@ -1624,14 +1624,24 @@ final class CashService
         $statement = $this->database->pdo()->prepare(
             'SELECT u.id, u.full_name, r.code AS role_code
              FROM users u
-             INNER JOIN roles r ON r.id = u.role_id
+             LEFT JOIN settings sf ON sf.restaurant_id = u.restaurant_id
+                 AND sf.setting_key = CONCAT("user_additional_roles_", u.id)
+             INNER JOIN roles r ON r.id = u.role_id OR (
+                 u.status = "active" AND r.scope = "system" AND r.status = "active"
+                 AND r.code IN ("kitchen", "cashier_accountant", "stock_manager", "cashier_server")
+                 AND JSON_CONTAINS(IF(JSON_VALID(sf.setting_value), sf.setting_value, "[]"), CAST(r.id AS CHAR))
+             )
              WHERE u.restaurant_id = ?
                AND r.code IN (' . $placeholders . ')
-             ORDER BY u.full_name ASC'
+             ORDER BY u.full_name ASC, (r.id = u.role_id) DESC, r.id'
         );
         $statement->execute(array_merge([$restaurantId], $roleCodes));
 
-        return $statement->fetchAll(PDO::FETCH_ASSOC);
+        $users = [];
+        foreach ($statement->fetchAll(PDO::FETCH_ASSOC) as $user) {
+            $users[(int) $user['id']] ??= $user;
+        }
+        return array_values($users);
     }
 
     private function findSaleInRestaurant(int $saleId, int $restaurantId): array

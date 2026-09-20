@@ -100,7 +100,7 @@ final class AuthService
             return null;
         }
 
-        return $this->sessionPayload($user);
+        return (new UserFunctionService($this->database))->applySessionRole($this->sessionPayload($user), $sessionUser);
     }
 
     public function issueApiToken(string $email, string $password): ?array

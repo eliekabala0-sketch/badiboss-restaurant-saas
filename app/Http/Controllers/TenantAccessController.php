@@ -23,6 +23,13 @@ final class TenantAccessController
             'per_page' => 20,
         ]);
 
+        $functions = new \App\Services\UserFunctionService(Container::getInstance()->get('db'));
+        foreach ($userPage['items'] as &$agent) {
+            $agent['assigned_functions'] = $functions->rolesForUser((int) $agent['id'], $restaurantId);
+        }
+        unset($agent);
+        $_SESSION['_functions_csrf'] ??= bin2hex(random_bytes(32));
+
         view('owner/access', [
             'title' => 'Personnel et acces',
             'roles' => $roleAdmin->listAssignableRoles($restaurantId),
@@ -38,6 +45,28 @@ final class TenantAccessController
         ]);
 
         audit_access('roles', $restaurantId, 'screens', 'tenant-access', 'Consultation roles et acces restaurant');
+    }
+
+    public function updateUserFunctions(Request $request): void
+    {
+        authorize_access('tenant.access.manage');
+        if (!hash_equals((string) ($_SESSION['_functions_csrf'] ?? ''), (string) $request->input('_functions_csrf', ''))
+            || empty($_SESSION['_functions_csrf'])) {
+            http_response_code(403);
+            return;
+        }
+        try {
+            (new \App\Services\UserFunctionService(Container::getInstance()->get('db')))->saveAdditionalRoles(
+                (int) $request->route('id'),
+                current_restaurant_id(),
+                (array) $request->input('additional_role_ids', []),
+                current_user()
+            );
+            flash('success', 'Fonctions enregistrees. L agent peut les choisir dans « Mes fonctions ».');
+        } catch (\RuntimeException $exception) {
+            flash('error', ui_safe_message($exception->getMessage()));
+        }
+        redirect('/owner/users');
     }
 
     public function storeUser(Request $request): void

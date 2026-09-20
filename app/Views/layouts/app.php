@@ -1287,6 +1287,21 @@ foreach ($notificationSources as $candidate) {
                 <a href="/logout">Déconnexion</a>
             </nav>
         <?php endif; ?>
+        <?php if (count(current_user()['available_roles'] ?? []) > 1): ?>
+            <?php $_SESSION['_functions_csrf'] ??= bin2hex(random_bytes(32)); ?>
+            <section class="card no-print" style="padding:16px; margin-bottom:18px;">
+                <strong>Mes fonctions</strong>
+                <p class="muted">Choisissez la fonction que vous souhaitez exercer.</p>
+                <form method="post" action="/account/function" class="toolbar-actions">
+                    <input type="hidden" name="_functions_csrf" value="<?= e($_SESSION['_functions_csrf']) ?>">
+                    <?php foreach (current_user()['available_roles'] as $functionRole): ?>
+                        <button type="submit" name="role_id" value="<?= e((string) $functionRole['id']) ?>" <?= (int) current_user()['role_id'] === (int) $functionRole['id'] ? 'disabled aria-current="true"' : 'class="button-muted"' ?>>
+                            <?= e(restaurant_role_label($functionRole['code'])) ?><?= (int) current_user()['role_id'] === (int) $functionRole['id'] ? ' (actif)' : '' ?>
+                        </button>
+                    <?php endforeach; ?>
+                </form>
+            </section>
+        <?php endif; ?>
         <?php require $viewFile; ?>
     </div>
 </div>

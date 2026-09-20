@@ -679,15 +679,15 @@ function restaurant_currency(array|int|string|null $restaurant = null): string
     $candidate = null;
 
     if (is_array($restaurant)) {
-        $candidate = $restaurant['currency'] ?? $restaurant['currency_code'] ?? null;
+        $candidate = $restaurant['currency_code'] ?? $restaurant['currency'] ?? null;
     } elseif (is_string($restaurant) && $restaurant !== '') {
         $candidate = $restaurant;
     } elseif (is_int($restaurant) && $restaurant > 0) {
         $context = App\Core\Container::getInstance()->get('restaurantAdmin')->findRestaurant($restaurant);
-        $candidate = $context['currency'] ?? $context['currency_code'] ?? null;
+        $candidate = $context['currency_code'] ?? $context['currency'] ?? null;
     } else {
         $context = current_restaurant_context();
-        $candidate = $context['currency'] ?? $context['currency_code'] ?? null;
+        $candidate = $context['currency_code'] ?? $context['currency'] ?? null;
     }
 
     $normalized = strtoupper((string) $candidate);

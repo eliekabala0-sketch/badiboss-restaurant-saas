@@ -38,6 +38,8 @@ $router->post('/login', [AuthController::class, 'login']);
 $router->get('/creer-mon-restaurant', [RestaurantOnboardingController::class, 'showRegistration']);
 $router->post('/creer-mon-restaurant', [RestaurantOnboardingController::class, 'register']);
 $router->get('/logout', [AuthController::class, 'logout'], [AuthMiddleware::class]);
+$router->post('/account/function', [AuthController::class, 'switchRole'], [AuthMiddleware::class]);
+$router->post('/owner/users/{id}/functions', [TenantAccessController::class, 'updateUserFunctions'], [AuthMiddleware::class, OwnerAreaMiddleware::class]);
 $router->get('/notifications/feed', [NotificationController::class, 'feed'], [AuthMiddleware::class]);
 $router->get('/super-admin', [DashboardController::class, 'superAdmin'], [AuthMiddleware::class, SuperAdminMiddleware::class]);
 $router->post('/super-admin/reset/preview', [DashboardController::class, 'previewOperationalReset'], [AuthMiddleware::class, SuperAdminMiddleware::class]);

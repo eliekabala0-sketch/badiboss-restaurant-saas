@@ -162,7 +162,7 @@ $canDeleteTestRestaurant = (bool) ($can_delete_test_restaurant ?? false);
                 <div><label>Ville</label><input name="city" value="<?= e($restaurant['city']) ?>"></div>
                 <div style="grid-column:1 / -1;"><label>Adresse</label><input name="address_line" value="<?= e($restaurant['address_line']) ?>"></div>
                 <div><label>Fuseau horaire</label><input name="timezone" value="<?= e($restaurant['timezone']) ?>"></div>
-                <div><label>Devise</label><input name="currency_code" value="<?= e($restaurant['currency_code']) ?>"></div>
+                <div><label>Devise</label><select name="currency_code"><option value="USD" <?= restaurant_currency($restaurant) === 'USD' ? 'selected' : '' ?>>USD</option><option value="CDF" <?= restaurant_currency($restaurant) === 'CDF' ? 'selected' : '' ?>>CDF</option></select></div>
                 <div><label>Plan</label><select name="subscription_plan_id"><?php foreach ($plans as $plan): ?><option value="<?= e((string) $plan['id']) ?>" <?= (int) $plan['id'] === (int) $restaurant['subscription_plan_id'] ? 'selected' : '' ?>><?= e($plan['name']) ?></option><?php endforeach; ?></select></div>
                 <div style="grid-column:1 / -1;"><button type="submit">Enregistrer</button></div>
             </form>

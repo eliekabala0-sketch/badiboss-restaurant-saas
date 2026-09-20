@@ -82,7 +82,12 @@ $selectedRoleId = (int) ($filters['role_id'] ?? 0);
                         <strong><?= e($user['full_name']) ?></strong><br>
                         <span class="muted"><?= e($user['email']) ?><?= !empty($user['phone']) ? ' · ' . e($user['phone']) : '' ?></span>
                     </td>
-                    <td><?= e($user['role_display_name'] ?? $user['role_name']) ?></td>
+                    <td>
+                        <?= e($user['role_display_name'] ?? $user['role_name']) ?>
+                        <?php foreach (array_slice($user['assigned_functions'] ?? [], 1) as $assignedFunction): ?>
+                            <br><span class="pill badge-neutral"><?= e(restaurant_role_label($assignedFunction['code'])) ?></span>
+                        <?php endforeach; ?>
+                    </td>
                     <td>
                         <?php if ($permissionLabels === []): ?>
                             <span class="muted">Aucun module supplementaire</span>
@@ -97,7 +102,8 @@ $selectedRoleId = (int) ($filters['role_id'] ?? 0);
                     </td>
                     <td><span class="pill <?= ($user['status'] ?? '') === 'active' ? 'badge-closed' : 'badge-bad' ?>"><?= e(status_label($user['status'] ?? null)) ?></span></td>
                     <td class="toolbar-actions">
-                        <a href="/owner/access/users/<?= e((string) $user['id']) ?>" class="button-muted">Fiche</a>
+                        <a href="#agent-<?= e((string) $user['id']) ?>" class="button-muted" onclick="document.getElementById('agent-<?= e((string) $user['id']) ?>').open = true;">Fonctions / modifier</a>
+                        <a href="/owner/access/users/<?= e((string) $user['id']) ?>" class="button-muted">Historique</a>
                     </td>
                 </tr>
             <?php endforeach; ?>
@@ -150,7 +156,7 @@ $selectedRoleId = (int) ($filters['role_id'] ?? 0);
             <div class="compact-empty">Aucun agent sur cette page.</div>
         <?php else: ?>
             <?php foreach ($users as $user): ?>
-                <details class="compact-card" style="margin-bottom:12px;">
+                <details id="agent-<?= e((string) $user['id']) ?>" class="compact-card" style="margin-bottom:12px;">
                     <summary><strong><?= e($user['full_name']) ?></strong> <span class="muted">· <?= e($user['role_display_name'] ?? $user['role_name']) ?></span></summary>
                     <div class="fold-body" style="padding:16px 0 0;">
                         <form method="post" action="/owner/users/<?= e((string) $user['id']) ?>/update" class="split">
@@ -168,6 +174,24 @@ $selectedRoleId = (int) ($filters['role_id'] ?? 0);
                             <div><label>Nouveau mot de passe</label><input name="password" value=""></div>
                             <div><label><input type="checkbox" name="must_change_password" value="1" <?= (int) ($user['must_change_password'] ?? 0) === 1 ? 'checked' : '' ?> style="width:auto;margin-right:8px;">Changement requis</label></div>
                             <div style="grid-column:1 / -1;"><button type="submit">Enregistrer la fiche</button></div>
+                        </form>
+
+                        <form method="post" action="/owner/users/<?= e((string) $user['id']) ?>/functions" style="margin-top:18px;">
+                            <input type="hidden" name="_functions_csrf" value="<?= e($_SESSION['_functions_csrf']) ?>">
+                            <h3>Fonctions supplementaires</h3>
+                            <p class="muted">Cochez plusieurs fonctions pour cette personne. Son poste principal reste conserve. Elle pourra passer de l une a l autre avec « Mes fonctions ».</p>
+                            <div class="grid" style="grid-template-columns:repeat(auto-fit, minmax(180px, 1fr));">
+                                <?php foreach ($roles as $functionRole): ?>
+                                    <?php if (($functionRole['scope'] ?? '') !== 'system' || ($functionRole['status'] ?? '') !== 'active' || !in_array($functionRole['code'], \App\Services\UserFunctionService::OPERATIONAL_CODES, true)) { continue; } ?>
+                                    <label>
+                                        <input type="checkbox" name="additional_role_ids[]" value="<?= e((string) $functionRole['id']) ?>" style="width:auto; margin-right:8px;"
+                                            <?= in_array((int) $functionRole['id'], array_column($user['assigned_functions'] ?? [], 'id'), true) ? 'checked' : '' ?>
+                                            <?= (int) $functionRole['id'] === (int) $user['role_id'] ? 'disabled' : '' ?>>
+                                        <?= e($functionRole['display_name'] ?? $functionRole['name']) ?><?= (int) $functionRole['id'] === (int) $user['role_id'] ? ' (principal)' : '' ?>
+                                    </label>
+                                <?php endforeach; ?>
+                            </div>
+                            <button type="submit">Enregistrer les fonctions</button>
                         </form>
 
                         <form method="post" action="/owner/users/<?= e((string) $user['id']) ?>/status" class="split" style="margin-top:14px;">
